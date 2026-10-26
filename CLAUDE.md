@@ -51,6 +51,9 @@ cache che senza, perche' deve popolarsi.
   errori della gamba, non solo il primo.
 - La decisione sta in un posto solo, `scripts/release_plan.py` (con i suoi casi
   in `scripts/test_release_plan.py`); i workflow leggono il piano e basta.
+- Finche' `engine/firefox-157` del core non e' in main, `core_ref` deve essere
+  quel ramo (e' il default su questo ramo): il branding di main e' quello del
+  151 e il controllo della superficie rifiuta tutte le gambe.
 
 ## Le due regole che rompono il prodotto se ignorate
 
