@@ -449,7 +449,27 @@ class gfxFontEntry {
     explicit AutoHBFace(hb_face_t* aFace) : mFace(aFace) {}
     ~AutoHBFace() { hb_face_destroy(mFace); }
 
-    operator hb_face_t*() const { return mFace; }
+    // La conversione vale solo su un LVALUE. Legarsi a un temporaneo e'
+    // vietato dal TIPO, non da una convenzione:
+    //
+    //     hb_face_t* f = entry->GetHBFace();   // non compila
+    //     const auto f(entry->GetHBFace());    // corretto
+    //
+    // GetHBFace() torna per valore, quindi scrivendo la prima forma il
+    // temporaneo si converte e viene distrutto alla fine di quella stessa
+    // istruzione: il puntatore e' penzolante dalla riga dopo, e chi lo usa
+    // scrive dentro memoria liberata. Misurato il 2026-08-10 su
+    // gfxHarfBuzzShaper::GetDesignFont(), che era l'unico dei quattordici
+    // chiamanti a sbagliarlo: 6 sessioni di navigazione morte su 10 contro 0
+    // dopo la correzione. Il difetto era silenzioso perche' la memoria appena
+    // liberata resta quasi sempre leggibile, e il segmentation fault arrivava
+    // altrove e molto dopo.
+    //
+    // Sta nel TIPO e non solo in un gate perche' il progetto sapeva gia' la
+    // regola in tredici punti su quattordici e il quattordicesimo e' stato
+    // scritto sbagliato lo stesso: qui il compilatore lo rifiuta.
+    operator hb_face_t*() const& { return mFace; }
+    operator hb_face_t*() const&& = delete;
 
     // Not default-constructible, not copyable.
     AutoHBFace() = delete;
@@ -829,6 +849,14 @@ class gfxFontEntry {
   // of the gfxFontEntry based on shared Face and Family records.
   void InitializeFrom(mozilla::fontlist::Face* aFace,
                       const mozilla::fontlist::Family* aFamily);
+
+  // Stealth: does this entry's character map belong in the shared font list?
+  // Every backend's ReadCMAP asked `!IsUserFont() && mShmemFace`, four copies of
+  // one rule, and that rule is WRONG for a bundled face: it is constructed from
+  // file data (so IsUserFont() is true) while being one of the list's own faces.
+  // The consequence was that no bundled face's cmap ever reached shared memory.
+  // One predicate, four readers.
+  bool ShouldPublishCharacterMap() const;
 
 #ifdef MOZ_FONTATIONS
   // Set the Skrifa font ref and hold on to the memory mapping, unless the

@@ -6,6 +6,7 @@
 
 #include "COLRFonts.h"
 #include "GreekCasing.h"
+#include "StealthBundleFontList.h"
 #include "TextDrawTarget.h"
 #include "ThebesRLBox.h"
 #include "cairo.h"
@@ -17,6 +18,7 @@
 #include "gfxHarfBuzzShaper.h"
 #include "gfxMathTable.h"
 #include "gfxPlatform.h"
+#include "gfxPlatformFontList.h"
 #include "gfxSVGGlyphs.h"
 #include "gfxTextRun.h"
 #include "gfxTypes.h"
@@ -4223,6 +4225,44 @@ void gfxFont::SetupGlyphExtents(DrawTarget* aDrawTarget, uint32_t aGlyphID,
 // Return FALSE if the gfxFontEntry subclass does not
 // implement GetFontTable(), or for non-sfnt fonts where tables are
 // not available.
+// STEALTH: host-independent vertical metrics straight from the font's own OS/2
+// sfnt table (FUnits->px), bypassing the platform backend (DWrite/FreeType/CoreText)
+// whose computed asc/desc differ per OS. For a given bundled font + size the values
+// are byte-identical on every host -> canvas TextMetrics vertical fields become
+// host-independent (see CanvasRenderingContext2D::DrawOrMeasureText). emAscent/Descent
+// from sTypoAscender/sTypoDescender, maxAscent/Descent from usWinAscent/usWinDescent
+// (the Windows convention we always claim). Returns false if no usable OS/2 table.
+bool gfxFont::GetStealthHostIndepVMetrics(gfxFloat& aEmAscent, gfxFloat& aEmDescent,
+                                          gfxFloat& aMaxAscent,
+                                          gfxFloat& aMaxDescent) {
+  if (mFUnitsConvFactor < 0.0) {
+    uint16_t unitsPerEm =
+        GetFontEntry() ? GetFontEntry()->UnitsPerEm() : gfxFontEntry::kInvalidUPEM;
+    if (unitsPerEm == gfxFontEntry::kInvalidUPEM || unitsPerEm == 0) {
+      return false;
+    }
+    mFUnitsConvFactor = GetAdjustedSize() / unitsPerEm;
+  }
+  if (mFUnitsConvFactor <= 0.0) {
+    return false;
+  }
+  gfxFontEntry::AutoTable os2Table(mFontEntry, TRUETYPE_TAG('O', 'S', '/', '2'));
+  if (!os2Table) {
+    return false;
+  }
+  uint32_t len;
+  const OS2Table* os2 =
+      reinterpret_cast<const OS2Table*>(hb_blob_get_data(os2Table, &len));
+  if (len < offsetof(OS2Table, usWinDescent) + sizeof(uint16_t)) {
+    return false;
+  }
+  aEmAscent = int16_t(os2->sTypoAscender) * mFUnitsConvFactor;
+  aEmDescent = -int16_t(os2->sTypoDescender) * mFUnitsConvFactor;  // sTypoDescender < 0
+  aMaxAscent = uint16_t(os2->usWinAscent) * mFUnitsConvFactor;
+  aMaxDescent = uint16_t(os2->usWinDescent) * mFUnitsConvFactor;
+  return true;
+}
+
 // If this returns TRUE without setting the mIsValid flag, then we -did-
 // apparently find an sfnt, but it was too broken to be used.
 bool gfxFont::InitMetricsFromSfntTables(Metrics& aMetrics) {
@@ -4447,6 +4487,52 @@ void gfxFont::CalculateDerivedMetrics(Metrics& aMetrics) {
   }
 }
 
+// STEALTH: resolve this font entry's manifest vertical metrics, if it is one
+// of the bundled faces. False for everything else - a web/user font, a font
+// outside the shared list, or a v1 manifest with no metrics - and in that case
+// the backend's own values must stand untouched.
+static bool GetStealthBundleVMetrics(gfxFontEntry* aFontEntry,
+                                     StealthBundleVMetrics& aOut) {
+  // mShmemFace is what identifies a bundled face, so it is also the reason
+  // this returns false for a web font. Note it is only non-null because
+  // every backend's CreateFontEntry calls InitializeFrom - the Linux
+  // bundle-only branch did NOT until 2026-08-07, and while that was true this
+  // whole function silently no-opped on Linux, which is precisely the platform
+  // the metrics were meant to correct.
+  if (!aFontEntry) {
+    return false;
+  }
+  // Deliberately NOT gated on IsUserFont(). On Linux the bundle-only branch of
+  // gfxFcPlatformFontList::CreateFontEntry loads each face from an in-memory
+  // buffer through FTUserFontData - the same machinery a web font uses - so
+  // every bundled face reports IsUserFont() == true. An earlier version of this
+  // guard rejected all 72 of them for that reason, on the one platform the
+  // metrics exist to correct.
+  //
+  // mShmemFace alone is the right discriminator: it means "this face came from
+  // the shared font list", and a genuine web font never has one - gfxUserFontSet
+  // explicitly clears it (gfxUserFontSet.cpp:1117). Even if one slipped through,
+  // the manifest lookup below is keyed on (bundle file, face index) and would
+  // simply miss.
+  if (!aFontEntry->mShmemFace) {
+    return false;
+  }
+  auto* pfl = gfxPlatformFontList::PlatformFontList(false);
+  if (!pfl) {
+    return false;
+  }
+  mozilla::fontlist::FontList* sharedList = pfl->SharedFontList();
+  if (!sharedList) {
+    return false;
+  }
+  auto* bundle = StealthBundleFontList::Get();  // never null; it crashes first
+  // A Face's mDescriptor is the bundle file name and mIndex the face within
+  // it - the same pair every backend's CreateFontEntry uses to load the file.
+  const nsCString file =
+      aFontEntry->mShmemFace->mDescriptor.AsString(sharedList);
+  return bundle->GetVMetrics(file, aFontEntry->mShmemFace->mIndex, aOut);
+}
+
 void gfxFont::SanitizeMetrics(gfxFont::Metrics* aMetrics,
                               bool aIsBadUnderlineFont) {
   // Even if this font size is zero, this font is created with non-zero size.
@@ -4455,6 +4541,72 @@ void gfxFont::SanitizeMetrics(gfxFont::Metrics* aMetrics,
   if (mStyle.AdjustedSizeMustBeZero()) {
     memset(aMetrics, 0, sizeof(gfxFont::Metrics));
     return;
+  }
+
+  // STEALTH: impose the manifest's vertical metrics, so that no platform
+  // backend decides them.
+  //
+  // This is the single choke point where DWrite, FreeType and CoreText meet:
+  // all three call SanitizeMetrics as the last step of populating their own
+  // mMetrics (gfxDWriteFonts.cpp, gfxFT2FontBase.cpp, gfxMacFont.cpp), and it
+  // runs inside font init, so it is upstream of both gfxFontCache and the lazy
+  // mVerticalMetrics cache - no per-query cost, no const-ness problem.
+  //
+  // Why: each backend derived ascent/descent from the SAME bundled file by its
+  // own rule, and they disagreed. Measured 2026-08-07 on the shipped
+  // firefox-18, Windows vs Linux, same seed and same build: ascent/descent
+  // differed on 58 of 72 families (up to 27px at a 72px size), line-box height
+  // on 61, capHeight on 10, xHeight on 5 - while every advance width already
+  // matched, because shaping is HarfBuzz in-tree. That divergence is a tell:
+  // it is what makes a Linux-hosted session's font metrics disagree with the
+  // Windows persona this build claims everywhere else.
+  //
+  // The values come from bundle-fonts.list v2, resolved offline to what a real
+  // Windows Firefox produces (DirectWrite's usWin*-vs-sTypo* rule) and
+  // validated against the shipped Windows build for 72/72 families. The
+  // arithmetic mirrors gfxDWriteFonts.cpp:396-421 on purpose, so Windows keeps
+  // the numbers it already had and the other two are brought TO it, instead of
+  // all three moving somewhere new.
+  StealthBundleVMetrics vm;
+  if (GetStealthBundleVMetrics(mFontEntry, vm)) {
+    const gfxFloat size = GetAdjustedSize();
+    const gfxFloat conv = size / gfxFloat(vm.mUpem);
+
+    aMetrics->maxAscent = NS_round(vm.mAscent * conv);
+    aMetrics->maxDescent = NS_round(vm.mDescent * conv);
+    aMetrics->maxHeight = aMetrics->maxAscent + aMetrics->maxDescent;
+    aMetrics->emHeight = size;
+    // Keep emAscent + emDescent == emHeight: gfxHarfBuzzShaper reads both to
+    // place the vertical VOrg and the glyph y_bearing, so breaking that
+    // invariant would move glyph bounding boxes, not just line boxes.
+    aMetrics->emAscent =
+        aMetrics->maxHeight > 0.0
+            ? aMetrics->emHeight * aMetrics->maxAscent / aMetrics->maxHeight
+            : aMetrics->emHeight;
+    aMetrics->emDescent = aMetrics->emHeight - aMetrics->emAscent;
+    aMetrics->internalLeading =
+        std::max(aMetrics->maxHeight - aMetrics->emHeight, 0.0);
+    aMetrics->externalLeading = std::ceil(vm.mLineGap * conv);
+
+    // xHeight / capHeight are absent from a pre-v2 OS/2 table; when the
+    // manifest carries 0 keep whatever the backend derived, rather than
+    // zeroing a real value.
+    if (vm.mXHeight) {
+      aMetrics->xHeight = vm.mXHeight * conv;
+    }
+    if (vm.mCapHeight) {
+      aMetrics->capHeight = vm.mCapHeight * conv;
+    }
+    if (vm.mUnderlineSize) {
+      aMetrics->underlineOffset = vm.mUnderlineOffset * conv;
+      aMetrics->underlineSize = vm.mUnderlineSize * conv;
+    }
+    if (vm.mStrikeoutSize) {
+      aMetrics->strikeoutOffset = vm.mStrikeoutOffset * conv;
+      aMetrics->strikeoutSize = vm.mStrikeoutSize * conv;
+    }
+    // The clamps below (underlineSize >= 1, underlineOffset <= -1,
+    // maxAscent >= 1, ...) still run, exactly as they do for backend values.
   }
 
   // If the font entry has ascent/descent/lineGap-override values,
