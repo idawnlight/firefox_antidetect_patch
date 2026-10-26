@@ -53,7 +53,11 @@ export class FrameTree {
       Ci.nsISupportsWeakReference,
     ]);
 
-    this._wdm = Cc["@mozilla.org/dom/workers/workerdebuggermanager;1"].createInstance(Ci.nsIWorkerDebuggerManager);
+    // A SERVICE from Firefox 157 (dom/workers/WorkerDebuggerManager.cpp): a
+    // second createInstance fails with NS_ERROR_XPC_CI_RETURNED_FAILURE, so
+    // the frame tree of every page after the first never came up and
+    // Page.setInitScripts went unanswered until the page "crashed".
+    this._wdm = Cc["@mozilla.org/dom/workers/workerdebuggermanager;1"].getService(Ci.nsIWorkerDebuggerManager);
     this._wdmListener = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIWorkerDebuggerManagerListener]),
       onRegister: this._onWorkerCreated.bind(this),
