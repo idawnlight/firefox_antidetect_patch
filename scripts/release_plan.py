@@ -14,6 +14,15 @@ deciding again from the event and the inputs.
              republish: the seal and the DRAFT under a `firefox-N` tag, the
              tag checked here before any build starts.
 
+The compile cache (`compile_cache`) is decided here too, for the same reason.
+A candidate compiles through sccache with GitHub's Actions cache behind it, so
+a run after a fix recompiles only what the fix touched instead of the whole
+tree (a cold leg is 1-2 hours; a port to a new Firefox needs many runs). A
+release never does: what is published is compiled from nothing, so no object
+of an earlier run can be in it. `--compile-cache off` gives a candidate that
+can be republished; publish.yml refuses the archives of a cached one. Asking a
+release for the cache is refused rather than ignored, like a candidate's tag.
+
 Why a plan and not a convention. Until 2026-10-17 a manual run decided only at
 its END what it was: a candidate dispatched with a release_tag that was not
 `firefox-N` built three legs and passed three gates in about two hours, then
@@ -23,7 +32,7 @@ that is always there stops being read. The tag rule itself stays make_seal.py's
 (`check_release_tag`): this file asks it, it does not repeat it.
 
     python3 scripts/release_plan.py --event <event> --kind <kind> \\
-        --release-tag <tag> --ref-name <ref>
+        --release-tag <tag> --ref-name <ref> [--compile-cache gha|off]
 
 prints the outputs as `key=value` lines for $GITHUB_OUTPUT, or exits 1 naming
 what is wrong. Its known-bad inputs: scripts/test_release_plan.py.
@@ -40,14 +49,21 @@ from make_seal import SealBuildError, check_release_tag  # noqa: E402
 
 KINDS = ("candidate", "release")
 LOCAL_SEAL_TAG = "local"
+# What the compile_cache output can say. "gha" is sccache on the GitHub Actions
+# cache; "off" is a cold build. Anything else is refused.
+COMPILE_CACHES = ("gha", "off")
 
 
 class PlanError(ValueError):
     pass
 
 
-def plan(event: str, kind: str, release_tag: str, ref_name: str) -> dict[str, str]:
-    """The outputs of a run, or PlanError."""
+def plan(event: str, kind: str, release_tag: str, ref_name: str,
+         compile_cache: str = "") -> dict[str, str]:
+    """The outputs of a run, or PlanError.
+
+    compile_cache is the run's request: "" takes the kind's default (a
+    candidate uses the cache, a release does not)."""
     if event == "push":
         # a pushed tag is a release by definition, and its name is the tag
         kind, release_tag = "release", ref_name
@@ -55,6 +71,9 @@ def plan(event: str, kind: str, release_tag: str, ref_name: str) -> dict[str, st
         raise PlanError(f"release runs on a pushed tag or by hand, not on {event!r}")
     if kind not in KINDS:
         raise PlanError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}")
+    if compile_cache and compile_cache not in COMPILE_CACHES:
+        raise PlanError(f"compile_cache must be one of {', '.join(COMPILE_CACHES)}, "
+                        f"got {compile_cache!r}")
     if kind == "candidate":
         if release_tag:
             raise PlanError(
@@ -63,13 +82,19 @@ def plan(event: str, kind: str, release_tag: str, ref_name: str) -> dict[str, st
                 f"to publish a candidate's archives later, run republish.yml with its "
                 f"run id.")
         return {"kind": "candidate", "tag": "", "num": "", "prevtag": "",
-                "seal_tag": LOCAL_SEAL_TAG}
+                "seal_tag": LOCAL_SEAL_TAG, "compile_cache": compile_cache or "gha"}
+    if compile_cache == "gha":
+        raise PlanError(
+            "a release is compiled from nothing, so it takes no compile cache. "
+            "To ship a cached candidate's code, run a release, or a candidate "
+            "with compile_cache=off and republish that one.")
     try:
         n = check_release_tag(release_tag)
     except SealBuildError as exc:
         raise PlanError(f"a release needs a firefox-N tag: {exc}") from None
     return {"kind": "release", "tag": release_tag, "num": str(n),
-            "prevtag": f"firefox-{n - 1}" if n > 0 else "", "seal_tag": release_tag}
+            "prevtag": f"firefox-{n - 1}" if n > 0 else "", "seal_tag": release_tag,
+            "compile_cache": "off"}
 
 
 def main(argv=None) -> int:
@@ -78,9 +103,11 @@ def main(argv=None) -> int:
     ap.add_argument("--kind", default="")
     ap.add_argument("--release-tag", default="")
     ap.add_argument("--ref-name", default="")
+    ap.add_argument("--compile-cache", default="")
     a = ap.parse_args(argv)
     try:
-        outputs = plan(a.event, a.kind, a.release_tag.strip(), a.ref_name)
+        outputs = plan(a.event, a.kind, a.release_tag.strip(), a.ref_name,
+                       a.compile_cache.strip())
     except PlanError as exc:
         print(f"PLAN REFUSED: {exc}", file=sys.stderr)
         return 1

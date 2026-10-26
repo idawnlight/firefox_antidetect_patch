@@ -45,6 +45,16 @@ on:
         description: 'firefox-N to publish the draft under; kind=release only, a candidate refuses one'
         required: false
         default: ''
+      compile_cache:
+        description: >
+          candidate only. gha: compile through sccache on the GitHub Actions
+          cache, so a run after a fix recompiles only what changed (the plan's
+          default for a candidate). off: a cold build, the only candidate
+          republish.yml can publish. A release is always cold and refuses gha
+          (scripts/release_plan.py).
+        type: choice
+        options: ['gha', 'off']
+        default: 'gha'
       wrapper_ref:
         description: >
           invisible_playwright ref the gate runs against. Defaults to main,
@@ -79,6 +89,7 @@ jobs:
       num: ${{ steps.plan.outputs.num }}
       prevtag: ${{ steps.plan.outputs.prevtag }}
       seal_tag: ${{ steps.plan.outputs.seal_tag }}
+      compile_cache: ${{ steps.plan.outputs.compile_cache }}
     steps:
       - name: Checkout (for scripts/release_plan.py)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -92,10 +103,13 @@ jobs:
           KIND: ${{ inputs.kind }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           REF_NAME: ${{ github.ref_name }}
+          # A pushed tag has no inputs: empty, and the plan makes it a cold release.
+          COMPILE_CACHE: ${{ inputs.compile_cache }}
         run: |
           set -e
           python3 scripts/release_plan.py --event "$EVENT" --kind "$KIND" \
-            --release-tag "$RELEASE_TAG" --ref-name "$REF_NAME" > plan.txt
+            --release-tag "$RELEASE_TAG" --ref-name "$REF_NAME" \
+            --compile-cache "$COMPILE_CACHE" > plan.txt
           cat plan.txt
           cat plan.txt >> "$GITHUB_OUTPUT"
 
@@ -212,16 +226,26 @@ jobs:
       # (scripts/gen_release_notes.py), and re-publishes it as a source-commit.txt
       # asset so the NEXT release knows where to start the changelog. One leg is
       # enough — all legs check out the same SOURCE_REF.
-      - name: Record source commit (for auto release notes)
+      #
+      # compile-cache.txt rides with it: whether these archives were compiled
+      # through the cache (the plan's compile_cache, the same for every leg).
+      # publish.yml refuses to publish a run whose archives were, so a cached
+      # candidate cannot become a release through republish.yml.
+      - name: Record source commit (for auto release notes) and compile cache
         if: matrix.leg == 'linux-x86_64'
         shell: bash
-        run: git rev-parse HEAD > source-commit.txt && cat source-commit.txt
+        run: |
+          git rev-parse HEAD > source-commit.txt && cat source-commit.txt
+          echo "${{ needs.plan.outputs.compile_cache }}" > compile-cache.txt
+          echo "compile cache: $(cat compile-cache.txt)"
       - name: Upload source-commit artifact
         if: matrix.leg == 'linux-x86_64'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: source-commit
-          path: source-commit.txt
+          path: |
+            source-commit.txt
+            compile-cache.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -262,28 +286,53 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.rust_target }} || true
 
+      # LA CACHE DI COMPILAZIONE DELLE CANDIDATE (compile_cache=gha, deciso da
+      # scripts/release_plan.py). Il .mozconfig dichiara gia' sccache, sia per
+      # C/C++ (--with-ccache) sia per Rust (RUSTC_WRAPPER); qui si installa e
+      # gli si da' come deposito la cache di GitHub Actions, che SOPRAVVIVE alla
+      # corsa. Cosi' la corsa dopo una correzione ricompila solo cio' che la
+      # correzione tocca, invece dell'intero albero: un port a una nuova
+      # versione di Firefox ne richiede molte, e ognuna a freddo costa 1-2 ore
+      # per gamba.
+      #
+      # Le chiavi di sccache sono l'hash del sorgente preprocessato, degli
+      # argomenti e del compilatore, quindi le tre gambe condividono la stessa
+      # cache senza mescolarsi. La cache del repository ha un tetto (10 GB di
+      # default): quando si riempie GitHub sfratta le voci meno usate, e il
+      # risultato e' solo una corsa piu' lenta, mai una sbagliata.
+      #
+      # Versione di sccache fissata, non "latest": una build che cambia
+      # strumento da sola tra una corsa e l'altra non e' riproducibile.
+      - name: Compile cache (candidates only, sccache on the GitHub Actions cache)
+        if: needs.plan.outputs.compile_cache == 'gha'
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: 'v0.18.0'
+      - name: Point sccache at the GitHub Actions cache
+        if: needs.plan.outputs.compile_cache == 'gha'
+        run: echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
       - name: Extend the repo .mozconfig (NO mold; +target/SDK as needed)
+        env:
+          COMPILE_CACHE: ${{ needs.plan.outputs.compile_cache }}
         run: |
           test -f .mozconfig || { echo "ERROR: no .mozconfig in source"; exit 1; }
           rm -f mozconfig
-          # VIA sccache SU QUESTI RUNNER, o mach build muore prima di compilare
-          # una riga: FileNotFoundError: 'sccache'.
-          #
           # Il .mozconfig e' UNO SOLO per le due macchine di sviluppo e per la
           # CI, e dichiara --with-ccache=sccache piu' RUSTC_WRAPPER=sccache
           # senza percorso, apposta: il percorso e' una proprieta' della
-          # macchina, e sulle due macchine sccache sta nel PATH. Su un runner
-          # nudo non c'e', e nessuno se n'era accorto perche' release.yml non
-          # girava da firefox-20 mentre la riga e' entrata dopo.
+          # macchina, e sulle due macchine sccache sta nel PATH.
           #
-          # E qui non servirebbe comunque: un runner e' effimero, quindi la
-          # cache nasce VUOTA a ogni corsa, e la prima build con sccache e' piu'
-          # LENTA di una senza perche' deve popolarla. Installarlo sarebbe
-          # pagare un costo per un beneficio che non puo' esistere.
-          #
+          # Con compile_cache=gha il passo sopra l'ha messo nel PATH e le righe
+          # restano. Con compile_cache=off (ogni release, e una candidata che si
+          # vuole poter ripubblicare) sccache su questo runner NON c'e', e mach
+          # build morirebbe prima di compilare una riga (FileNotFoundError:
+          # 'sccache'): le righe si tolgono e la build e' fredda per davvero.
           # Case-insensitive, perche' c'e' anche SCCACHE_CACHE_SIZE maiuscolo.
           # Solo le righe ATTIVE: i commenti che spiegano il perche' restano.
-          sed -i -E '/^[^#]*sccache/Id' .mozconfig
+          if [ "$COMPILE_CACHE" != "gha" ]; then
+            sed -i -E '/^[^#]*sccache/Id' .mozconfig
+          fi
           {
             echo ""
             echo "# --- release CI levers for ${{ matrix.leg }} (mold intentionally OFF — it segfaults libxul) ---"
@@ -322,8 +371,18 @@ jobs:
         # 2026-08-17), quindi non uccide una build lenta ma vera. Quando scatta,
         # il job risulta FALLITO invece che appeso, e `rerun-failed-jobs`
         # ricompila la sola gamba caduta riusando gli artefatti delle altre.
+        #
+        # --keep-going: una corsa che fallisce riporta TUTTI gli errori di
+        # compilazione della gamba, non solo i primi. Senza, make si ferma al
+        # primo e ogni corsa da 1-2 ore ne mostra uno o due, che e' il modo piu'
+        # lento di portare la pila su una versione nuova. Su una build che
+        # riesce non cambia niente.
         timeout-minutes: 180
-        run: ./mach build
+        run: ./mach build --keep-going
+
+      - name: Compile cache statistics
+        if: always() && needs.plan.outputs.compile_cache == 'gha'
+        run: sccache --show-stats || true
 
       # ── LINUX: dereference symlinks (issue #14) + strip + sanitize + tar@root + GATE
       - name: Package + validate (Linux)

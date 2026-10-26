@@ -2,7 +2,7 @@
 """release_plan.py, driven against the inputs it exists to refuse.
 
 The plan decides before any build what a run is. These are the runs it must
-refuse, each one a real way to get it wrong, and the three it must accept:
+refuse, each one a real way to get it wrong, and the runs it must accept:
 
   known-bad
     1. a candidate given a release tag - the old habit of naming a candidate
@@ -14,11 +14,17 @@ refuse, each one a real way to get it wrong, and the three it must accept:
     4. a pushed tag that is not firefox-N (the trigger is `firefox-*`, so
        `firefox-49-rc` would start a release);
     5. a kind nobody declared;
-    6. an event that is neither a pushed tag nor a run by hand.
+    6. an event that is neither a pushed tag nor a run by hand;
+    7. a release asked to compile through the cache - what is published is
+       compiled from nothing;
+    8. a compile cache nobody declared.
   known-good
-    7. a candidate: nothing published, the gate's seal LOCAL;
-    8. a release by hand: tag, number, previous tag, the seal under the tag;
-    9. a pushed firefox-N tag, whatever the (absent) kind input says.
+    9. a candidate: nothing published, the gate's seal LOCAL, the cache on;
+   10. a candidate with the cache off, the one that can be republished;
+   11. a release by hand: tag, number, previous tag, the seal under the tag,
+       the cache off;
+   12. a release by hand that asks for the cache off, which it is anyway;
+   13. a pushed firefox-N tag, whatever the (absent) kind input says.
 
 Run it directly, like test_make_seal.py: `python3 scripts/test_release_plan.py`.
 """
@@ -42,17 +48,29 @@ REFUSED = [
     ("an undeclared kind", ("workflow_dispatch", "nightly", "", "x")),
     ("an empty kind by hand", ("workflow_dispatch", "", "", "x")),
     ("another event", ("pull_request", "release", "firefox-49", "x")),
+    ("a release asked for the compile cache",
+     ("workflow_dispatch", "release", "firefox-49", "x", "gha")),
+    ("an undeclared compile cache", ("workflow_dispatch", "candidate", "", "x", "on")),
 ]
 
 ACCEPTED = [
     ("a candidate", ("workflow_dispatch", "candidate", "", "next/firefox-49"),
-     {"kind": "candidate", "tag": "", "num": "", "prevtag": "", "seal_tag": "local"}),
+     {"kind": "candidate", "tag": "", "num": "", "prevtag": "", "seal_tag": "local",
+      "compile_cache": "gha"}),
+    ("a candidate without the cache",
+     ("workflow_dispatch", "candidate", "", "next/firefox-49", "off"),
+     {"kind": "candidate", "tag": "", "num": "", "prevtag": "", "seal_tag": "local",
+      "compile_cache": "off"}),
     ("a release by hand", ("workflow_dispatch", "release", "firefox-49", "next/firefox-49"),
      {"kind": "release", "tag": "firefox-49", "num": "49", "prevtag": "firefox-48",
-      "seal_tag": "firefox-49"}),
+      "seal_tag": "firefox-49", "compile_cache": "off"}),
+    ("a release by hand asking for no cache",
+     ("workflow_dispatch", "release", "firefox-49", "next/firefox-49", "off"),
+     {"kind": "release", "tag": "firefox-49", "num": "49", "prevtag": "firefox-48",
+      "seal_tag": "firefox-49", "compile_cache": "off"}),
     ("a pushed tag", ("push", "", "", "firefox-50"),
      {"kind": "release", "tag": "firefox-50", "num": "50", "prevtag": "firefox-49",
-      "seal_tag": "firefox-50"}),
+      "seal_tag": "firefox-50", "compile_cache": "off"}),
 ]
 
 

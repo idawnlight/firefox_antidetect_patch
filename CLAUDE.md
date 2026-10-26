@@ -37,6 +37,21 @@ per Rust) e si usa da sola: non c'e' niente da lanciare prima. Si controlla con
 `sccache --show-stats`. Il primo giro dopo un reconfigure e' piu' LENTO con la
 cache che senza, perche' deve popolarsi.
 
+## Compilare in CI (`release.yml`)
+
+- **Candidata** (`kind=candidate`): compila con sccache appoggiato alla cache
+  di GitHub Actions (`compile_cache=gha`, il default), quindi la corsa dopo una
+  correzione ricompila solo cio' che e' cambiato. Per correggere errori di
+  build si itera cosi', non con corse a freddo.
+- **Release**: sempre a freddo, senza cache. Una candidata compilata con la
+  cache non si pubblica: `publish.yml` la rifiuta, anche da `republish.yml`.
+  Per pubblicare il codice di una candidata si lancia una release, oppure una
+  candidata con `compile_cache=off` da ripubblicare.
+- Ogni build gira con `--keep-going`: una corsa fallita elenca tutti gli
+  errori della gamba, non solo il primo.
+- La decisione sta in un posto solo, `scripts/release_plan.py` (con i suoi casi
+  in `scripts/test_release_plan.py`); i workflow leggono il piano e basta.
+
 ## Le due regole che rompono il prodotto se ignorate
 
 1. **Ogni spoof passa da una pref** `zoom.stealth.*` o `stealthfox.*` (o
