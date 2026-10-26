@@ -365,10 +365,10 @@ export class FrameTree {
   }
 
   onWindowEvent(event) {
-    if (event.type !== 'DOMDocElementInserted' || !event.target.ownerGlobal)
+    if (event.type !== 'DOMDocElementInserted' || !event.target.documentGlobal)
       return;
 
-    const docShell = event.target.ownerGlobal.docShell;
+    const docShell = event.target.documentGlobal.docShell;
     const frame = this.frameForDocShell(docShell);
     if (!frame) {
       dump(`WARNING: ${event.type} for unknown frame ${helper.browsingContextToFrameId(docShell.browsingContext)}\n`);

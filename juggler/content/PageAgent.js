@@ -279,7 +279,7 @@ export class PageAgent {
   }
 
   _linkClicked(sync, anchorElement) {
-    if (anchorElement.ownerGlobal.docShell !== this._docShell)
+    if (anchorElement.documentGlobal.docShell !== this._docShell)
       return;
     this._browserPage.emit('pageLinkClicked', { phase: sync ? 'after' : 'before' });
   }
@@ -304,9 +304,9 @@ export class PageAgent {
   onWindowEvent(event) {
     if (event.type !== 'DOMContentLoaded' && event.type !== 'load')
       return;
-    if (!event.target.ownerGlobal)
+    if (!event.target.documentGlobal)
       return;
-    const docShell = event.target.ownerGlobal.docShell;
+    const docShell = event.target.documentGlobal.docShell;
     const frame = this._frameTree.frameForDocShell(docShell);
     if (!frame)
       return;
@@ -326,7 +326,7 @@ export class PageAgent {
   }
 
   _onDocumentOpenLoad(document) {
-    const docShell = document.ownerGlobal.docShell;
+    const docShell = document.documentGlobal.docShell;
     const frame = this._frameTree.frameForDocShell(docShell);
     if (!frame)
       return;
@@ -441,7 +441,7 @@ export class PageAgent {
    */
   _elementAtom({frameId, objectId, atom}) {
     const element = this._xrayElement(frameId, objectId);
-    const win = element.ownerGlobal;
+    const win = element.documentGlobal;
     const {ATOM_SOURCES} = ChromeUtils.importESModule(
         'chrome://remote/content/marionette/atom.sys.mjs');
     const sandbox = Cu.Sandbox(win, {sandboxPrototype: win, sameZoneAs: win,
@@ -478,7 +478,7 @@ export class PageAgent {
     const init = { input: { bubbles: true, composed: true }, change: { bubbles: true } }[type];
     if (!init)
       throw new Error('No native shape known for "' + type + '"');
-    element.dispatchEvent(new element.ownerGlobal.Event(type, init));
+    element.dispatchEvent(new element.documentGlobal.Event(type, init));
   }
 
   /**
@@ -515,7 +515,7 @@ export class PageAgent {
    */
   async _setUserInput({frameId, objectId, value}) {
     const element = this._xrayElement(frameId, objectId);
-    const win = element.ownerGlobal;
+    const win = element.documentGlobal;
     const isInput = win.HTMLInputElement.isInstance(element);
     if (!isInput && !win.HTMLTextAreaElement.isInstance(element))
       throw new Error('Element is not an <input> or <textarea>');
@@ -571,7 +571,7 @@ export class PageAgent {
    */
   async _selectOptions({frameId, objectId, indices}) {
     const select = this._xrayElement(frameId, objectId);
-    const win = select.ownerGlobal;
+    const win = select.documentGlobal;
     if (!win.HTMLSelectElement.isInstance(select))
       throw new Error('Element is not a <select> element');
     const options = [...select.options];
@@ -616,7 +616,7 @@ export class PageAgent {
    */
   async _setFileInputFiles({objectId, frameId, files}) {
     const input = this._xrayElement(frameId, objectId);
-    const win = input.ownerGlobal;
+    const win = input.documentGlobal;
     if (!win.HTMLInputElement.isInstance(input) || input.type !== 'file')
       throw new Error('Element is not an <input type=file>');
     let nsFiles;

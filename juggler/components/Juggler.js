@@ -43,6 +43,7 @@ ActorManagerParent.addJSWindowActors({
       },
     },
     allFrames: true,
+    safeForUntrustedWebProcess: true,
   },
 });
 
