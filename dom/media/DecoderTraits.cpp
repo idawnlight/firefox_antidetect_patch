@@ -129,6 +129,19 @@ static CanPlayStatus CanHandleCodecsType(
   return CANPLAY_MAYBE;
 }
 
+// Stealth: there is deliberately no declared-answer hook here any more.
+//
+// One lived at the top of this function until 2026-08-08, matching whole type
+// STRINGS against a table from invisible_core. It could only ever hold the
+// strings somebody had seen: measured that day against retail Windows, our
+// Linux build differed on 12 rows and the table covered 3 of them, because the
+// space it was trying to enumerate - profile x constraint x level x container x
+// the audio codec travelling along - has no end.
+//
+// The declaration moved one layer down, to PDMFactory::Supports, where the key
+// is a track mime type and the set is a dozen names Gecko defines itself. See
+// dom/media/StealthMediaDeclaration.h. Everything in this file is then Gecko's
+// own host-independent logic and needs no help.
 static CanPlayStatus CanHandleMediaType(
     const MediaContainerType& aType, DecoderDoctorDiagnostics* aDiagnostics) {
   if (DecoderTraits::IsHttpLiveStreamingType(aType)) {

@@ -10,6 +10,7 @@
 #include "mozilla/RelativeLuminanceUtils.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/dom/BrowsingContextBinding.h"
@@ -21,6 +22,7 @@
 #include "nsCSSValue.h"
 #include "nsContentUtils.h"
 #include "nsDeviceContext.h"
+#include "StealthDeclarationGate.h"
 #include "nsGlobalWindowOuter.h"
 #include "nsIBaseWindow.h"
 #include "nsIDocShell.h"
@@ -58,6 +60,12 @@ static nsSize GetSize(const Document& aDocument) {
 
 // A helper for three features below.
 static nsSize GetDeviceSize(const Document& aDocument) {
+  // Stealth: spoof device size from prefs set by Python at launch
+  {
+    int32_t w = mozilla::StaticPrefs::zoom_stealth_screen_width();
+    int32_t h = mozilla::StaticPrefs::zoom_stealth_screen_height();
+    if (w > 0 && h > 0) return CSSPixel::ToAppUnits(CSSIntSize(w, h));
+  }
   if (aDocument.ShouldResistFingerprinting(RFPTarget::CSSDeviceSize)) {
     return GetSize(aDocument);
   }
@@ -408,6 +416,35 @@ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
     // that we don't need to care about ResistFingerprinting.
     if (bc->TouchEventsOverride() == dom::TouchEventsOverride::Enabled) {
       return PointerCapabilities::Coarse;
+    }
+  }
+
+  // Stealth: the pointer capabilities are DECLARED, one value for the primary
+  // pointer and one for the union of all of them.
+  //
+  // This used to be a compiled `Fine | Hover` for both, with the comment
+  // "always report desktop pointer, consistent with maxTouchPoints=0". The
+  // intent was right and it stopped a real leak - `WinUtils::GetAllPointerCapabilities`
+  // adds Coarse whenever `SystemHasTouch()`, so a developer machine with a
+  // digitizer would have said `any-pointer: coarse` under a persona claiming a
+  // desktop. But it was a second source of truth for something the core
+  // already describes (`hardware.max_touch_points`), and it could not be
+  // pinned: a persona for a touch laptop was not expressible at all.
+  //
+  // The core derives both from the touch-point count, so `any-pointer`,
+  // `dom.w3c_touch_events.enabled` and `navigator.maxTouchPoints` cannot
+  // disagree - and they did. Measured 2026-08-09, our build reported the Touch
+  // interfaces present (the host has touch) with maxTouchPoints 0 and
+  // `any-pointer: coarse` false: a machine that supports touch events, has no
+  // touch points, and has no coarse pointer. No such machine exists.
+  if (mozilla::gfx::StealthEngineActive()) {
+    const int32_t declared =
+        aID == LookAndFeel::IntID::PrimaryPointerCapabilities
+            ? mozilla::StaticPrefs::zoom_stealth_pointer_primary()
+            : mozilla::StaticPrefs::zoom_stealth_pointer_all();
+    if (declared >= 0) {
+      mozilla::gfx::StealthAssertDeclarationsComplete();
+      return static_cast<PointerCapabilities>(declared);
     }
   }
 

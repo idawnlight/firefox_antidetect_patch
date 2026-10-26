@@ -134,6 +134,42 @@ add_task(async function test_set_language_override_in_different_contexts() {
   BrowserTestUtils.removeTab(tab2);
 });
 
+// STEALTHFOX: the override can carry a language list (juggler.locale.override
+// seeds it with the same list as intl.accept_languages). It must go out the
+// way Firefox sends that list from intl.accept_languages, q-values included,
+// not as the raw list.
+add_task(async function test_language_override_list_is_prepared() {
+  const list = "it-IT, it, en-US, en";
+  const tab = BrowserTestUtils.addTab(gBrowser, PAGE_URL);
+  const browser = gBrowser.getBrowserForTab(tab);
+  await BrowserTestUtils.browserLoaded(browser);
+
+  info("The header Firefox sends for the list as intl.accept_languages");
+  await SpecialPowers.pushPrefEnv({ set: [["intl.accept_languages", list]] });
+  const fromPref = await getAcceptLanguageHeader(browser);
+  await SpecialPowers.popPrefEnv();
+  is(
+    fromPref,
+    "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+    "intl.accept_languages is prepared with q-values"
+  );
+
+  info("The same list as a language override");
+  browser.browsingContext.languageOverride = list;
+  is(
+    await getAcceptLanguageHeader(browser),
+    fromPref,
+    '"Accept-Language" from an override list is what the pref would send'
+  );
+  const languages = await SpecialPowers.spawn(browser, [], () =>
+    content.navigator.languages.join("|")
+  );
+  is(languages, "it-IT|it|en-US|en", "navigator.languages is the list");
+
+  browser.browsingContext.languageOverride = "";
+  BrowserTestUtils.removeTab(tab);
+});
+
 function getLanguageToOverride(defaultLanguage) {
   return languages.find(lang => lang !== defaultLanguage);
 }

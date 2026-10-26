@@ -50,12 +50,14 @@ nsresult BlobSet::AppendUTF8String(const nsACString& aUTF8String,
         return NS_ERROR_OUT_OF_MEMORY;
       }
     }
-#ifdef XP_WIN
+    // Native line endings are Windows' on every build: the browser this one
+    // stands for is a Windows Firefox, and a page reads the platform from
+    // new Blob(['\n'], {endings: 'native'}).size, 2 there and 1 on Linux
+    // [B294].
     if (NS_WARN_IF(
             !utf8Str.ReplaceSubstring("\n", "\r\n", mozilla::fallible))) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
-#endif
   }
 
   RefPtr<StringBlobImpl> blobImpl = StringBlobImpl::Create(utf8Str, u""_ns);

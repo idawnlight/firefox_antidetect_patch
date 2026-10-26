@@ -370,6 +370,9 @@ class MediaManager final : public nsIMediaManagerService,
     bool HasFakeCams() const;
     bool HasFakeMics() const;
     bool RealDeviceRequested() const;
+    // Stealthfox [B300]: whether the host's speakers are enumerated. The one
+    // place that decides it, for the three that asked the flag directly.
+    bool HostSpeakersRequested() const;
     dom::MediaSourceEnum VideoInputType() const;
     dom::MediaSourceEnum AudioInputType() const;
     EnumerationFlags mFlags;

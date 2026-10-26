@@ -216,6 +216,12 @@ bool CSP_ShouldURIInheritCSP(nsIURI* aURI);
 void CSP_ApplyMetaCSPToDoc(mozilla::dom::Document& aDoc,
                            const nsAString& aPolicyStr);
 
+// Whether the automation asked this document's docshell to ignore the page's
+// own policies (Juggler's `bypassCSP` context setting, Playwright's
+// `bypass_csp`). The one place the question is answered: InitCSP for the
+// header policies, CSP_ApplyMetaCSPToDoc for a <meta> one.
+bool CSP_IsBypassedFor(const mozilla::dom::Document& aDoc);
+
 // Checks if the URI is "chrome://browser/content/browser.xhtml"
 bool CSP_IsBrowserXHTML(nsIURI* aURI);
 
