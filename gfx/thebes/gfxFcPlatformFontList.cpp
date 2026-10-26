@@ -5,6 +5,7 @@
 #include "gfxFcPlatformFontList.h"
 
 #include "SharedFontList-impl.h"
+#include "StealthBundleFontList.h"
 #include "gfxFT2Utils.h"
 #include "gfxFont.h"
 #include "gfxPlatform.h"
@@ -15,6 +16,7 @@
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_mathml.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/glean/GfxMetrics.h"
@@ -398,7 +400,8 @@ gfxFontconfigFontEntry::gfxFontconfigFontEntry(const nsACString& aFaceName,
                                                WeightRange aWeight,
                                                WidthRange aWidth,
                                                SlantStyleRange aStyle,
-                                               RefPtr<SharedFTFace>&& aFace)
+                                               RefPtr<SharedFTFace>&& aFace,
+                                               const char* aFile, int aIndex)
     : gfxFT2FontEntryBase(aFaceName),
       mFontPattern(CreatePatternForFace(aFace->GetFace())),
       mFTFace(aFace.forget().take()),
@@ -407,6 +410,21 @@ gfxFontconfigFontEntry::gfxFontconfigFontEntry(const nsACString& aFaceName,
   mStyleRange = aStyle;
   mWidthRange = aWidth;
   mIsDataUserFont = true;
+  // STEALTH: rimettere il file che `CreatePatternForFace` ha appena tolto.
+  //
+  // Quella funzione passa a fontconfig un nome di file FINTO e poi cancella
+  // FC_FILE e FC_INDEX, perche' per un font scaricato da una pagina un file non
+  // esiste. Per le facce del nostro bundle esiste, e tacerlo costa: senza file
+  // nel pattern, `CreateScaledFont` costruisce un `UnscaledFont` senza percorso,
+  // `GetFontDescriptor` fallisce e Gecko manda a WebRender i BYTE del font
+  // invece del percorso. Misurati 65,9 MB nel processo padre contro 1,9 su una
+  // pagina vuota - `70-known-bugs.md` [B154].
+  //
+  // Chi non passa un file non vede nessuna differenza: il ramo non scatta.
+  if (aFile && *aFile) {
+    FcPatternAddString(mFontPattern, FC_FILE, ToFcChar8Ptr(aFile));
+    FcPatternAddInteger(mFontPattern, FC_INDEX, aIndex);
+  }
 }
 
 gfxFontconfigFontEntry::gfxFontconfigFontEntry(const nsACString& aFaceName,
@@ -511,7 +529,12 @@ gfxFontconfigFontEntry::AutoHBFace gfxFontconfigFontEntry::GetHBFace() {
       NS_WARNING(nsPrintfCString("fallback to gfxFontEntry::GetHBFace for %s",
                                  Name().get())
                      .get());
-      face = hb_face_reference(gfxFontEntry::GetHBFace());
+      // Oggetto nominato, non temporaneo: la conversione di AutoHBFace e'
+      // ref-qualified `const&` proprio per rendere impossibile la forma che
+      // penzola. Questa chiamata era gia' corretta - il temporaneo sarebbe
+      // vissuto fino al punto e virgola - e cambia solo forma.
+      const auto autoFace(gfxFontEntry::GetHBFace());
+      face = hb_face_reference(autoFace);
       useTableCache = true;
     }
     AutoWriteLock lock(mLock);
@@ -628,7 +651,7 @@ nsresult gfxFontconfigFontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
   if (NS_SUCCEEDED(rv)) {
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
     fontlist::FontList* sharedFontList = pfl->SharedFontList();
-    if (!IsUserFont() && mShmemFace) {
+    if (ShouldPublishCharacterMap()) {
       mShmemFace->SetCharacterMap(sharedFontList, charmap, mShmemFamily);
       if (TrySetShmemCharacterMap()) {
         setCharMap = false;
@@ -662,7 +685,10 @@ nsresult gfxFontconfigFontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
 bool gfxFontconfigFontEntry::HasFontTableInternal(uint32_t aTableTag) {
   if (FTUserFontData* ufd = GetUserFontData()) {
     if (const auto* data = ufd->GetData()) {
-      return !!gfxFontUtils::FindTableDirEntry(data, aTableTag);
+      auto* face = GetFTFace();
+      uint32_t faceIndex =
+          face ? uint32_t(face->GetFace()->face_index & 0x7FFF) : 0;
+      return !!gfxFontUtils::FindTableDirEntry(data, aTableTag, faceIndex);
     }
   }
   return gfxFT2FontEntryBase::FaceHasTable(GetFTFace(), aTableTag);
@@ -672,7 +698,10 @@ hb_blob_t* gfxFontconfigFontEntry::GetFontTableInternal(uint32_t aTableTag) {
   // for data fonts, read directly from the font data
   if (FTUserFontData* ufd = GetUserFontData()) {
     if (const auto* data = ufd->GetData()) {
-      return gfxFontUtils::GetTableFromFontData(data, aTableTag);
+      auto* face = GetFTFace();
+      uint32_t faceIndex =
+          face ? uint32_t(face->GetFace()->face_index & 0x7FFF) : 0;
+      return gfxFontUtils::GetTableFromFontData(data, aTableTag, faceIndex);
     }
   }
 
@@ -681,7 +710,11 @@ hb_blob_t* gfxFontconfigFontEntry::GetFontTableInternal(uint32_t aTableTag) {
     return gfxFontEntry::GetFontTableInternal(aTableTag);
   }
 
-  auto* table = hb_face_reference_table(GetHBFace(), aTableTag);
+  // Come sopra: oggetto nominato invece del temporaneo. Era corretto anche
+  // prima (il temporaneo vive fino al punto e virgola), ma la conversione di
+  // AutoHBFace ora e' `const&` per impedire la forma che penzola.
+  const auto face(GetHBFace());
+  auto* table = hb_face_reference_table(face, aTableTag);
   return table != hb_blob_get_empty() ? table : nullptr;
 }
 
@@ -1069,22 +1102,83 @@ gfxFont* gfxFontconfigFontEntry::CreateFontInstance(
     FcPatternAddBool(renderPattern, FC_EMBEDDED_BITMAP, FcFalse);
   }
 
+  // STEALTH: la dichiarazione entra nel PATTERN, non nei lettori.
+  //
+  // I lettori di questi valori sono DUE, e correggerne uno lascia l'altro sulla
+  // macchina: `PrepareFontOptions` qui sotto costruisce i flag di caricamento
+  // FreeType, e `ScaledFontFontconfig::InstanceData` (gfx/2d, righe 140-185)
+  // rilegge lo STESSO pattern per costruire le opzioni che vanno a WebRender,
+  // che e' il percorso che rasterizza davvero. Corretto solo il primo, la
+  // misura non si muoveva di un bit: e' la regola 16 vista dal vivo, lo stesso
+  // fatto calcolato in due punti.
+  //
+  // Scrivendolo nel pattern il posto che decide torna a essere uno, e i due
+  // lettori restano il codice upstream che erano.
+  //
+  // Il pattern su cui lavorano ha gia' subito, lo dice il commento upstream in
+  // `PrepareFontOptions`, "user and system fontconfig configurations": quindi
+  // `/etc/fonts` decideva come rasterizziamo le facce che imbarchiamo NOI.
+  // Misurato il 2026-08-16 attraverso il prodotto, stesso binario e stessa
+  // pagina: hash dei pixel 3842037683 con il fontconfig dell'host (che su
+  // questa macchina vale `hintslight`), 1512591551 con una configurazione
+  // vuota, 2489286717 con `hintnone`. Una pagina legge quei byte con
+  // `getImageData`.
+  //
+  // Sono questi DUE e non sei: `FC_RGBA`, `FC_LCD_FILTER` e
+  // `FC_EMBEDDED_BITMAP` misurano identici in ogni configurazione provata, e
+  // restano dove sono.
+  //
+  // Nessun ripiego se la dichiarazione manca: sarebbe tornare a chiedere alla
+  // macchina, e `StealthDeclarationGate` rifiuta l'avvio prima di arrivare qui.
+  {
+    const int32_t hintstyle =
+        StaticPrefs::zoom_stealth_text_freetype_hintstyle();
+    if (hintstyle >= 0) {
+      FcPatternDel(renderPattern, FC_HINT_STYLE);
+      FcPatternDel(renderPattern, FC_HINTING);
+      FcPatternAddInteger(renderPattern, FC_HINT_STYLE, hintstyle);
+      FcPatternAddBool(renderPattern, FC_HINTING,
+                       hintstyle == FC_HINT_NONE ? FcFalse : FcTrue);
+    }
+    const int32_t antialias =
+        StaticPrefs::zoom_stealth_text_freetype_antialias();
+    if (antialias >= 0) {
+      FcPatternDel(renderPattern, FC_ANTIALIAS);
+      FcPatternAddBool(renderPattern, FC_ANTIALIAS,
+                       antialias ? FcTrue : FcFalse);
+    }
+  }
+
   int loadFlags;
   unsigned int synthFlags;
   PrepareFontOptions(renderPattern, &loadFlags, &synthFlags);
 
+  // STEALTH: si chiede al PATTERN se nomina un file, invece di dedurlo dal fatto
+  // che la faccia sia stata creata dalla memoria.
+  //
+  // Prima la condizione era `if (!face->GetData())`, cioe' un PROXY: "creata
+  // dalla memoria" stava per "non ha un file". Per le facce del nostro bundle
+  // quel proxy e' falso - i byte sono la mappatura DI un file, di cui
+  // conosciamo percorso e indice - e la conseguenza era che l'`UnscaledFont`
+  // nasceva senza percorso, `GetFontDescriptor` falliva, e Gecko mandava a
+  // WebRender i BYTE del font: 65,9 MB nel processo padre contro 1,9 su una
+  // pagina vuota (`70-known-bugs.md` [B154]).
+  //
+  // Il comportamento upstream non si muove, caso per caso: una faccia da dati
+  // SENZA file lascia `file` vuoto e prende il primo ramo come prima; una faccia
+  // normale col file prende il secondo come prima; e una faccia normale SENZA
+  // file continua a essere l'errore che era. L'unico caso che cambia e' il
+  // nostro, che prima non era previsto.
   std::string file;
   int index = 0;
-  if (!face->GetData()) {
-    const FcChar8* fcFile;
-    if (FcPatternGetString(renderPattern, FC_FILE, 0,
-                           const_cast<FcChar8**>(&fcFile)) != FcResultMatch ||
-        FcPatternGetInteger(renderPattern, FC_INDEX, 0, &index) !=
-            FcResultMatch) {
-      NS_WARNING("No file in Fontconfig pattern for font instance");
-      return nullptr;
-    }
+  const FcChar8* fcFile;
+  if (FcPatternGetString(renderPattern, FC_FILE, 0,
+                         const_cast<FcChar8**>(&fcFile)) == FcResultMatch &&
+      FcPatternGetInteger(renderPattern, FC_INDEX, 0, &index) == FcResultMatch) {
     file = ToCharPtr(fcFile);
+  } else if (!face->GetData()) {
+    NS_WARNING("No file in Fontconfig pattern for font instance");
+    return nullptr;
   }
 
   RefPtr<UnscaledFontFontconfig> unscaledFont;
@@ -1098,9 +1192,12 @@ gfxFont* gfxFontconfigFontEntry::CreateFontInstance(
     // Here, we use the original mFTFace, not a potential clone with variation
     // settings applied.
     auto* ftFace = GetFTFace();
-    unscaledFont = ftFace->GetData() ? new UnscaledFontFontconfig(ftFace)
-                                     : new UnscaledFontFontconfig(
-                                           std::move(file), index, ftFace);
+    // STEALTH: si sceglie su `file`, non su `GetData()`. E' lo stesso proxy
+    // corretto qui sopra: cio' che decide se un UnscaledFont puo' descriversi
+    // con un percorso e' AVERE un percorso, non da dove sono arrivati i byte.
+    unscaledFont = file.empty() ? new UnscaledFontFontconfig(ftFace)
+                                : new UnscaledFontFontconfig(std::move(file),
+                                                             index, ftFace);
     mUnscaledFontCache.Add(unscaledFont);
   }
 
@@ -1720,6 +1817,13 @@ void gfxFcPlatformFontList::AddPatternToFontList(
     }
   }
 
+  // Stealth bundle-only: a skipped family (above) left aFontFamily null; drop
+  // every face of it (this catches faces 2..N of a skipped family, which take
+  // the FcStrCmp==0 path and never re-enter the block above).
+  if (!aFontFamily) {
+    return;
+  }
+
   // Add pointers to other localized family names. Most fonts
   // only have a single name, so the first call to GetString
   // will usually not match
@@ -1839,8 +1943,12 @@ nsresult gfxFcPlatformFontList::InitFontListForPlatform() {
 #endif
 
   // iterate over available fonts
-  FcFontSet* systemFonts = FcConfigGetFonts(nullptr, FcSetSystem);
-  AddFontSetFamilies(systemFonts, policy.get(), /* aAppFonts = */ false);
+  // Stealth bundle-only: skip the host system-font enumeration entirely; only
+  // the app-bundled set (above) populates the list, so no host font enters.
+  if (!mStealthBundleOnly) {
+    FcFontSet* systemFonts = FcConfigGetFonts(nullptr, FcSetSystem);
+    AddFontSetFamilies(systemFonts, policy.get(), /* aAppFonts = */ false);
+  }
 
   return NS_OK;
 }
@@ -1942,6 +2050,25 @@ void gfxFcPlatformFontList::InitSharedFontListForPlatform() {
 #ifdef MOZ_WIDGET_GTK
   UpdateSystemFontOptions();
 #endif
+
+  if (mStealthBundleOnly) {
+    // Uniform bundle: build the shared family list + faces from our manifest,
+    // skipping the fontconfig enumeration (host fonts never enter). Linux builds
+    // faces eagerly, so AddFaces each family here.
+    auto* bundle = StealthBundleFontList::Get();  // never null; it crashes first
+    auto* list = SharedFontList();
+    if (list) {
+      nsTArray<fontlist::Family::InitData> famData(bundle->Families().Clone());
+      list->SetFamilyNames(famData);
+      for (uint32_t i = 0; i < list->NumFamilies(); i++) {
+        auto& fam = list->Families()[i];
+        nsTArray<fontlist::Face::InitData> faceData;
+        bundle->GetFaces(fam.DisplayName().AsString(list), faceData);
+        fam.AddFaces(list, faceData);
+      }
+      return;
+    }
+  }
 
 #ifdef MOZ_BUNDLED_FONTS
   if (StaticPrefs::gfx_bundled_fonts_activate_AtStartup() != 0) {
@@ -2298,6 +2425,89 @@ gfxFcPlatformFontList::GetFilteredPlatformFontLists() {
 
 already_AddRefed<gfxFontEntry> gfxFcPlatformFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
+  if (mStealthBundleOnly) {
+    // Instantiate the face straight from its bundle file via FreeType;
+    // CloneFace takes the .ttc face index directly.
+    const nsCString file(aFace->mDescriptor.AsString(SharedFontList()));
+    // Stealth: UNA mappatura per FILE, prestata a ogni faccia - la stessa cosa
+    // che fa Windows, con lo stesso oggetto e la stessa vita.
+    //
+    // Come si e' arrivati qui, in due passi. Prima FreeType riceveva una copia
+    // `malloc` dell'intero file PER FACCIA, posseduta e liberata da
+    // FTUserFontData, e invisibile ad about:memory: misurato 2026-08-14 su una
+    // pagina che tocca 1, 10, 34 e 68 famiglie, l'heap non classificato del
+    // processo di contenuto faceva 0,6, 9,0, 98,7 e 319,9 MB, cioe' ~1,7 volte i
+    // byte dei file toccati - che e' il rapporto facce/famiglia (129/68).
+    //
+    // Poi (§5.2m) si e' passati al costruttore per PERCORSO, che fa chiamare a
+    // CloneFace `Factory::NewFTFace(path, index)`: niente copia, ma una seconda
+    // implementazione. Windows mappava il file e lo prestava allo stream DWrite,
+    // Linux lasciava aprire il file a FreeType: due risposte diverse alla stessa
+    // domanda, e due rami di CloneFace che divergono anche in ALTRO - il ramo per
+    // percorso NON chiama `FT_Select_Charmap`, mentre quello in memoria seleziona
+    // UNICODE o MS_SYMBOL. Cioe' su Linux le facce nascevano con la charmap che
+    // FreeType sceglie da solo, divergendo non solo da Windows ma dall'upstream.
+    //
+    // Adesso le due piattaforme fanno la stessa cosa: `GetFaceBlob` mappa il file
+    // una volta e lo tiene in una cache immortale, `FT_New_Memory_Face` prende in
+    // prestito quei byte senza copiarli (e' il contratto della chiamata), e il
+    // ramo in memoria di CloneFace rimette la selezione della charmap. Le pagine
+    // diventano del FILE su entrambe: condivise dal sistema operativo fra i
+    // processi, e sfrattabili invece che swappabili.
+    auto* bundle = StealthBundleFontList::Get();
+    if (!bundle) {
+      return nullptr;
+    }
+    RefPtr<StealthBundleFontList::FileBlob> blob = bundle->GetFaceBlob(file);
+    if (!blob || !blob->Length()) {
+      return nullptr;
+    }
+    RefPtr<FTUserFontData> ufd = new FTUserFontData(
+        blob->Data(), blob->Length(), FTUserFontData::Prestito::Si);
+    RefPtr<SharedFTFace> face = ufd->CloneFace(aFace->mIndex);
+    if (!face) {
+      return nullptr;
+    }
+    // Il PERCORSO va dichiarato insieme ai byte, o WebRender riceve i byte.
+    // Non e' una seconda fonte: e' la stessa funzione che risolve il blob qui
+    // sopra, `GetFacePath`, che risolve attraverso la stessa directory di
+    // `GetFaceBlob`. Se manca il percorso si prosegue lo stesso - il font
+    // disegna, si paga solo la copia - quindi qui NON si rifiuta.
+    nsAutoCString percorso;
+    if (!StealthBundleFontList::GetFacePath(file, percorso)) {
+      percorso.Truncate();
+    }
+    nsAutoCString name(aFamily->DisplayName().AsString(SharedFontList()));
+    RefPtr fe = MakeRefPtr<gfxFontconfigFontEntry>(
+        name, aFace->mWeight, aFace->mWidth, aFace->mStyle, std::move(face),
+        percorso.IsEmpty() ? nullptr : percorso.get(), aFace->mIndex);
+    // Wire the entry back to its shared-list face, exactly as the non-stealth
+    // path below does and as the CoreText (CoreTextFontList.cpp:1795)
+    // bundle-only branch does. This branch omitted it - found 2026-08-07 -
+    // which left mShmemFace null for EVERY bundled face on Linux.
+    //
+    // The DWrite branch was named here too, citing gfxDWriteFontList.cpp:1211.
+    // That was WRONG: 1211 is in the host-collection branch, and the
+    // bundle-only branch above it omitted the call just like this one did,
+    // until 2026-08-08. So this comment asserted a symmetry that did not exist
+    // and would have kept anyone from looking - which is the whole reason a
+    // cross-reference in a comment has to be checked against the code it
+    // names, not trusted.
+    // Two consequences: gfxFont::SanitizeMetrics could not tell a bundled face
+    // from any other font, so the manifest's vertical metrics were silently
+    // never applied; and the entry's charmap could never be published back
+    // into the shared list (the mShmemFace->SetCharacterMap path), leaving
+    // families permanently not-fully-initialized, which is what lets the async
+    // cmap path record a codepoint in mCodepointsWithNoFonts and keep that
+    // verdict for the rest of the session.
+    //
+    // Setting mShmemFace here was necessary for that second consequence and NOT
+    // sufficient: ReadCMAP still refused to publish, because it asked
+    // `!IsUserFont()` and every bundled face is built from file data. That half
+    // is fixed separately, in gfxFontEntry::ShouldPublishCharacterMap.
+    fe->InitializeFrom(aFace, aFamily);
+    return fe.forget();
+  }
   nsAutoCString desc(aFace->mDescriptor.AsString(SharedFontList()));
   FcPattern* pattern = FcNameParse((const FcChar8*)desc.get());
   RefPtr fe = MakeRefPtr<gfxFontconfigFontEntry>(desc, pattern);
@@ -2468,6 +2678,38 @@ bool gfxFcPlatformFontList::FindAndAddFamiliesLocked(
     gfxFontStyle* aStyle, nsAtom* aLanguage, gfxFloat aDevToCssSize) {
   nsAutoCString familyName(aFamily);
   ToLowerCase(familyName);
+
+  // STEALTH: no host fontconfig in name resolution, at all.
+  //
+  // Everything below this point asks the HOST's fontconfig what a name means -
+  // the "sans"/"mono" legacy aliases just after this comment, which exist on no
+  // Windows machine, and then the whole -moz-sentinel FcConfigSubstitute
+  // machinery further down, which resolves arbitrary names against
+  // /etc/fonts and ~/.config/fontconfig. Information goes into the host config
+  // and comes back out, which is exactly the shape this build exists to remove.
+  //
+  // It is not a theoretical leak. CreepJS reads the operating system off the
+  // font system, and measured 2026-08-07 on the shipped firefox-18 it reported
+  // `system_fonts: Segoe UI:Windows` on Windows and `system_fonts: Sans:Linux`
+  // on Linux - it named the platform outright. Probing the names directly:
+  // "Sans", "Serif", "Monospace" and "sans-serif" all resolved as families on
+  // Linux and none of them on Windows. No host font FILE leaked (DejaVu,
+  // Liberation, Ubuntu, Cantarell, Noto, FreeSans all failed to resolve, so the
+  // bundle-only family list itself is sealed) - what leaked was fontconfig's
+  // own alias NAMES, which no Windows install has.
+  //
+  // Delegating to the base class gives Windows' behaviour by construction: the
+  // manifest's canonical substitute table (see StealthBundleFontList::GetAlias,
+  // applied in gfxPlatformFontList::FindAndAddFamiliesLocked) and then the
+  // bundle family list, and nothing else. CSS generics do not depend on this
+  // path - AddGenericFonts already forces the base class under bundle-only, so
+  // serif/sans-serif/monospace/cursive resolve through
+  // StealthGenericWindowsFont.
+  if (mStealthBundleOnly) {
+    return gfxPlatformFontList::FindAndAddFamiliesLocked(
+        aFontVisibilityProvider, aGeneric, aFamily, aOutput, aFlags, aStyle,
+        aLanguage, aDevToCssSize);
+  }
 
   if (!(aFlags & FindFamiliesFlags::eQuotedFamilyName)) {
     // deprecated generic names are explicitly converted to standard generics
@@ -2763,8 +3005,12 @@ void gfxFcPlatformFontList::AddGenericFonts(
     }
   }
 
-  // when pref fonts exist, use standard pref font lookup
-  if (usePrefFontList) {
+  // when pref fonts exist, use standard pref font lookup. Stealth: also force
+  // this path when bundle-only, so the CSS generics resolve via the base-class
+  // ResolveGenericFontNames (StealthGenericWindowsFont -> Windows fonts) instead
+  // of fontconfig, which would map them to a host font we have dropped (making
+  // serif/monospace collapse to Arial).
+  if (usePrefFontList || mStealthBundleOnly) {
     gfxPlatformFontList::AddGenericFonts(aFontVisibilityProvider, aGenericType,
                                          aLanguage, aFamilyList);
     if (!isSystemUi) {

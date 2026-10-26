@@ -7,6 +7,7 @@
 #include "AppleUtils.h"
 #include "MainThreadUtils.h"
 #include "SharedFontList-impl.h"
+#include "StealthBundleFontList.h"
 #include "gfxFontConstants.h"
 #include "gfxMacFont.h"
 #include "gfxUserFontSet.h"
@@ -340,7 +341,7 @@ nsresult CTFontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
   if (NS_SUCCEEDED(rv)) {
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
     fontlist::FontList* sharedFontList = pfl->SharedFontList();
-    if (!IsUserFont() && mShmemFace && mShmemFamily) {
+    if (ShouldPublishCharacterMap() && mShmemFamily) {
       mShmemFace->SetCharacterMap(sharedFontList, charmap, mShmemFamily);
       if (TrySetShmemCharacterMap()) {
         setCharMap = false;
@@ -1106,6 +1107,16 @@ CoreTextFontList::~CoreTextFontList() {
 
 void CoreTextFontList::AddFamily(const nsACString& aFamilyName,
                                  FontVisibility aVisibility) {
+#ifdef MOZ_BUNDLED_FONTS
+  // Stealth bundle-only: keep only bundled families, drop every host system
+  // font. CoreText merges bundled + system fonts into a single enumeration
+  // (unlike Win/Linux, which enumerate host and bundled separately, so there we
+  // skip the host enumeration wholesale), so the filter must be per-family here:
+  // drop any family not in the bundled set.
+  if (mStealthBundleOnly && !mBundledFamilies.Contains(aFamilyName)) {
+    return;
+  }
+#endif
   nsAutoCString key;
   ToLowerCase(aFamilyName, key);
 
@@ -1299,6 +1310,21 @@ void CoreTextFontList::InitSharedFontListForPlatform() {
   gfxPlatformMac::WaitForFontRegistration();
 
   InitSystemFontNames();
+
+  if (mStealthBundleOnly && XRE_IsParentProcess()) {
+    // Uniform bundle: build the shared family list from our manifest (skipping
+    // the CoreText enumeration; host fonts never enter). Faces are provided
+    // lazily by GetFacesInitDataForFamily.
+    auto* bundle = StealthBundleFontList::Get();  // never null; it crashes first
+    auto* list = SharedFontList();
+    if (list) {
+      nsTArray<fontlist::Family::InitData> families(bundle->Families().Clone());
+      list->SetFamilyNames(families);
+      InitAliasesForSingleFaceList();
+      GetPrefsAndStartLoader();
+      return;
+    }
+  }
 
   if (XRE_IsParentProcess()) {
     // Only the parent process listens for OS font-changed notifications;
@@ -1766,6 +1792,91 @@ already_AddRefed<gfxFontFamily> CoreTextFontList::CreateFontFamily(
 
 already_AddRefed<gfxFontEntry> CoreTextFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
+  if (mStealthBundleOnly) {
+    // Instantiate the face straight from its bundle file:
+    // CTFontManagerCreateFontDescriptorsFromData yields one descriptor per face
+    // of a .ttc, so pick the wanted index and wrap its CGFont in a CTFontEntry.
+    auto* bundle = StealthBundleFontList::Get();  // never null; it crashes first
+    nsCString file(aFace->mDescriptor.AsString(SharedFontList()));
+    // Borrow the ONE cached copy of the file instead of making two more per
+    // face - the same correction §5.2l applied to the DirectWrite path, here on
+    // CoreText. What was here copied in `ReadFaceData` and then copied AGAIN
+    // inside `CFDataCreate`, both per face: `mingliub.ttc` is 35.4 MB with two
+    // faces, so instantiating both cost ~106 MB where 35.4 are enough.
+    //
+    // The header's note that the CoreText path "hands ownership to the platform
+    // object" did not hold for this call site: `CFDataCreate` copies, so the
+    // nsTArray died at scope exit and nobody had taken ownership of anything.
+    //
+    // `kCFAllocatorNull` is the deallocator for the same reason the DirectWrite
+    // borrow is safe, and it is not an optimistic assumption: the blob lives in
+    // `mFileCache`, on a `StealthBundleFontList` that is leaked on purpose
+    // ("lives for the process") and never emptied. The bytes therefore outlive
+    // any CGFont CoreText derives from them, and CFData must NOT free them: they
+    // are not ours, and on a mapped blob they are the file's pages.
+    // `NativeFontResourceMac.cpp` builds a real deallocator instead, correctly -
+    // there the caller owns the bytes.
+    RefPtr<StealthBundleFontList::FileBlob> blob = bundle->GetFaceBlob(file);
+    if (!blob || !blob->Length()) {
+      return nullptr;
+    }
+    AutoCFTypeRef<CFDataRef> cfData(CFDataCreateWithBytesNoCopy(
+        kCFAllocatorDefault, blob->Data(), blob->Length(), kCFAllocatorNull));
+    if (!cfData) {
+      return nullptr;
+    }
+    AutoCFTypeRef<CFArrayRef> descriptors(
+        CTFontManagerCreateFontDescriptorsFromData(cfData));
+    if (!descriptors) {
+      return nullptr;
+    }
+    CFIndex descCount = CFArrayGetCount(descriptors);
+    // Pick the wanted face by PostScript name, NOT by raw array index: Apple
+    // does not document CTFontManagerCreateFontDescriptorsFromData as returning
+    // a .ttc's faces in the collection's file order, so indexing could select
+    // the wrong CJK face. Match kCTFontNameAttribute (the PostScript name)
+    // against the manifest's psname; fall back to the index only if that fails.
+    CTFontDescriptorRef desc = nullptr;
+    nsAutoCString wantPsname;
+    if (bundle->GetPsname(file, aFace->mIndex, wantPsname)) {
+      for (CFIndex i = 0; i < descCount; i++) {
+        auto* d = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, i);
+        AutoCFTypeRef<CFStringRef> ps(
+            (CFStringRef)CTFontDescriptorCopyAttribute(d, kCTFontNameAttribute));
+        if (!ps) {
+          continue;
+        }
+        nsAutoString ps16;
+        GetStringForCFString(ps, ps16);
+        if (NS_ConvertUTF16toUTF8(ps16).Equals(wantPsname)) {
+          desc = d;
+          break;
+        }
+      }
+    }
+    if (!desc) {
+      if (aFace->mIndex >= descCount) {
+        return nullptr;
+      }
+      desc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors,
+                                                         aFace->mIndex);
+    }
+    AutoCFTypeRef<CTFontRef> ctFont(
+        CTFontCreateWithFontDescriptor(desc, 0.0, nullptr));
+    if (!ctFont) {
+      return nullptr;
+    }
+    AutoCFTypeRef<CGFontRef> cgFont(CTFontCopyGraphicsFont(ctFont, nullptr));
+    if (!cgFont) {
+      return nullptr;
+    }
+    nsAutoCString name(aFamily->DisplayName().AsString(SharedFontList()));
+    RefPtr fe = MakeRefPtr<CTFontEntry>(name, cgFont, aFace->mWeight,
+                                        aFace->mWidth, aFace->mStyle, true,
+                                        false);
+    fe->InitializeFrom(aFace, aFamily);
+    return fe.forget();
+  }
   RefPtr fe = MakeRefPtr<CTFontEntry>(
       aFace->mDescriptor.AsString(SharedFontList()), aFace->mWeight, false,
       0.0);  // XXX standardFace, sizeHint
@@ -1861,6 +1972,11 @@ void CoreTextFontList::AddFaceInitData(
 void CoreTextFontList::GetFacesInitDataForFamily(
     const fontlist::Family* aFamily, nsTArray<fontlist::Face::InitData>& aFaces,
     bool aLoadCmaps) const {
+  if (mStealthBundleOnly) {
+    StealthBundleFontList::Get()->GetFaces(
+        aFamily->DisplayName().AsString(SharedFontList()), aFaces);
+    return;
+  }
   auto name = aFamily->Key().AsString(SharedFontList());
   CrashReporter::AutoRecordAnnotation autoFontName(
       CrashReporter::Annotation::FontName, name);
@@ -1978,6 +2094,15 @@ void CoreTextFontList::InitSystemFontNames() {
 FontFamily CoreTextFontList::GetDefaultFontForPlatform(
     FontVisibilityProvider* aFontVisibilityProvider, const gfxFontStyle* aStyle,
     nsAtom* aLanguage) {
+  if (mStealthBundleOnly) {
+    // The macOS system UI font is a host font we drop under bundle-only; fall
+    // back to the bundled Windows UI persona so the platform default resolves
+    // to a real (bundled) family instead of null.
+    FontFamily f = FindFamily(aFontVisibilityProvider, "Segoe UI"_ns);
+    if (!f.IsNull()) {
+      return f;
+    }
+  }
   AutoCFTypeRef<CTFontRef> font(CTFontCreateUIFontForLanguage(
       kCTFontUIFontUser, 0.0, nullptr));  // TODO: language
   AutoCFTypeRef<CFStringRef> name(CTFontCopyFamilyName(font));

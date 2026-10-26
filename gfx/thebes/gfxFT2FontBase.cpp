@@ -16,11 +16,13 @@
 #include "harfbuzz/hb.h"
 #include "mozilla/Likely.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_zoom.h"
 
 #include FT_TRUETYPE_TAGS_H
 #include FT_TRUETYPE_TABLES_H
 #include FT_ADVANCES_H
 #include FT_MULTIPLE_MASTERS_H
+#include "StealthDeclarationGate.h"
 
 #ifndef FT_LOAD_COLOR
 #  define FT_LOAD_COLOR (1L << 20)
@@ -727,11 +729,55 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
   // dealing with a variation font; also use it for scalable fonts when not
   // applying hinting. Otherwise, prefer hinted width from glyph->advance.x.
   if (aAdvance) {
-    FT_Fixed advance;
-    if (!roundX || FT_HAS_MULTIPLE_MASTERS(face.get())) {
-      advance = face.get()->glyph->linearHoriAdvance;
-    } else {
-      advance = face.get()->glyph->advance.x << 10;  // convert 26.6 to 16.16
+    FT_Fixed advance = 0;
+    // Stealth: FreeType scales the design advance by an INTEGER ppem.
+    // FT_Request_Metrics computes x_ppem = (scaled + 32) >> 6 and then derives
+    // x_scale from that already-rounded value, so linearHoriAdvance carries the
+    // rounding even though the comment at ComputeMetrics prefers x_scale
+    // precisely because "x_ppem does not have subpixel accuracy". DirectWrite
+    // scales by the size it was handed. Whole sizes therefore agree by
+    // construction and fractional ones cannot, which is the entire divergence
+    // measured on 2026-08-09: 112 of 3120 (family, size, string) combinations,
+    // every one of them at a fractional size.
+    //
+    // Courier New is the worked example. Its glyphs are 1229 units on a 2048
+    // em, and at a requested 13.383333px Windows reports 8.0313px per glyph
+    // while this path reports 7.8022 - which is 1229 * 13 / 2048, i.e. the
+    // right arithmetic on the wrong ppem. Scaling the DESIGN advance by the
+    // unrounded size is what gfxDWriteFont::MeasureGlyphWidth does on its
+    // design path, so doing the same here makes the two agree by construction
+    // rather than by luck.
+    //
+    // THERE IS NO FALLBACK on the declared side, and that is deliberate
+    // (engine rule 7). The first version of this asked FreeType for the design
+    // advance and fell through to the rasterised one whenever the face was not
+    // scalable or the call failed - which is the same hole the ink box had, and
+    // the ink box's version of it was measured leaking on every CFF webfont.
+    //
+    // GetDesignAdvance asks HarfBuzz's own OpenType implementation, which reads
+    // glyf, CFF and CFF2 alike and needs no FreeType face at all, so a CFF or a
+    // bitmap-strike face is served by the same code as a bundled TrueType one.
+    bool declaredAdvance = false;
+    if (mozilla::gfx::StealthEngineActive() &&
+        GetAdjustedSize() > 0.0) {
+      gfxHarfBuzzShaper* shaper = GetHarfBuzzShaper();
+      const uint16_t upem = GetFontEntry()->UnitsPerEm();
+      int32_t designAdvance = 0;
+      if (shaper && upem && shaper->GetDesignAdvance(aGID, designAdvance)) {
+        // The design advance arrives in FONT UNITS, so this is the only place
+        // the unrounded size enters, and 65536 puts it in the 16.16 the rest of
+        // this block speaks.
+        advance = NS_lround(double(designAdvance) * GetAdjustedSize() *
+                            65536.0 / double(upem));
+        declaredAdvance = true;
+      }
+    }
+    if (!declaredAdvance) {
+      if (!roundX || FT_HAS_MULTIPLE_MASTERS(face.get())) {
+        advance = face.get()->glyph->linearHoriAdvance;
+      } else {
+        advance = face.get()->glyph->advance.x << 10;  // convert 26.6 to 16.16
+      }
     }
     if (advance) {
       advance += bold.x << 10;  // convert 26.6 to 16.16
@@ -740,10 +786,13 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
     // Round the advance here to approximate hinting as Cairo does. This must
     // happen BEFORE we apply the glyph extents scale, just like FT hinting
     // would.
-    if (hintMetrics && roundX && unhintedX) {
+    if (hintMetrics && roundX && unhintedX && !declaredAdvance) {
       advance = (advance + 0x8000) & 0xffff0000u;
     }
-    *aAdvance = NS_lround(advance * extentsScale);
+    // The declared advance was already computed at the desired size, so it must
+    // not go through GetAdjustedSize() / mFTSize a second time.
+    *aAdvance = declaredAdvance ? NS_lround(advance)
+                                : NS_lround(advance * extentsScale);
   }
 
   if (aBounds) {
@@ -827,6 +876,63 @@ gfxFT2FontBase::GlyphMetrics gfxFT2FontBase::GetCachedGlyphMetrics(
 
 bool gfxFT2FontBase::GetGlyphBounds(uint16_t aGID, gfxRect* aBounds,
                                     bool aTight) {
+  // STEALTH: report the ink box DirectWrite reports, not the one FreeType
+  // computes.
+  //
+  // gfxDWriteFont::GetGlyphBounds calls GetDesignGlyphMetrics, which is the
+  // glyf table's own bounding box scaled by size/upem and nothing else - no
+  // hinting, no rasteriser. The code below asks FreeType for HINTED bounds
+  // instead, and the two disagree by up to a pixel. That reaches the page
+  // directly: measureText's four actualBoundingBox fields are built from this,
+  // and measured 2026-08-09 against stock Firefox 151 over the whole finite
+  // domain of textBaseline x textAlign x direction, Windows matched on 12960
+  // of 12960 fields while Linux differed on 1440.
+  //
+  // The arithmetic mirrors gfxDWriteFonts.cpp:781-784 deliberately, including
+  // the float (not double) conversion factor, so Windows keeps the numbers it
+  // already had and Linux is brought TO them. DWrite's Inflate(1.0, 0.0) is
+  // NOT mirrored: it is guarded by !aBounds->IsEmpty() on the uninitialised
+  // out-parameter, which gfxFont::SetupGlyphExtents default-constructs to an
+  // empty rect, so on Windows that branch never runs.
+  //
+  // THERE IS NO FALLBACK HERE, and that is the point (engine rule 7).
+  //
+  // This used to read the glyf table directly and return false for a font that
+  // has none, letting the caller fall through to FreeType. Every CFF webfont a
+  // page loads is exactly that case, and it was a live tell rather than a
+  // corner: measured 2026-08-09 on a purpose-built CFF face, 108 of 150
+  // measureText fields diverged between Windows and Linux, with Linux handing
+  // back whole integers because FreeType had grid-fitted them.
+  //
+  // GetDesignGlyphExtents asks HarfBuzz's own OpenType implementation, which
+  // reads glyf, CFF and CFF2 alike, so the declared path is TOTAL and there is
+  // no case left to fall through with. If it fails, the font has no usable
+  // unitsPerEm at all and the answer below would be meaningless too.
+  if (mozilla::gfx::StealthEngineActive()) {
+    gfxHarfBuzzShaper* shaper = GetHarfBuzzShaper();
+    const uint16_t upem = mFontEntry->UnitsPerEm();
+    int32_t xb, yb, w, h;
+    if (shaper && upem && shaper->GetDesignGlyphExtents(aGID, xb, yb, w, h)) {
+      // The ORDER of operations is copied from gfxDWriteFont::GetGlyphBounds,
+      // not just the formula, and it has to be. DWrite builds the rect in font
+      // UNITS and calls gfxRect::Scale afterwards, so every product is a double
+      // times a float. Multiplying each component as int-times-float instead
+      // does the arithmetic in float precision and only then widens, which is
+      // close but not equal: measured, that alone left 22 of 150 fields
+      // differing in the eighth significant digit after the grid-fitting leak
+      // was already closed.
+      //
+      // HarfBuzz's y_bearing is the top extremum measured upward and its height
+      // is negative in a y-up system (hb-common.h says so), which is why both
+      // are negated here to reach gfxRect's y-down box.
+      const float conv = float(GetAdjustedSize() / gfxFloat(upem));
+      gfxRect bounds(double(xb), double(-yb), double(w), double(-h));
+      bounds.Scale(conv);
+      *aBounds = bounds;
+      return true;
+    }
+  }
+
   IntRect bounds;
   const GlyphMetrics metrics = GetCachedGlyphMetrics(aGID, &bounds);
   if (!metrics.HasValidBounds()) {

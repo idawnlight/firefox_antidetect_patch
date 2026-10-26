@@ -446,7 +446,7 @@ nsresult FT2FontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
   if (NS_SUCCEEDED(rv)) {
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
     fontlist::FontList* sharedFontList = pfl->SharedFontList();
-    if (!IsUserFont() && mShmemFace) {
+    if (ShouldPublishCharacterMap()) {
       mShmemFace->SetCharacterMap(sharedFontList, charmap, mShmemFamily);
       if (TrySetShmemCharacterMap()) {
         setCharMap = false;
@@ -580,7 +580,11 @@ hb_blob_t* FT2FontEntry::GetFontTableInternal(uint32_t aTableTag) {
     // If there's a cairo font face, we may be able to return a blob
     // that just wraps a range of the attached user font data
     if (const auto* data = userFontData->GetData()) {
-      return gfxFontUtils::GetTableFromFontData(data, aTableTag);
+      uint32_t faceIndex = 0;
+      if (SharedFTFace* face = mFTFace) {
+        faceIndex = uint32_t(face->GetFace()->face_index & 0x7FFF);
+      }
+      return gfxFontUtils::GetTableFromFontData(data, aTableTag, faceIndex);
     }
   }
 
