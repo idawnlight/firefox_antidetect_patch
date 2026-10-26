@@ -475,6 +475,41 @@ def assert_no_updater(tree: Path) -> None:
     print("    no updater in the package (files and modules both absent)")
 
 
+def _build_id(ini: Path) -> str:
+    for line in ini.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("BuildID="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def assert_build_ids_agree(tree: Path) -> None:
+    """application.ini and platform.ini carry the same BuildID.
+
+    They are generated from the same buildid.h, and a retail build always has
+    one BuildID in both (157.0.1: 20261005135250 in each, on every platform).
+    The first 157 candidates did not: from 157 the build graph generates
+    buildid.h twice in one `mach build` (export, and again near the end), and
+    without MOZ_BUILD_DATE each generation takes the clock, so application.ini
+    said 13:25 and platform.ini 15:11 (run 40329304164), invisible_core's seal
+    check refused the launch (platform.ini's BuildID is not the sealed one), and
+    the package was not the retail's in a file every crash report and update
+    check carries. MOZ_BUILD_DATE is now fixed once per run (.mozconfig,
+    release.yml); this refuses an archive in which it was not.
+    """
+    app, platform = tree / "application.ini", tree / "platform.ini"
+    missing = [p.name for p in (app, platform) if not p.is_file()]
+    if missing:
+        raise ValidationError(f"{', '.join(missing)} missing at the package root")
+    a, p = _build_id(app), _build_id(platform)
+    if not a or a != p:
+        raise ValidationError(
+            f"application.ini BuildID {a or '<none>'} != platform.ini BuildID "
+            f"{p or '<none>'}: buildid.h was generated more than once in this build "
+            f"without one MOZ_BUILD_DATE. Do not publish it: the seal check refuses "
+            f"the launch, and the retail has one BuildID in both.")
+    print(f"    one BuildID in application.ini and platform.ini ({a})")
+
+
 def smoke_linux(extracted: Path) -> None:
     """Run `firefox --version` inside WSL when invoked from Windows."""
     firefox = extracted / "firefox"
@@ -540,6 +575,7 @@ def validate_linux_tarball(archive: Path) -> None:
         td = Path(td)
         extract_tar(archive, td)
         check_critical_files(td, CRITICAL_LINUX)
+        assert_build_ids_agree(td)
         print("  [3/4] path-leak check, every file and nested member...")
         check_no_leaks_tree(td)
         assert_juggler_provenance(td)
@@ -560,6 +596,7 @@ def validate_windows_zip(archive: Path) -> None:
         td = Path(td)
         extract_zip(archive, td)
         check_critical_files(td, CRITICAL_WIN)
+        assert_build_ids_agree(td)
         print("  [2/4] path-leak check, every file and nested member...")
         check_no_leaks_tree(td)
         assert_juggler_provenance(td)
@@ -673,6 +710,25 @@ def _selftest() -> int:
     ]
     cases += [(name, factory, must_raise, check_no_leaks_tree)
               for name, factory, must_raise in leaks]
+
+    def inis(app_id, platform_id):
+        d = tree()
+        if app_id is not None:
+            (d / "application.ini").write_text(f"[App]\nVersion=157.0.1\nBuildID={app_id}\n")
+        if platform_id is not None:
+            (d / "platform.ini").write_text(f"[Build]\nBuildID={platform_id}\nMilestone=157.0.1\n")
+        return d
+
+    build_ids = [
+        ("one BuildID in both", lambda: inis("20261005135250", "20261005135250"), False),
+        # The first 157 candidates (run 40329304164).
+        ("application.ini and platform.ini from two generations of buildid.h",
+         lambda: inis("20261026132525", "20261026151134"), True),
+        ("platform.ini without a BuildID", lambda: inis("20261005135250", ""), True),
+        ("no platform.ini at all", lambda: inis("20261005135250", None), True),
+    ]
+    cases += [(name, factory, must_raise, assert_build_ids_agree)
+              for name, factory, must_raise in build_ids]
 
     bad = 0
     for name, factory, must_raise, check in cases:

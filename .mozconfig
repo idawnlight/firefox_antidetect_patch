@@ -65,6 +65,19 @@ MOZ_SOURCE_REPO="$(sed -n 's/^repo=//p' "$topsrcdir/browser/config/upstream_sour
 MOZ_SOURCE_CHANGESET="$(sed -n 's/^changeset=//p' "$topsrcdir/browser/config/upstream_source.txt")"
 export MOZ_SOURCE_REPO MOZ_SOURCE_CHANGESET
 
+# ⛔ UN SOLO BUILDID PER BUILD, come in ogni build ufficiale di Mozilla, che
+# fissa MOZ_BUILD_DATE nella sua CI. Dal 157 il grafo di build genera buildid.h
+# DUE volte in una `mach build` (all'export e di nuovo verso la fine), e senza
+# MOZ_BUILD_DATE ogni generazione prende l'orologio (build/variables.py): nei
+# primi candidati 157 application.ini diceva 13:25 e platform.ini 15:11, e il
+# sigillo di invisible_core rifiutava l'avvio (platform.ini BuildID diverso da
+# quello sigillato). Il retail ha un BuildID solo, in entrambi i file.
+# Un valore gia' nell'ambiente vince: la CI ne fissa uno per tutta la corsa,
+# cosi' build e pacchetto, e le tre gambe, dicono lo stesso BuildID come il
+# retail. scripts/validate_release.py rifiuta un archivio in cui i due
+# BuildID non coincidono.
+mk_add_options "export MOZ_BUILD_DATE=${MOZ_BUILD_DATE:-$(date -u +%Y%m%d%H%M%S)}"
+
 # Il canale compare nella URL di aggiornamento e determina MOZ_APP_REMOTINGNAME
 # (toolkit/moz.configure:3336-3350): con "release" vale `firefox`, altrimenti
 # `firefox-<canale>`, e il nostro era `firefox-default`.
