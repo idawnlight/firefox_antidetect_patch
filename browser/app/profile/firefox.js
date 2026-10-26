@@ -1941,9 +1941,53 @@ pref("browser.newtab.preload", true);
 // For further detail on the TOU prefs below, see the `preonboarding` feature in
 // FeatureManifest.yaml
 // Version of the TOU that the user last accepted
-pref("termsofuse.acceptedVersion", 0);
+pref("termsofuse.acceptedVersion", 999);
 // Stringified timestamp of when the user last accepted the TOU
-pref("termsofuse.acceptedDate", "0");
+// STEALTHFOX: qui upstream mette "0", cioe' "mai accettato", e la
+// conseguenza su una build ufficiale e' un MODALE A TUTTO SCHERMO che
+// intercetta ogni evento di mouse.
+//
+// ⛔ COSA SUCCEDE SENZA QUESTA RIGA, misurato il 2026-08-19 sulla stessa
+// pagina servita da 127.0.0.1, unica differenza queste prefs:
+//   build NON ufficiale     fuoco=input  eventi=[mousedown,click]  114 mousemove
+//   build ufficiale         fuoco=BODY   eventi=[]                   0 mousemove
+//   ufficiale + accettato   fuoco=input  eventi=[click]
+// La TASTIERA continua a funzionare, ed e' cio' che rende il difetto
+// incomprensibile finche' non si separano i due percorsi: il mouse va alla
+// finestra chrome per coordinate e finisce sul modale, i tasti seguono il
+// fuoco e arrivano al contenuto.
+//
+// ⛔ PERCHE' NON SI BYPASSA. `termsofuse.bypassNotification` sarebbe una riga
+// sola, ma e' il percorso delle build NON UFFICIALI: spegnerebbe una macchina
+// che nel retail e' accesa, e ci farebbe somigliare a una build locale invece
+// che a un Firefox di una persona. Un utente vero ha bypass=false e ha
+// ACCETTATO. Questa e' la seconda cosa, non la prima.
+//
+// La condizione la detta `hasUserAcceptedCurrentTOU` in
+// toolkit/components/telemetry/app/TelemetryReportingPolicy.sys.mjs:536 e
+// vuole DUE cose: una data non nulla E acceptedVersion >= minimumVersion.
+// La seconda upstream la soddisfa gia' da sola - dichiara acceptedVersion
+// a 999 quindici righe piu' su - quindi mancava SOLO la data, ed e' l'unico
+// valore che questa patch tocca.
+//
+// Vale per Windows e macOS: due righe sopra, `#ifdef XP_LINUX` spegne il
+// preonboarding, quindi su Linux il modale non esiste e il mouse non si
+// rompe. Chi misura solo su Linux non vede niente di tutto questo.
+// Il valore e' una STRINGA con un timestamp in millisecondi - il tipo fa
+// parte del valore, e questo progetto ha gia' pagato una pref emessa con il
+// tipo sbagliato.
+//
+// ⛔ E NON SI PUO' FARE DA invisible_core. Le sue prefs viaggiano sul
+// protocollo e Browser.enable le applica DOPO l'avvio, mentre il modale nasce
+// con la finestra. Misurato: le stesse due prefs passate come
+// firefox_user_prefs NON riparano, scritte in un user.js prima del lancio
+// riparano. Per questo il valore vive qui e non nel core, in deroga
+// dichiarata alla regola "il core dichiara": non esiste un canale del core
+// che arrivi in tempo.
+//
+// La data e' fissa e sta nel passato: nessuna pagina puo' leggerla, e il
+// codice controlla solo che l'anno non sia troppo vecchio.
+pref("termsofuse.acceptedDate", "1785573000000");
 // Stringified timestamp of when the user first accepted the TOU, only set if
 // they have accepted more than one version.
 pref("termsofuse.firstAcceptedDate", "0");
@@ -2563,13 +2607,34 @@ pref("media.videocontrols.picture-in-picture.auto-close.timeoutMs", 1000);
 
 pref("media.contextmenu.video-overlay-detection", true);
 
-// Enable Firefox translations powered by the Bergamot translations
-// engine https://browser.mt/.
-pref("browser.translations.enable", true);
-
-// Enable Firefox Select translations powered by Bergamot translations
-// engine https://browser.mt/.
-pref("browser.translations.select.enable", true);
+// STEALTHFOX: le traduzioni restano al default di Gecko, che e' SPENTO
+// (`modules/libpref/init/all.js` le dichiara false; era questa riga di Firefox ad
+// accenderle). Un browser che pilota una pagina non traduce niente.
+//
+// Cosa costavano, misurato il 2026-08-14 su Linux con about:memory dumpato via
+// SIGRTMIN. TranslationsParent rileva la lingua di OGNI pagina caricata, e per
+// farlo istanzia il worker del rilevatore CLD2: `cld-worker.js` tiene **17,75 MB**
+// di ArrayBuffer nel processo padre, ed e' 17,3 dei 19,4 MB di tutti i worker
+// chrome messi insieme. Tre coppie di misure interlacciate sull'heap del padre -
+// 255,0/232,3, 276,0/276,0->229,0, 307,3/291,8 - danno tre differenze tutte
+// negative, media **-28,4 MB**, e la piu' piccola (-15,5) e' della dimensione del
+// worker stesso.
+//
+// ⛔ E qui la forma della correzione e' una PREF e non un taglio nel codice, al
+// contrario di about:newtab, per una ragione misurata e non per comodita': la
+// bandiera funziona. Con la pref al default il worker non nasce - 0,00 MB in tre
+// giri su tre - mentre browser.newtabpage.enabled lasciava about:home caricare
+// l'add-on lo stesso. Dove il flag di Firefox copre davvero la feature, tagliare
+// piu' a fondo aggiungerebbe divergenza dall'upstream per zero MB in piu'.
+//
+// Non osservabile da una pagina: la traduzione e' interfaccia chrome, nessuna API
+// web la espone, e non rilevare la lingua non cambia niente di cio' che la pagina
+// puo' leggere.
+//
+// Le due righe originali erano:
+//   pref("browser.translations.enable", true);
+//   pref("browser.translations.select.enable", true);
+pref("browser.translations.select.enable", false);
 
 // Enable the Translations QuickAction in the URL bar.
 pref("browser.translations.quickAction.enabled", true);
@@ -3789,3 +3854,16 @@ pref("distribution.mozillaonline.ignore", true);
 #ifdef XP_MACOSX
   pref("browser.macAppMenu.setAsDefaultShown", false);
 #endif
+
+// STEALTHFOX: anonymous launch counter pref. Default true. The actual ping
+// fires from browser/components/BrowserGlue.sys.mjs::_beforeUIStartup. To
+// disable per-session: set false via about:config or extra_prefs. To disable
+// permanently: remove the corresponding block in BrowserGlue and rebuild.
+// Full disclosure: README of feder-cr/invisible_playwright.
+pref("invisible_firefox.usage_ping.enabled", true);
+// The counter's address is a PREF, not a constant: it died twice as a
+// repository name compiled into every binary with no way to move it. Now
+// invisible_core repoints it without a rebuild, and this default is the
+// engine's own repository, so the thing that pings and the thing that is
+// counted are the same release series.
+pref("invisible_firefox.usage_ping.url", "https://github.com/feder-cr/firefox_antidetect_patch/releases/download/usage-counter/launch.txt");
