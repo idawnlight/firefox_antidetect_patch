@@ -1211,6 +1211,30 @@ class FTUserFontData final
   explicit FTUserFontData(FontData* aFontData) : mFontData(aFontData) {}
   explicit FTUserFontData(const char* aFilename) : mFilename(aFilename) {}
 
+  // STEALTH: i byte appartengono a QUALCUN ALTRO e non vanno liberati qui.
+  //
+  // Simmetrico al costruttore in prestito di `gfxDWriteFontFileStream` (§5.2l):
+  // su ENTRAMBE le piattaforme una sola mappatura per FILE viene prestata a
+  // tutte le facce di quel file, invece di una copia per faccia. Il prestito e'
+  // sicuro per la stessa ragione di la': la cache di `StealthBundleFontList` e'
+  // immortale per costruzione - l'oggetto e' volutamente leaked e non svuota mai
+  // `mFileCache` - e il valore della mappa e' un `RefPtr`, quindi se la tabella
+  // hash rialloca a spostarsi e' il puntatore e mai i byte.
+  //
+  // Serve un costruttore NUOVO: `FontData` e' il proprietario che chiama
+  // `free()` sui suoi byte, quindi un puntatore mappato incartato li' dentro
+  // finirebbe in pasto a `free` quando l'ultimo riferimento muore. Per questo
+  // qui il `FontData` riceve un riferimento in piu' che non viene mai
+  // rilasciato: non arriva mai a zero, `~FontData` non gira, i byte restano di
+  // chi li ha prestati. Cosi' `mFontData` e' valorizzato come per ogni altra
+  // faccia e `CloneFace` (gfx/2d/Factory.cpp) e i chiamanti di `GetData()` /
+  // `Length()` funzionano senza sapere nulla del prestito.
+  enum class Prestito { Si };
+  FTUserFontData(const uint8_t* aData, uint32_t aLength, Prestito)
+      : mFontData(new FontData(std::move(aData), aLength)) {
+    (void)do_AddRef(mFontData).take();
+  }
+
   const uint8_t* GetData() const {
     return mFontData ? mFontData->Data() : nullptr;
   }

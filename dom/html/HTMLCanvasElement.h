@@ -220,14 +220,40 @@ class HTMLCanvasElement final : public nsGenericHTMLElement,
    * Retrieve a snapshot of the internal surface, returning the alpha type if
    * requested. An optional target may be supplied for which the snapshot will
    * be optimized for, if possible.
+   *
+   * This is the canvas as a PAGE reads it, with the canvas noise
+   * (gfx/2d/StealthCanvasProjection.h): every way a page turns this canvas
+   * into bytes or into the source of another drawing comes through here (or
+   * through GetSurfaceSnapshotAsync below, which a context may answer without
+   * calling this), so a reader added in a future Firefox reads the same image
+   * as the others without being taught to.
    */
   virtual already_AddRefed<gfx::SourceSurface> GetSurfaceSnapshot(
+      gfxAlphaType* aOutAlphaType = nullptr,
+      gfx::DrawTarget* aTarget = nullptr);
+
+  /**
+   * The same snapshot as DRAWN, for the browser's own readers that show the
+   * canvas and never hand its bytes to a page: -moz-element, the drag image,
+   * the taskbar preview, nsDOMWindowUtils. (Printing draws the canvas into a
+   * static clone that no page can read, so it is left on the page road: a
+   * difference nothing can observe is not one to add code for.)
+   */
+  already_AddRefed<gfx::SourceSurface> GetSurfaceSnapshotAsDrawn(
       gfxAlphaType* aOutAlphaType = nullptr,
       gfx::DrawTarget* aTarget = nullptr);
 
   using SurfaceSnapshotPromise =
       MozPromise<RefPtr<gfx::SourceSurface>, nsresult, true>;
 
+  /**
+   * The async twin of GetSurfaceSnapshot; captureStream reads the canvas
+   * through it, so it is a PAGE reader too and what it resolves with must
+   * carry the same canvas noise. A context that reports SupportAsyncSnapshot()
+   * (WebGL with a child actor) answers it itself and never reaches
+   * GetSurfaceSnapshot, so the projection has to be applied to that result
+   * where it is returned, in HTMLCanvasElement.cpp.
+   */
   RefPtr<SurfaceSnapshotPromise> GetSurfaceSnapshotAsync();
 
   /*

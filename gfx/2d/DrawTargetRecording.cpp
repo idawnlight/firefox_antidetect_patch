@@ -16,6 +16,7 @@
 #include "RecordingTypes.h"
 #include "Tools.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
+#include "mozilla/gfx/StealthCanvasProjection.h"
 #include "mozilla/layers/CanvasDrawEventRecorder.h"
 #include "mozilla/layers/RecordedCanvasEventImpl.h"
 #include "mozilla/layers/SourceSurfaceSharedData.h"
@@ -96,7 +97,13 @@ class SourceSurfaceRecording final : public SourceSurface {
   SurfaceFormat GetFormat() const override { return mFormat; }
   already_AddRefed<DataSourceSurface> GetDataSurface() override {
     if (mOriginalSurface) {
-      return mOriginalSurface->GetDataSurface();
+      RefPtr<DataSourceSurface> data = mOriginalSurface->GetDataSurface();
+      if (data && mStealthNoise) {
+        // The projected stand-in reads as projected here too.
+        return StealthProjectedRegion(data, IntRect(IntPoint(), mSize),
+                                      mStealthPremultiplied, mStealthNoise);
+      }
+      return data.forget();
     }
 
     return nullptr;
@@ -111,6 +118,9 @@ class SourceSurfaceRecording final : public SourceSurface {
   // we need GetDataSurface to work, so we hold the original surface we
   // optimized to return its GetDataSurface.
   RefPtr<SourceSurface> mOriginalSurface;
+  // Set on the stand-in DrawTargetRecording::StealthProjectedSurface makes.
+  StealthCanvasNoise mStealthNoise = StealthCanvasNoise::Off();
+  bool mStealthPremultiplied = true;
 };
 
 class GradientStopsRecording : public GradientStops {
@@ -859,6 +869,27 @@ already_AddRefed<SourceSurface> DrawTargetRecording::OptimizeSourceSurface(
       RecordedOptimizeSourceSurface(aSurface, retSurf));
   userData->optimizedSurface = retSurf;
 
+  return retSurf.forget();
+}
+
+already_AddRefed<SourceSurface> DrawTargetRecording::StealthProjectedSurface(
+    SourceSurface* aSurface, bool aPremultiplied,
+    const StealthCanvasNoise& aNoise) {
+  // Since 157 a canvas recording wraps its snapshots in a surface whose
+  // GetType() is CANVAS_RECORDING (gfx/layers/ipc/CanvasChild.cpp); what it
+  // wraps is what GetUnderlyingType() answers. Those are the surfaces this was
+  // written for, so the test is on the underlying type: a plain RECORDING
+  // surface answers RECORDING there too.
+  if (!aSurface || aSurface->GetUnderlyingType() != SurfaceType::RECORDING ||
+      !aNoise) {
+    return nullptr;
+  }
+  RefPtr<SourceSurfaceRecording> retSurf = MakeRefPtr<SourceSurfaceRecording>(
+      aSurface->GetSize(), aSurface->GetFormat(), mRecorder, aSurface);
+  retSurf->mStealthNoise = aNoise;
+  retSurf->mStealthPremultiplied = aPremultiplied;
+  RecordEventSelfSkipFlushTransform(RecordedStealthProjectSurface(
+      aSurface, retSurf, aPremultiplied, aNoise));
   return retSurf.forget();
 }
 
