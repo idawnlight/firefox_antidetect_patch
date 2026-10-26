@@ -18,6 +18,11 @@
 #include "mozilla/dom/WorkletGlobalScope.h"
 #include "mozilla/dom/worklet/WorkletModuleLoader.h"
 #include "nsGlobalWindowInner.h"
+// STEALTH: GetBrowsingContext() is declared inline in nsPIDOMWindow.h and
+// defined here; the declared language and timezone below call it. Without this
+// include the file links only when the unified build happens to group it with
+// one that includes it (151 did, 157 does not: an undefined symbol in libxul).
+#include "nsPIDOMWindowInlines.h"
 
 using mozilla::dom::loader::WorkletModuleLoader;
 using mozilla::dom::loader::WorkletScriptLoader;
