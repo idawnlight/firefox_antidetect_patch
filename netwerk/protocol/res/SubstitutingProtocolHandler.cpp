@@ -10,6 +10,7 @@
 #include "mozilla/chrome/RegistryMessageUtils.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/ipc/URIUtils.h"
+#include "mozilla/net/StealthBranding.h"
 #include "nsEscape.h"
 #include "nsIChannel.h"
 #include "nsIClassInfoImpl.h"
@@ -700,7 +701,9 @@ nsresult SubstitutingProtocolHandler::ResolveURI(nsIURI* uri,
   if (NS_FAILED(rv)) return rv;
 
   if (ResolveSpecialCases(host, path, pathname, result)) {
-    return NS_OK;
+    // STEALTH: the declared branding, on every way a URI can reach the
+    // branding directory, special cases included. StealthBranding.h.
+    return StealthBrandingRedirect(result);
   }
 
   nsCOMPtr<nsIURI> baseURI;
@@ -745,6 +748,14 @@ nsresult SubstitutingProtocolHandler::ResolveURI(nsIURI* uri,
   }
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  // STEALTH: resource://usercontext-content/branding/ reaches the branding
+  // directory too, and must read the same declared set as
+  // chrome://branding/content/. StealthBranding.h.
+  rv = StealthBrandingRedirect(result);
+  if (NS_FAILED(rv)) {
     return rv;
   }
 
