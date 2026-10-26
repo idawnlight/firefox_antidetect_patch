@@ -298,30 +298,61 @@ jobs:
         run: rustup target add ${{ matrix.rust_target }} || true
 
       # LA CACHE DI COMPILAZIONE DELLE CANDIDATE (compile_cache=gha, deciso da
-      # scripts/release_plan.py). Il .mozconfig dichiara gia' sccache, sia per
-      # C/C++ (--with-ccache) sia per Rust (RUSTC_WRAPPER); qui si installa e
-      # gli si da' come deposito la cache di GitHub Actions, che SOPRAVVIVE alla
-      # corsa. Cosi' la corsa dopo una correzione ricompila solo cio' che la
-      # correzione tocca, invece dell'intero albero: un port a una nuova
-      # versione di Firefox ne richiede molte, e ognuna a freddo costa 1-2 ore
-      # per gamba.
+      # scripts/release_plan.py). La corsa dopo una correzione deve ricompilare
+      # solo cio' che la correzione tocca: un port a una nuova versione di
+      # Firefox richiede molte corse, e ognuna a freddo costa 1-2 ore a gamba.
       #
-      # Le chiavi di sccache sono l'hash del sorgente preprocessato, degli
-      # argomenti e del compilatore, quindi le tre gambe condividono la stessa
-      # cache senza mescolarsi. La cache del repository ha un tetto (10 GB di
-      # default): quando si riempie GitHub sfratta le voci meno usate, e il
-      # risultato e' solo una corsa piu' lenta, mai una sbagliata.
+      # COME: sccache con la cache su DISCO del runner (SCCACHE_DIR), e quella
+      # cartella salvata e ripristinata da actions/cache come UNA voce per gamba.
       #
-      # Versione di sccache fissata, non "latest": una build che cambia
-      # strumento da sola tra una corsa e l'altra non e' riproducibile.
-      - name: Compile cache (candidates only, sccache on the GitHub Actions cache)
+      # ⛔ NON il backend `gha` di sccache (SCCACHE_GHA_ENABLED), che e' come
+      # questa cache e' nata il 2026-10-26 ed e' stato misurato sbagliato: crea
+      # una voce di cache PER OGNI OGGETTO compilato, circa 5.500 a gamba, e
+      # GitHub accetta 200 nuove voci al minuto per repository (1.500 letture);
+      # oltre, l'upload fallisce e sccache prosegue in silenzio. Risultato: il
+      # 33-48% delle scritture perso nella corsa fredda e il 100% in una corsa
+      # calda su Windows (corse 40302089863, 40318828530), e quello che non si
+      # scrive torna miss alla corsa dopo. Una voce per gamba per corsa sta
+      # lontanissima da quel tetto.
+      #
+      # ⛔ E UN SOLO sccache, quello fissato qui, passato a configure col
+      # percorso ASSOLUTO. Con `--with-ccache=sccache` (il nome nudo del
+      # .mozconfig) e --enable-bootstrap, mach scarica un sccache SUO in
+      # ~/.mozbuild/sccache e configure prende quello: nelle stesse corse le
+      # gambe x86_64 e Windows compilavano con lo 0.17.0 di Mozilla, la arm64
+      # (dove il bootstrap non ne fornisce uno) con lo 0.18.0 fissato qui. Il
+      # passo dopo la build fallisce se il compilatore non e' passato da questo.
+      #
+      # La chiave e' per gamba e unica per corsa (le voci della cache sono
+      # immutabili); si riparte dall'ultima della stessa gamba. Le chiavi di
+      # sccache dentro la cartella sono l'hash di sorgente preprocessato,
+      # argomenti e compilatore, quindi un oggetto riusato e' identico a quello
+      # che la compilazione produrrebbe. Il tetto del repository e' 10 GB: tre
+      # gambe sotto SCCACHE_CACHE_SIZE stanno larghe anche con due generazioni,
+      # e GitHub sfratta per primo cio' che non si usa da piu' tempo.
+      #
+      # Versioni fissate, non "latest": una build che cambia strumento da sola
+      # tra una corsa e l'altra non e' riproducibile.
+      - name: Compile cache (candidates only) - install the one sccache this build uses
         if: needs.plan.outputs.compile_cache == 'gha'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: 'v0.18.0'
-      - name: Point sccache at the GitHub Actions cache
+      - name: Compile cache (candidates only) - sccache keeps it on the runner's disk
         if: needs.plan.outputs.compile_cache == 'gha'
-        run: echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        run: |
+          {
+            echo "SCCACHE_DIR=$HOME/.cache/sccache-ci"
+            echo "SCCACHE_CACHE_SIZE=5G"
+            echo "SCCACHE_PINNED_VERSION=0.18.0"
+          } >> "$GITHUB_ENV"
+      - name: Compile cache (candidates only) - restore this leg's last one
+        if: needs.plan.outputs.compile_cache == 'gha'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache-ci
+          key: sccache-${{ matrix.leg }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sccache-${{ matrix.leg }}-
 
       - name: Extend the repo .mozconfig (NO mold; +target/SDK as needed)
         env:
@@ -334,15 +365,21 @@ jobs:
           # senza percorso, apposta: il percorso e' una proprieta' della
           # macchina, e sulle due macchine sccache sta nel PATH.
           #
-          # Con compile_cache=gha il passo sopra l'ha messo nel PATH e le righe
-          # restano. Con compile_cache=off (ogni release, e una candidata che si
-          # vuole poter ripubblicare) sccache su questo runner NON c'e', e mach
-          # build morirebbe prima di compilare una riga (FileNotFoundError:
-          # 'sccache'): le righe si tolgono e la build e' fredda per davvero.
+          # Su questo runner quelle righe si tolgono SEMPRE, e con
+          # compile_cache=gha si rimettono col percorso ASSOLUTO del sccache
+          # installato sopra: col nome nudo configure prenderebbe quello che mach
+          # scarica in ~/.mozbuild (vedi i passi della cache). Con
+          # compile_cache=off (ogni release, e una candidata che si vuole poter
+          # ripubblicare) non si rimettono, e la build e' fredda per davvero.
           # Case-insensitive, perche' c'e' anche SCCACHE_CACHE_SIZE maiuscolo.
           # Solo le righe ATTIVE: i commenti che spiegano il perche' restano.
-          if [ "$COMPILE_CACHE" != "gha" ]; then
-            sed -i -E '/^[^#]*sccache/Id' .mozconfig
+          sed -i -E '/^[^#]*sccache/Id' .mozconfig
+          if [ "$COMPILE_CACHE" = "gha" ]; then
+            test -x "$SCCACHE_PATH" || { echo "ERROR: no sccache at SCCACHE_PATH=$SCCACHE_PATH"; exit 1; }
+            {
+              echo "ac_add_options --with-ccache=$SCCACHE_PATH"
+              echo "mk_add_options 'export RUSTC_WRAPPER=$SCCACHE_PATH'"
+            } >> .mozconfig
           fi
           {
             echo ""
@@ -391,9 +428,40 @@ jobs:
         timeout-minutes: 180
         run: ./mach build --keep-going
 
-      - name: Compile cache statistics
+      # The compile cache's own gate: the build compiled through the sccache
+      # pinned above, nothing else, and every object it compiled was stored.
+      # Statistics first, so a refusal still shows them; then the server stops,
+      # which flushes the cache directory before it is saved.
+      - name: Compile cache (candidates only) - the build used the pinned sccache
         if: always() && needs.plan.outputs.compile_cache == 'gha'
-        run: sccache --show-stats || true
+        run: |
+          "$SCCACHE_PATH" --show-stats || true
+          STATS="$("$SCCACHE_PATH" --show-stats 2>/dev/null || true)"
+          "$SCCACHE_PATH" --stop-server >/dev/null 2>&1 || true
+          # configure.py writes the substs as JSON beside config.status.
+          CONFIGURED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["substs"].get("CCACHE", ""))' obj-rel/config.status.json 2>/dev/null || true)"
+          echo "configure took CCACHE=${CONFIGURED:-<none>}"
+          if [ "$CONFIGURED" != "$SCCACHE_PATH" ]; then
+            echo "ERROR: configure did not take SCCACHE_PATH=$SCCACHE_PATH"
+            exit 1
+          fi
+          SERVER="$(echo "$STATS" | sed -n 's/^Version (client) *//p')"
+          if [ -n "$SERVER" ] && [ "$SERVER" != "$SCCACHE_PINNED_VERSION" ]; then
+            echo "ERROR: the sccache server that compiled is $SERVER, pinned is $SCCACHE_PINNED_VERSION"
+            exit 1
+          fi
+          WRITE_ERRORS="$(echo "$STATS" | sed -n 's/^Cache write errors *//p')"
+          if [ "${WRITE_ERRORS:-0}" != "0" ]; then
+            echo "::warning::sccache failed to store $WRITE_ERRORS objects: the next run recompiles them"
+          fi
+      - name: Compile cache (candidates only) - save this leg's
+        # Also when the build failed: the runs that fix a port fail by design,
+        # and they are the ones the cache is for.
+        if: always() && needs.plan.outputs.compile_cache == 'gha'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache-ci
+          key: sccache-${{ matrix.leg }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # ── LINUX: dereference symlinks (issue #14) + strip + sanitize + tar@root + GATE
       - name: Package + validate (Linux)
