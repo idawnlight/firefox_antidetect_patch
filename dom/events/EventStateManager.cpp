@@ -2644,6 +2644,7 @@ void EventStateManager::BeginTrackingDragGesture(
   mGestureModifiers = aMouseDownOrTouchDragEvent.mModifiers;
   mGestureDownButtons = aMouseDownOrTouchDragEvent.mButtons;
   mGestureDownButton = aMouseDownOrTouchDragEvent.mButton;
+  mGestureDownFromJuggler = aMouseDownOrTouchDragEvent.mJugglerEventId != 0;
 
   if (aMouseDownOrTouchDragEvent.mMessage != eMouseTouchDrag &&
       StaticPrefs::ui_click_hold_context_menus()) {
@@ -2796,6 +2797,24 @@ void EventStateManager::GenerateDragGesture(
              aMouseOrTouchOrPointerEvent.mMessage == ePointerDown);
   if (!IsTrackingDragGesture()) {
     return;
+  }
+
+  // Stealthfox [B288]: a gesture continues only with moves from where its
+  // press came from. In a visible session the system's real pointer sits over
+  // the window, and its native moves reach this process during a press that
+  // Juggler sent: one from far away crossed the threshold and started a NATIVE
+  // drag out of a click on a link. That drag then ended on its own, the
+  // driver's release went to a drag session that no longer existed, and the
+  // click failed (measured on X11 with XTest moves during the press; seen on
+  // Windows as "session is null" in dispatchDragEvent). The id is set on every
+  // event from jugglerSendMouseEvent, carried across processes and coalescing,
+  // and is 0 for native input. The move is still dispatched; it only does not
+  // count for this gesture, and tracking goes on.
+  if (const WidgetMouseEvent* mouseEvent =
+          aMouseOrTouchOrPointerEvent.AsMouseEvent()) {
+    if ((mouseEvent->mJugglerEventId != 0) != mGestureDownFromJuggler) {
+      return;
+    }
   }
 
   AutoWeakFrame targetFrameBefore = mCurrentTarget;

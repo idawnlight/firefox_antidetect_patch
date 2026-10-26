@@ -250,6 +250,7 @@
 #include "mozilla/dom/SpeculationRuleSet.h"
 #include "mozilla/dom/SpeculationRules.h"
 #include "mozilla/dom/SpeculationRulesManager.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
 #include "mozilla/dom/StyleSheetApplicableStateChangeEvent.h"
 #include "mozilla/dom/StyleSheetApplicableStateChangeEventBinding.h"
 #include "mozilla/dom/StyleSheetList.h"
@@ -4003,6 +4004,13 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
     }
   }
 
+  // The context above stays even when the automation bypasses the page's
+  // policies: history entries and a later <meta> expect one. What is skipped
+  // is every policy the page itself sends.
+  if (CSP_IsBypassedFor(*this)) {
+    return NS_OK;
+  }
+
   nsAutoCString tCspHeaderValue, tCspROHeaderValue;
 
   nsCOMPtr<nsIHttpChannel> httpChannel;
@@ -4482,11 +4490,12 @@ void Document::SetDocumentURI(nsIURI* aURI) {
   }
 }
 
-static void GetFormattedTimeString(PRTime aTime, bool aUniversal,
+// STEALTHFOX (firefox-50): the local time of the page, the declared zone's
+// (ExplodeLocalTime), not the C runtime's ([B339]).
+static void GetFormattedTimeString(PRTime aTime, const Document& aDocument,
                                    nsAString& aFormattedTimeString) {
   PRExplodedTime prtime;
-  PR_ExplodeTime(aTime, aUniversal ? PR_GMTParameters : PR_LocalTimeParameters,
-                 &prtime);
+  ExplodeLocalTime(aTime, &aDocument, &prtime);
   // "MM/DD/YYYY hh:mm:ss"
   char formatedTime[24];
   if (SprintfLiteral(formatedTime, "%02d/%02d/%04d %02d:%02d:%02d",
@@ -4504,9 +4513,7 @@ void Document::GetLastModified(nsAString& aLastModified) const {
   if (!mLastModified.IsEmpty()) {
     aLastModified.Assign(mLastModified);
   } else {
-    GetFormattedTimeString(PR_Now(),
-                           ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
-                           aLastModified);
+    GetFormattedTimeString(PR_Now(), *this, aLastModified);
   }
 }
 
@@ -12083,9 +12090,7 @@ void Document::RetrieveRelevantHeaders(nsIChannel* aChannel) {
 
   mLastModified.Truncate();
   if (modDate != 0) {
-    GetFormattedTimeString(modDate,
-                           ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
-                           mLastModified);
+    GetFormattedTimeString(modDate, *this, mLastModified);
   }
 }
 
@@ -17579,6 +17584,10 @@ VisibilityState Document::ComputeVisibilityState() const {
   // Otherwise, we're visible.
   if (!IsVisible() || !mWindow || !mWindow->GetOuterWindow() ||
       mWindow->GetOuterWindow()->IsBackground()) {
+    // Stealth: GetForceActiveState removed in 150. The 146 hack relied on
+    // it to report Visible regardless of OS focus, defeating FP Pro
+    // detection via document.hidden. TODO: re-implement via a different
+    // mechanism (e.g. JS-side override or pref-gated unconditional Visible).
     return dom::VisibilityState::Hidden;
   }
 

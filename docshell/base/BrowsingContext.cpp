@@ -43,6 +43,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/SessionStoreChild.h"
 #include "mozilla/dom/SessionStorageManager.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/UserActivationIPCUtils.h"
 #include "mozilla/dom/WindowBinding.h"
@@ -53,6 +54,7 @@
 #include "mozilla/dom/workerinternals/RuntimeService.h"
 #include "mozilla/dom/SyncedContextInlines.h"
 #include "mozilla/dom/XULFrameElement.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/net/DocumentLoadListener.h"
 #include "mozilla/net/RequestContextService.h"
@@ -1062,6 +1064,34 @@ void BrowsingContext::Attach(bool aFromIPC, ContentParent* aOriginProcess) {
 
   if (XRE_IsParentProcess()) {
     Canonical()->CanonicalAttach();
+  }
+
+  // Stealth: if our `juggler.timezone.override` pref is set and this is a
+  // top-level BC with no override yet, seed it from the pref. This guarantees
+  // the pref is the single source of truth, even when no caller (Playwright,
+  // WebDriver, ...) ever invokes Browser.setTimezoneOverride. The setter
+  // triggers DidSet which propagates the value per-realm.
+  if (IsTop() && GetTimezoneOverride().IsEmpty() && XRE_IsParentProcess()) {
+    nsAutoString stealthTz;
+    intl::OrSessionTimezone(stealthTz);
+    if (!stealthTz.IsEmpty()) {
+      SetTimezoneOverride(stealthTz);
+    }
+  }
+
+  // Stealth: same single-source-of-truth pattern for the locale. The
+  // juggler.locale.override pref seeds the LanguageOverride FIELD, whose DidSet
+  // applies JS::SetRealmLocaleOverride per-realm — making Intl.DateTimeFormat /
+  // NumberFormat / toLocaleString follow the locale. languageOverride (docShell)
+  // only covers navigator.language + the Accept-Language header; without this the
+  // realm's default Intl locale stays at the build app locale (en-US), a
+  // navigator-vs-Intl mismatch flagged for non-US locales.
+  if (IsTop() && GetLanguageOverride().IsEmpty() && XRE_IsParentProcess()) {
+    nsAutoCString stealthLocale;
+    intl::OrSessionLanguage(stealthLocale);
+    if (!stealthLocale.IsEmpty()) {
+      SetLanguageOverride(stealthLocale);
+    }
   }
 }
 
@@ -3569,7 +3599,11 @@ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
                              nsCString&& aOldValue) {
   MOZ_ASSERT(IsTop());
 
-  const nsCString& languageOverride = GetLanguageOverride();
+  // STEALTHFOX (firefox-50): the field, or the session's declaration when the
+  // field is empty (StealthSessionDeclaration), so a context whose override is
+  // cleared speaks the session's language, never the build's.
+  nsAutoCString languageOverride;
+  GetDeclaredLanguage(this, languageOverride);
 
   workerinternals::RuntimeService* rts =
       workerinternals::RuntimeService::GetService();
@@ -3586,8 +3620,12 @@ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
         if (languageOverride.IsEmpty()) {
           JS::SetRealmLocaleOverride(realm, nullptr);
         } else {
-          JS::SetRealmLocaleOverride(
-              realm, PromiseFlatCString(languageOverride).get());
+          // The override may be an Accept-Language list ("fr-FR, fr") so that
+          // navigator.languages reports the full desktop-default list; the
+          // realm's Intl default locale is a single BCP-47 tag.
+          nsAutoCString primaryLocale;
+          intl::PrimaryLanguageTag(languageOverride, primaryLocale);
+          JS::SetRealmLocaleOverride(realm, primaryLocale.get());
         }
 
         if (Navigator* navigator = window->Navigator()) {
@@ -3902,7 +3940,16 @@ void BrowsingContext::DidSet(FieldIndex<IDX_TimezoneOverride>,
                              nsString&& aOldValue) {
   MOZ_ASSERT(IsTop());
 
-  const nsString& timezoneOverride = GetTimezoneOverride();
+  // STEALTHFOX (firefox-50): the field, or the session's declaration when the
+  // field is empty (StealthSessionDeclaration). It replaces a "lock" that read
+  // the pref and preferred it to the field: in a content process the pref
+  // arrived empty, so the lock held only in the parent, where no page realm
+  // lives, and a context's own zone was overridden by the session's there
+  // only. Now the field wins everywhere, as it does for the language, and a
+  // cleared field falls to the session's zone in every process, never to the
+  // host's.
+  nsAutoString declaredZone;
+  GetDeclaredTimezone(this, declaredZone);
 
   PreOrderWalk([&](BrowsingContext* aBrowsingContext) {
     if (RefPtr<WindowContext> windowContext =
@@ -3913,16 +3960,16 @@ void BrowsingContext::DidSet(FieldIndex<IDX_TimezoneOverride>,
             nsGlobalWindowInner::Cast(window)->GetGlobalJSObject();
         JS::Realm* realm = JS::GetObjectRealmOrNull(global);
 
-        if (timezoneOverride.IsEmpty()) {
+        if (declaredZone.IsEmpty()) {
           JS::SetRealmTimezoneOverride(realm, nullptr);
         } else {
           JS::SetRealmTimezoneOverride(
-              realm, NS_ConvertUTF16toUTF8(timezoneOverride).get());
+              realm, NS_ConvertUTF16toUTF8(declaredZone).get());
         }
 
-        UpdateTimezoneOverrideForWorkers(*window, timezoneOverride);
+        UpdateTimezoneOverrideForWorkers(*window, declaredZone);
         nsGlobalWindowInner::Cast(window)->UpdateSharedWorkerTimezoneOverride(
-            timezoneOverride);
+            declaredZone);
       }
     }
   });

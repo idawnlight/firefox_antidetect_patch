@@ -66,6 +66,7 @@
 #include "xpc_make_class.h"
 #include "xpcprivate.h"
 #include "XPCWrapper.h"
+#include "XrayWrapper.h"
 
 #include "js/Array.h"             // JS::GetArrayLength, JS::IsArrayObject
 #include "js/CallAndConstruct.h"  // JS::Call, JS::IsCallable
@@ -823,6 +824,16 @@ bool SandboxProxyHandler::getPropertyDescriptorImpl(
     if (!JS_GetOwnPropertyDescriptorById(cx, obj, id, desc_)) {
       return false;
     }
+  } else if (xpc::IsHybridXrayWrapper(obj)) {
+    // STEALTHFOX [B322]: in a caller's world the prototype is the page's
+    // window behind a hybrid Xray, and a bare name (`document`, the page's
+    // `myFunction`, its top-level `const config`) resolves by the hybrid rule,
+    // in the order the page's realm resolves it. Walking the wrapper
+    // generically would join the two views level by level, so a property the
+    // page put on the window could hide a standard one.
+    if (!xpc::HybridXrayGetBareName(cx, obj, id, desc_)) {
+      return false;
+    }
   } else {
     Rooted<JSObject*> holder(cx);
     if (!JS_GetPropertyDescriptorById(cx, obj, id, desc_, &holder)) {
@@ -1328,6 +1339,19 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
 
   bool isSystemPrincipal = principal->IsSystemPrincipal();
 
+  // STEALTHFOX [B322]: a caller's world has the page's own principal, and
+  // `hybridXrays` replaces `wantXrays` instead of adding to it: `wantXrays`
+  // would impose Xrays on the page reading the caller's objects as well.
+  if (options.hybridXrays &&
+      (isSystemPrincipal ||
+       BasePrincipal::Cast(principal)->Is<ExpandedPrincipal>() ||
+       options.wantXrays)) {
+    JS_ReportErrorASCII(cx,
+                        "hybridXrays needs a content principal and "
+                        "wantXrays: false");
+    return NS_ERROR_INVALID_ARG;
+  }
+
   if (isSystemPrincipal) {
     options.forceSecureContext = true;
   }
@@ -1385,8 +1409,15 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
       const nsCString& localeOverride =
           window->GetBrowsingContext()->Top()->GetLanguageOverride();
       if (!localeOverride.IsEmpty()) {
-        realmOptions.behaviors().setLocaleOverride(
-            PromiseFlatCString(localeOverride).get());
+        // Accept-Language list ("fr-FR, fr") -> primary BCP-47 tag for the
+        // realm Intl locale (navigator.languages keeps the full list).
+        nsAutoCString primaryLocale(localeOverride);
+        int32_t comma = primaryLocale.FindChar(',');
+        if (comma >= 0) {
+          primaryLocale.Truncate(comma);
+        }
+        primaryLocale.Trim(" \t");
+        realmOptions.behaviors().setLocaleOverride(primaryLocale.get());
       }
 
       const nsAString& timezoneOverride =
@@ -1431,6 +1462,7 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
     MOZ_RELEASE_ASSERT(priv->isUAWidgetCompartment == options.isUAWidgetScope);
     MOZ_RELEASE_ASSERT(priv->hasExclusiveExpandos == hasExclusiveExpandos);
     MOZ_RELEASE_ASSERT(priv->wantXrays == wantXrays);
+    MOZ_RELEASE_ASSERT(priv->hybridXrays == options.hybridXrays);
   } else {
     CompartmentPrivate* priv = CompartmentPrivate::Get(sandbox);
     priv->allowWaivers = options.allowWaivers;
@@ -1438,6 +1470,7 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
     priv->isUAWidgetCompartment = options.isUAWidgetScope;
     priv->hasExclusiveExpandos = hasExclusiveExpandos;
     priv->wantXrays = wantXrays;
+    priv->hybridXrays = options.hybridXrays;
   }
 
   {
@@ -2041,6 +2074,7 @@ bool SandboxOptions::Parse() {
   bool ok = ParseObject("sandboxPrototype", &proto) &&
             ParseObject("associatedWindow", &associatedWindow) &&
             ParseBoolean("wantXrays", &wantXrays) &&
+            ParseBoolean("hybridXrays", &hybridXrays) &&
             ParseBoolean("allowWaivers", &allowWaivers) &&
             ParseBoolean("wantComponents", &wantComponents) &&
             ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
