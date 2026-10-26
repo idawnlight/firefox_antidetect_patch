@@ -87,7 +87,7 @@ for f in "${FILES[@]}"; do
 
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
-        if ! grep -qxF "$line" "$TMP/cur"; then
+        if ! grep -qxF -- "$line" "$TMP/cur"; then
             allowed "$line" && continue
             echo "[LOST LINE] $f"
             echo "            $line"
@@ -102,8 +102,8 @@ for f in "${FILES[@]}"; do
         | sort -u > "$TMP/ids" || true
     while IFS= read -r id; do
         [[ -z "$id" ]] && continue
-        before=$(git show "$PREV_BRANCH:$f" 2>/dev/null | grep -cF "$id" || true)
-        after=$(grep -cF "$id" "$f" || true)
+        before=$(git show "$PREV_BRANCH:$f" 2>/dev/null | grep -cF -- "$id" || true)
+        after=$(grep -cF -- "$id" "$f" || true)
         if (( after < before )); then
             allowed "$id" && continue
             echo "[LOST CALL-SITES] $f: '$id' appears $after time(s), was $before"
