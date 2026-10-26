@@ -1355,6 +1355,13 @@ class nsDocShell final : public nsDocLoader,
 
   bool mIsExecutingOnLoadHandler : 1;
 
+  // Stealthfox: the flags behind the two nsIDocShell attributes Juggler
+  // sets. Initialized in the constructor: they were not, and a bit-field the
+  // constructor leaves alone holds whatever the allocation held, so a docshell
+  // Juggler never wrote to could intercept file pickers, or bypass CSP.
+  bool mFileInputInterceptionEnabled : 1;
+  bool mBypassCSPEnabled : 1;
+
   bool mInvisible : 1;
 
   // There has been an OnStartRequest for a non-about:blank URI

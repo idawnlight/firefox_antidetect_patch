@@ -707,6 +707,16 @@ mozilla::ipc::IPCResult ContentChild::RecvSetXPCOMProcessAttributes(
     dnsServiceChild->SetTRRModeInChild(aXPCOMInit.trrMode(),
                                        aXPCOMInit.trrModeFromPref());
   }
+
+  // STEALTHFOX (firefox-50): the block that applied `juggler.timezone.override`
+  // to every realm of this process is gone. It never ran - the pref had no
+  // default, so it arrived empty here - and from firefox-50 it would have:
+  // the pref has a default (StaticPrefList.yaml) so the session's zone
+  // reaches content processes, and one zone stamped on every realm of a
+  // process would have overridden a context's own. Every realm takes its zone
+  // at birth from its context (dom/base/StealthSessionDeclaration.h), and
+  // BrowsingContext::DidSet carries a change to the realms already alive.
+
   return IPC_OK();
 }
 
@@ -2503,6 +2513,7 @@ mozilla::ipc::IPCResult ContentChild::RecvUpdateRequestedLocales(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvSystemTimezoneChanged() {
+  // Stealth: SetTimeZoneOverride was removed in 150. Just reset like vanilla.
   nsJSUtils::ResetTimeZone();
   return IPC_OK();
 }

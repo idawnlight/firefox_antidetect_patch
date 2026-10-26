@@ -730,9 +730,40 @@ NS_IMPL_ISUPPORTS(ResetInterceptionHeaderVisitor, nsIHttpHeaderVisitor)
 }  // anonymous namespace
 
 NS_IMETHODIMP
+InterceptedHttpChannel::InterceptAfterServiceWorkerResets() {
+  mInterceptAfterServiceWorkerResets = true;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedHttpChannel::ResetInterceptionWithURI(nsIURI* aURI) {
+  if (aURI) {
+    mURI = aURI;
+    // A controller chosen for the original URL does not follow the request
+    // somewhere else.
+    return ResetInterception(true);
+  }
+  // Unchanged: do what the service worker that let it through asked for.
+  // Forcing true here cleared the controller of every navigation a worker
+  // did not answer, so with Juggler attached no page was ever controlled by
+  // its service worker, route or not.
+  return ResetInterception(mServiceWorkerResetBypass);
+}
+
+NS_IMETHODIMP
 InterceptedHttpChannel::ResetInterception(bool aBypass) {
   INTERCEPTED_LOG(("InterceptedHttpChannel::ResetInterception [%p] bypass: %s",
                    this, aBypass ? "true" : "false"));
+  if (mInterceptAfterServiceWorkerResets) {
+    mInterceptAfterServiceWorkerResets = false;
+    mServiceWorkerResetBypass = aBypass;
+    nsCOMPtr<nsINetworkInterceptController> controller;
+    GetCallback(controller);
+    if (!controller)
+      return NS_ERROR_DOM_INVALID_STATE_ERR;
+    return controller->ChannelIntercepted(this);
+  }
+
   if (mCanceled) {
     return mStatus;
   }
@@ -1151,11 +1182,18 @@ InterceptedHttpChannel::OnStartRequest(nsIRequest* aRequest) {
     GetCallback(mProgressSink);
   }
 
+  // Playwright: main requests in firefox do not have loading principal.
+  // As they are intercepted by Playwright, they don't have
+  // serviceWorkerTainting as well.
+  // Thus these asserts are wrong for Playwright world.
+  // Note: these checks were added in https://github.com/mozilla-firefox/firefox/commit/bb16ca6496682c3b0ddd452d0dd4c1dd46ff71f8
+  /*
   MOZ_ASSERT_IF(!mLoadInfo->GetServiceWorkerTaintingSynthesized(),
                 mLoadInfo->GetLoadingPrincipal());
   // No need to do ORB checks if these conditions hold.
   MOZ_DIAGNOSTIC_ASSERT(mLoadInfo->GetServiceWorkerTaintingSynthesized() ||
                         mLoadInfo->GetLoadingPrincipal()->IsSystemPrincipal());
+  */
 
   if (mPump && mLoadFlags & LOAD_CALL_CONTENT_SNIFFERS) {
     RefPtr<nsInputStreamPump> pump(mPump);

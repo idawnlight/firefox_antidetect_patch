@@ -22,6 +22,7 @@
 #include "nsIChannel.h"
 #include "nsIConsoleService.h"
 #include "nsIContentSecurityPolicy.h"
+#include "nsIDocShell.h"
 #include "nsICryptoHash.h"
 #include "nsIScriptError.h"
 #include "nsIStringBundle.h"
@@ -128,9 +129,25 @@ bool CSP_ShouldURIInheritCSP(nsIURI* aURI) {
          aURI->SchemeIs("filesystem") || aURI->SchemeIs("javascript");
 }
 
+bool CSP_IsBypassedFor(const mozilla::dom::Document& aDoc) {
+  // ⛔ Until this existed the docshell attribute was stored and never read:
+  // the 2026-05 port added it as storage only, so `bypass_csp=True` changed
+  // nothing a page enforced (issue #295 of invisible_playwright).
+  nsIDocShell* docShell = aDoc.GetDocShell();
+  if (!docShell) {
+    return false;
+  }
+  bool bypass = false;
+  return NS_SUCCEEDED(docShell->GetBypassCSPEnabled(&bypass)) && bypass;
+}
+
 void CSP_ApplyMetaCSPToDoc(mozilla::dom::Document& aDoc,
                            const nsAString& aPolicyStr) {
   if (aDoc.IsLoadedAsData()) {
+    return;
+  }
+
+  if (CSP_IsBypassedFor(aDoc)) {
     return;
   }
 

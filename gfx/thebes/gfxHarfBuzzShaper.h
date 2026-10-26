@@ -55,6 +55,35 @@ class gfxHarfBuzzShaper : public gfxFontShaper {
                                  hb_font_extents_t* extents, void* user_data);
 
  public:
+  // STEALTH: glyph metrics in DESIGN space, in FONT UNITS, read from the font's
+  // own outlines by HarfBuzz and never by a platform rasteriser.
+  //
+  // They exist so the FreeType backend reports the same ink box and the same
+  // advance the DirectWrite one does. gfxDWriteFont::GetGlyphBounds calls
+  // GetDesignGlyphMetrics, which is the outline and nothing else, while
+  // gfxFT2FontBase asks FreeType for HINTED bounds - so the two disagree, and
+  // the disagreement reaches the page through measureText's four
+  // actualBoundingBox fields. Measured 2026-08-09 against stock Firefox 151:
+  // with the ink box reported honestly, Windows matches on 12960 of 12960
+  // fields and Linux differs on 1440.
+  //
+  // Confirmed by hand before it was written: Arial 'C' has xMin 102 at 2048
+  // units per em, so at 16px the left edge is -0.796875, and that is exactly
+  // what stock Firefox reports for actualBoundingBoxLeft.
+  //
+  // These replaced a glyf-only reader on 2026-08-09, and the replacement is the
+  // whole point rather than a tidy-up. The old one returned false for a font
+  // with no glyf table and the caller fell through to its own backend, which is
+  // every CFF webfont a page cares to load: measured, 108 of 150 measureText
+  // fields diverged between Windows and Linux on one, with Linux returning
+  // whole integers straight out of FreeType's grid fitting. hb-ot-font reads
+  // glyf, CFF and CFF2 alike, so there is no case left to fall through with -
+  // engine rule 7, make the declared path total rather than add a fallback.
+  bool GetDesignGlyphExtents(uint16_t aGID, int32_t& aXBearing,
+                             int32_t& aYBearing, int32_t& aWidth,
+                             int32_t& aHeight) const;
+  bool GetDesignAdvance(uint16_t aGID, int32_t& aAdvance) const;
+
   explicit gfxHarfBuzzShaper(gfxFont* aFont);
   virtual ~gfxHarfBuzzShaper();
 
@@ -132,6 +161,7 @@ class gfxHarfBuzzShaper : public gfxFontShaper {
   hb_bool_t GetGlyphExtents(hb_codepoint_t aGlyph,
                             hb_glyph_extents_t* aExtents) const;
 
+
   bool UseVerticalPresentationForms() const {
     return mUseVerticalPresentationForms;
   }
@@ -166,6 +196,12 @@ class gfxHarfBuzzShaper : public gfxFontShaper {
 
   // size-specific font object, owned by the gfxHarfBuzzShaper
   hb_font_t* mHBFont = nullptr;
+
+  // STEALTH: the design-space metrics font, built on demand by GetDesignFont
+  // and never used for shaping. Mutable because the two accessors above are
+  // const and a font that is only read has no business forcing them not to be.
+  mutable hb_font_t* mDesignFont = nullptr;
+  hb_font_t* GetDesignFont() const;
 
   // Held for the duration of ShapeText(): the shaper (and its hb_buffer_t)
   // is shared across threads via the global gfxFontCache, so concurrent

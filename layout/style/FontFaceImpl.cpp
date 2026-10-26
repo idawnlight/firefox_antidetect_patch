@@ -10,6 +10,8 @@
 #include "gfxPlatformFontList.h"
 #include "mozilla/ServoCSSParser.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_zoom.h"
+#include "nsUnicharUtils.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/FontFaceBinding.h"
 #include "mozilla/dom/FontFaceSetImpl.h"
@@ -352,8 +354,43 @@ void FontFaceImpl::DoLoad() {
   mUserFontEntry->Load();
 }
 
+Maybe<bool> StealthFontAllowed(const nsACString& aFamily) {
+  // The patched build is ALWAYS bundle-only: the platform font list already
+  // contains ONLY the bundled Windows families (host fonts are dropped at birth),
+  // so the Font Loading API reflects the allow-list by construction - a
+  // local()/@font-face probe for a host font simply fails to resolve. No separate
+  // gate and no external list are needed. (More realistic than force-erroring, so
+  // legitimate downloadable web fonts report Loaded as on a real Firefox.)
+  (void)aFamily;
+  return Nothing();
+}
+
 void FontFaceImpl::SetStatus(FontFaceLoadStatus aStatus) {
   gfxFontUtils::AssertSafeThreadOrServoFontMetricsLocked();
+
+  // Stealth: when a per-profile fontlist is active, force the Font Loading API
+  // status to match it (listed -> Loaded, else Error) so document.fonts.* and
+  // @font-face verdicts agree with the enumerated set. No fontlist -> vanilla.
+  {
+    nsAutoCString stealthFamily;
+    GetFamily(stealthFamily);
+    if (Maybe<bool> allowed = StealthFontAllowed(stealthFamily)) {
+      FontFaceLoadStatus forced =
+          *allowed ? FontFaceLoadStatus::Loaded : FontFaceLoadStatus::Error;
+      if (mStatus == forced) {
+        return;
+      }
+      mStatus = forced;
+      if (mInFontFaceSet) {
+        mFontFaceSet->OnFontFaceStatusChanged(this);
+      }
+      for (FontFaceSetImpl* otherSet : mOtherFontFaceSets) {
+        otherSet->OnFontFaceStatusChanged(this);
+      }
+      UpdateOwnerPromise();
+      return;
+    }
+  }
 
   if (mStatus == aStatus) {
     return;

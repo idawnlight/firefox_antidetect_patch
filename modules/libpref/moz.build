@@ -54,6 +54,7 @@ pref_groups = [
     "image",
     "intl",
     "javascript",
+    "juggler",
     "layers",
     "layout",
     "logging",

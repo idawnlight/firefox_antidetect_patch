@@ -49,6 +49,7 @@
 #include "mozilla/StaticPrefs_mozilla.h"
 #include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/StaticPrefs_widget.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/SwipeTracker.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
@@ -3547,7 +3548,13 @@ void nsWindow::DispatchPanGesture(PanGestureInput& aPanInput) {
 
 void nsWindow::OnVisibilityNotifyEvent(GdkVisibilityState aState) {
   LOG("nsWindow::OnVisibilityNotifyEvent [%p] state 0x%x\n", this, aState);
-  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED
+  // Stealthfox (B149): with zoom.stealth.widget.occlusion_tracking.enabled
+  // false, as invisible_core declares it, a window that is fully covered stays
+  // visible, as it does on Windows where the same declaration turns occlusion
+  // tracking off. Measured on Xvfb: a second session's window made the first
+  // one's page `hidden` 4 times in 4.
+  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED &&
+                       StaticPrefs::zoom_stealth_widget_occlusion_tracking_enabled()
                    ? OcclusionState::OCCLUDED
                    : OcclusionState::UNKNOWN;
   NotifyOcclusionState(state);

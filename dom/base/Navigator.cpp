@@ -4,6 +4,7 @@
 
 // Needs to be first.
 #include "Navigator.h"
+#include "StealthDeclarationGate.h"
 
 #include "Geolocation.h"
 #include "base/basictypes.h"
@@ -40,6 +41,7 @@
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_pdfjs.h"
 #include "mozilla/StaticPrefs_privacy.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StorageAccess.h"
 #include "mozilla/dom/AudioSession.h"
@@ -695,6 +697,12 @@ bool Navigator::GlobalPrivacyControl() {
 }
 
 uint64_t Navigator::HardwareConcurrency() {
+  // Stealth: return spoofed core count if pref is set.
+  {
+    int32_t hwc = StaticPrefs::zoom_stealth_hw_concurrency();
+    if (hwc > 0) return uint64_t(hwc);
+  }
+
   workerinternals::RuntimeService* rts =
       workerinternals::RuntimeService::GetOrCreateService();
   if (!rts) {
@@ -902,6 +910,24 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
   // touch simulation is enabled.
   if (bc && bc->Top()->InRDMPane()) {
     return bc->Top()->GetMaxTouchPointsOverride();
+  }
+
+  // Stealth: the DECLARED touch point count. This used to be a literal 0,
+  // which is the right value for the desktop GPU personas we ship but the
+  // wrong shape: a constant buried in C++ is not pinnable, not inspectable and
+  // not overridable through extra_prefs, so a touchscreen persona (a Surface,
+  // a 2-in-1) would have needed a browser rebuild. It is now
+  // HardwareProfile.max_touch_points, at the same level as every other surface
+  // (rule 6). The pref defaults to -1, so a build launched without
+  // invisible_core keeps exactly the previous behaviour.
+  if (aCallerType != CallerType::System &&
+      mozilla::gfx::StealthEngineActive()) {
+    // No compiled floor (engine rule 7, 2026-08-09). The "? ... : 0" that used
+    // to close this line was a second answer for a declared field, and at the
+    // call site a wrong one is indistinguishable from a right one. A missing
+    // declaration refuses in StealthDeclarationGate rather than resolving here.
+    mozilla::gfx::StealthAssertDeclarationsComplete();
+    return uint32_t(mozilla::StaticPrefs::zoom_stealth_max_touch_points());
   }
 
   // The maxTouchPoints is going to reveal the detail of users' hardware. So,

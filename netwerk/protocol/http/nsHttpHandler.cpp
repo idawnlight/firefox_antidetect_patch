@@ -745,6 +745,9 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
   return rv;
 }
 
+static nsresult PrepareAcceptLanguages(const char* i_AcceptLanguages,
+                                       nsACString& o_AcceptLanguages);
+
 nsresult nsHttpHandler::AddStandardRequestHeaders(
     nsHttpRequestHead* request, nsIURI* aURI, bool aIsHTTPS,
     ExtContentPolicyType aContentPolicyType, bool aShouldResistFingerprinting,
@@ -783,11 +786,25 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
   if (NS_FAILED(rv)) return rv;
 
   if (!aLanguageOverride.IsEmpty()) {
+    // STEALTHFOX: the override is a language LIST here, not one tag.
+    // `juggler.locale.override` seeds the BrowsingContext LanguageOverride
+    // field with the same list invisible_core writes to intl.accept_languages
+    // ("it-IT, it, en-US, en"), because navigator.languages is split from it.
+    // Copied verbatim it went out as that raw list, spaces and no q-values, on
+    // every request with a BrowsingContext, while requests without one (worker
+    // fetches, service workers) took the branch below and sent the prepared
+    // form: two different headers in one session, and only the second is what
+    // Firefox sends. The list is prepared here by the same function that
+    // prepares intl.accept_languages, so a list sends exactly what Firefox
+    // sends for it. A single tag ("de-DE") prepares to itself.
     nsAutoCString acceptLanguage;
-    acceptLanguage.Assign(aLanguageOverride.get());
-    rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
-                            nsHttpHeaderArray::eVarietyRequestOverride);
+    rv = PrepareAcceptLanguages(aLanguageOverride.get(), acceptLanguage);
     if (NS_FAILED(rv)) return rv;
+    if (!acceptLanguage.IsEmpty()) {
+      rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
+                              nsHttpHeaderArray::eVarietyRequestOverride);
+      if (NS_FAILED(rv)) return rv;
+    }
   } else {
     // Add the "Accept-Language" header.  This header is also exposed to the
     // service worker.

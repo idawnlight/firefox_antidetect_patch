@@ -7,6 +7,8 @@
 #include "nsPresContext.h"
 
 #include "nsPresContextInlines.h"
+
+#include "StealthDeclarationGate.h"
 #if defined(MOZ_WIDGET_ANDROID)
 #  include "mozilla/AsyncEventDispatcher.h"
 #endif
@@ -1461,7 +1463,17 @@ void nsPresContext::SetOverrideDPPX(float aDPPX) {
 }
 
 void nsPresContext::UpdateInnerSizeSpoofedForRFP() {
-  if (!mDocument->ShouldResistFingerprinting(RFPTarget::WindowOuterSize) ||
+  // Stealth: the same synced field carries the top-level inner size when the
+  // stealth engine is on, because a popup's declared outerWidth is that size
+  // plus its frame, and an out-of-process iframe inside the popup has no other
+  // way to know it (its BrowserChild knows the top's OUTER rect and its own
+  // inner size, not the top's inner size). Every other reader of the field -
+  // ScreenOrientation, window.orientation, nsScreen, the RFP branch of
+  // GetOuterSize - reads it only under ShouldResistFingerprinting, so filling
+  // it here changes nothing for them. One synced copy of one fact, instead of
+  // a second field for the same number. 70-known-bugs.md B258.
+  if ((!mDocument->ShouldResistFingerprinting(RFPTarget::WindowOuterSize) &&
+       !mozilla::gfx::StealthEngineActive()) ||
       !mDocument->GetBrowsingContext() ||
       !mDocument->GetBrowsingContext()->IsTop()) {
     return;

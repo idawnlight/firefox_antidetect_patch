@@ -366,6 +366,8 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
       mURIResultedInDocument(false),
       mIsBeingDestroyed(false),
       mIsExecutingOnLoadHandler(false),
+      mFileInputInterceptionEnabled(false),
+      mBypassCSPEnabled(false),
       mInvisible(false),
       mHasLoadedNonBlankURI(false),
       mHasStartedLoadingOtherThanInitialBlankURI(false),
@@ -2898,6 +2900,29 @@ nsDocShell* nsDocShell::GetInProcessChildAt(int32_t aIndex) {
 
   // child may be nullptr here.
   return static_cast<nsDocShell*>(child);
+}
+
+// Stealthfox: the two attributes Juggler sets; see nsIDocShell.idl for
+// where each is read.
+NS_IMETHODIMP
+nsDocShell::GetFileInputInterceptionEnabled(bool* aEnabled) {
+  *aEnabled = mFileInputInterceptionEnabled;
+  return NS_OK;
+}
+NS_IMETHODIMP
+nsDocShell::SetFileInputInterceptionEnabled(bool aEnabled) {
+  mFileInputInterceptionEnabled = aEnabled;
+  return NS_OK;
+}
+NS_IMETHODIMP
+nsDocShell::GetBypassCSPEnabled(bool* aEnabled) {
+  *aEnabled = mBypassCSPEnabled;
+  return NS_OK;
+}
+NS_IMETHODIMP
+nsDocShell::SetBypassCSPEnabled(bool aEnabled) {
+  mBypassCSPEnabled = aEnabled;
+  return NS_OK;
 }
 
 NS_IMETHODIMP nsDocShell::SynchronizeLayoutHistoryState() {
@@ -9014,6 +9039,22 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
   attrs.SetFirstPartyDomain(isTopLevelDoc, aLoadState->URI());
 
   nsCOMPtr<nsIRequest> req;
+
+  // Juggler: report navigation started for non-same-document and non-javascript
+  // navigations.  This drives the Juggler protocol's Page.navigationStarted and
+  // ultimately Page.ready events.
+  if (!isJavaScript && !sameDocument) {
+    nsCOMPtr<nsIObserverService> observerService =
+        mozilla::services::GetObserverService();
+    if (observerService) {
+      observerService->NotifyObservers(
+          GetAsSupports(this), "juggler-navigation-started-renderer",
+          NS_ConvertASCIItoUTF16(
+              nsPrintfCString("%" PRIu64, aLoadState->GetLoadIdentifier()))
+              .get());
+    }
+  }
+
   rv = DoURILoad(aLoadState, aCacheKey, getter_AddRefs(req));
 
   if (NS_SUCCEEDED(rv)) {

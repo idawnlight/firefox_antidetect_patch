@@ -4,6 +4,7 @@
 
 #include "OffscreenCanvasDisplayHelper.h"
 
+#include "CanvasUtils.h"
 #include "mozilla/SVGObserverUtils.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/dom/Document.h"
@@ -458,6 +459,27 @@ OffscreenCanvasDisplayHelper::TransformSurface(gfx::SourceSurface* aSurface,
 already_AddRefed<gfx::SourceSurface>
 OffscreenCanvasDisplayHelper::GetSurfaceSnapshot() {
   MOZ_ASSERT(NS_IsMainThread());
+  // What a page reads of the placeholder: the worker's front buffer, through
+  // the canvas noise only for a WebGL/WebGPU context, the same rule the
+  // worker's own readers follow, so the two sides of a transferControlToOffscreen
+  // read one image. TransformSurface hands back premultiplied or opaque pixels.
+  RefPtr<gfx::SourceSurface> drawn = GetSurfaceSnapshotAsDrawn();
+  nsCOMPtr<nsIPrincipal> principal;
+  {
+    MutexAutoLock lock(mMutex);
+    if (!CanvasUtils::StealthProjectsContextType(mType)) {
+      return drawn.forget();
+    }
+    if (mCanvasElement) {
+      principal = mCanvasElement->NodePrincipal();
+    }
+  }
+  return CanvasUtils::StealthProjectSnapshot(drawn, true, principal);
+}
+
+already_AddRefed<gfx::SourceSurface>
+OffscreenCanvasDisplayHelper::GetSurfaceSnapshotAsDrawn() {
+  MOZ_ASSERT(NS_IsMainThread());
 
   class SnapshotWorkerRunnable final : public MainThreadWorkerRunnable {
    public:
@@ -567,7 +589,9 @@ OffscreenCanvasDisplayHelper::GetSurfaceSnapshot() {
 already_AddRefed<layers::Image> OffscreenCanvasDisplayHelper::GetAsImage() {
   MOZ_ASSERT(NS_IsMainThread());
 
-  RefPtr<gfx::SourceSurface> surface = GetSurfaceSnapshot();
+  // The screen's copy (nsHTMLCanvasFrame): as drawn, like every canvas on
+  // screen.
+  RefPtr<gfx::SourceSurface> surface = GetSurfaceSnapshotAsDrawn();
   if (!surface) {
     return nullptr;
   }

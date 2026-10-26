@@ -89,6 +89,17 @@ class InterceptedHttpChannel final
   Atomic<bool> mCallingStatusAndProgress;
   bool mInterceptionReset{false};
 
+  // ----- Playwright begin -----
+  // After resetInterception is called, this request will call into interceptors again.
+  bool mInterceptAfterServiceWorkerResets{false};
+  // The bypass a service worker asked for when it let this request through
+  // and the reset was handed to the interceptors instead. A resume that does
+  // not change the URL carries it out: false when the worker simply did not
+  // respond, which keeps the navigation's client controlled. True when no
+  // worker was involved (there is no controller to clear then).
+  bool mServiceWorkerResetBypass{true};
+  // ----- Playwright end -------
+
   /**
    *  InterceptionTimeStamps is used to record the time stamps of the
    *  interception.

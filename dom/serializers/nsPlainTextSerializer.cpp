@@ -98,8 +98,10 @@ static void DetermineLineBreak(const int32_t aFlags, nsAString& aLineBreak) {
     // Unix/DOM
     aLineBreak.AssignLiteral(u"\n");
   } else {
-    // Platform/default
-    aLineBreak.AssignLiteral(NS_ULINEBREAK);
+    // Platform/default, which is Windows' on every build: a page reads it
+    // from getSelection().toString() across two blocks, "\r\n" on a Windows
+    // Firefox and "\n" on Linux [B294].
+    aLineBreak.AssignLiteral(u"\r\n");
   }
 }
 

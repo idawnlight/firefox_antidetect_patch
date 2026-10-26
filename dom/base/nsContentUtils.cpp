@@ -10393,6 +10393,24 @@ NS_IMPL_ISUPPORTS(SynthesizedEventCallback, nsISynthesizedEventCallback)
 
 }  // namespace
 
+/* static */
+TimeStamp nsContentUtils::InputEventBirth(double aLatencyMs) {
+  // Stealthfox [B299] [B301]: an input event is born in the system a few
+  // milliseconds before a page's handler runs, and a page can tell: its
+  // `timeStamp` is below `performance.now()` there. A synthesized one was born
+  // at its dispatch, so a tracker that keeps only events from the past dropped
+  // them. The caller's latency is taken off the birth, and never past the
+  // birth of the previous one, mouse or wheel alike, so the times stay in
+  // order as a system's do.
+  static TimeStamp sLastBorn;
+  TimeStamp born = TimeStamp::Now() - TimeDuration::FromMilliseconds(aLatencyMs);
+  if (!sLastBorn.IsNull() && born < sLastBorn) {
+    born = sLastBorn;
+  }
+  sLastBorn = born;
+  return born;
+}
+
 Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
     mozilla::PresShell* aPresShell, nsIWidget* aWidget, const nsAString& aType,
     LayoutDeviceIntPoint& aRefPoint,
@@ -10495,6 +10513,8 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
   mouseOrPointerEvent.mModifiers =
       GetWidgetModifiers(aMouseEventData.mModifiers);
   mouseOrPointerEvent.mButton = aMouseEventData.mButton;
+  // Stealthfox [B217]: the id travels on the event, see MouseEvents.h.
+  mouseOrPointerEvent.mJugglerEventId = aMouseEventData.mJugglerEventId;
   mouseOrPointerEvent.mButtons =
       aMouseEventData.mButtons.WasPassed()
           ? aMouseEventData.mButtons.Value()
@@ -10523,6 +10543,12 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
 
   mouseOrPointerEvent.mRefPoint = aRefPoint;
   mouseOrPointerEvent.mIgnoreRootScrollFrame = aOptions.mIgnoreRootScrollFrame;
+
+  // Stealthfox [B299]: born before the page sees it (InputEventBirth).
+  if (aMouseEventData.mLatency > 0) {
+    mouseOrPointerEvent.mTimeStamp =
+        InputEventBirth(aMouseEventData.mLatency);
+  }
 
   nsEventStatus status = nsEventStatus_eIgnore;
   if (aOptions.mToWindow) {

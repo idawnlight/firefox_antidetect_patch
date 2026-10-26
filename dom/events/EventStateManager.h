@@ -1458,6 +1458,10 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   Modifiers mGestureModifiers;
   uint16_t mGestureDownButtons;
   int16_t mGestureDownButton;
+  // Stealthfox [B288]: whether the press that started the gesture came from
+  // Juggler (nsIDOMWindowUtils.jugglerSendMouseEvent). Only moves of the same
+  // origin continue it; see GenerateDragGesture.
+  bool mGestureDownFromJuggler = false;
 
   LastMouseButtonPressInfo mLastPrimaryButtonPressInfo;
   LastMouseButtonPressInfo mLastMiddleButtonPressInfo;
