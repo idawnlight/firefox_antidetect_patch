@@ -94,6 +94,7 @@
 #include "mozilla/extensions/ExtensionBrowser.h"  // extensions::Create{AndDispatchInitWorkerContext,WorkerLoaded,WorkerDestroyed}Runnable
 #include "mozilla/extensions/WebExtensionPolicy.h"
 #include "mozilla/glean/DomUseCounterMetrics.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/net/CookieJarSettings.h"
@@ -2972,12 +2973,50 @@ WorkerPrivate::WorkerPrivate(
   } else {
     AssertIsOnMainThread();
 
+    // STEALTHFOX (firefox-50): the owner's language and zone, or the
+    // session's when the owner carries none (a service worker spawned while
+    // no page of its context is open, a chrome worker). From here on
+    // mLoadInfo holds what this worker declares, and its nested workers copy
+    // it (GetLoadInfo).
+    intl::OrSessionLanguage(mLoadInfo.mLanguageOverrideLocale);
+    intl::OrSessionTimezone(mLoadInfo.mTimezoneOverride);
+
+    // STEALTHFOX: navigator.languages of this worker, from the same
+    // LanguageOverride its owner's window reads (Navigator::GetLanguages).
+    // GetLoadInfo already resolved the list for a worker with a window owner;
+    // it is still empty when the locale came from the session or from a
+    // RemoteWorkerData that only carries the locale (service workers). An
+    // empty list means nothing is declared: WorkerNavigator then keeps the
+    // process-wide list from intl.accept_languages, as upstream does.
+    if (!mLoadInfo.mLanguageOverrideLocale.IsEmpty() &&
+        mLoadInfo.mLanguageOverride.IsEmpty()) {
+      Navigator::GetAcceptLanguages(mLoadInfo.mLanguageOverride,
+                                    &mLoadInfo.mLanguageOverrideLocale);
+    }
+
     RuntimeService::GetDefaultJSSettings(mJSSettings);
 
     {
       JS::RealmOptions& chromeRealmOptions = mJSSettings.chromeRealmOptions;
       JS::RealmOptions& contentRealmOptions = mJSSettings.contentRealmOptions;
 
+      // STEALTHFOX (firefox-50): the worker's realm is born with the language
+      // and the zone its owner declares, through the same
+      // SetRealmTimeAndLanguage the window's realm goes through
+      // (xpc::InitGlobalObjectOptions). Upstream's update path
+      // (UpdateLanguageOverrideInternal, UpdateTimezoneOverrideInternal) only
+      // runs on a later BrowsingContext change; the session fallback above
+      // is applied here, at birth.
+      //
+      // Both arguments were empty literals once. The language until
+      // 2026-08-20: the worker spoke the machine's locale while its page
+      // spoke the declared one, in all of Intl and in toLocaleString
+      // (71-bug-archive.md [B165]). The zone until firefox-50: the worker
+      // took the PROCESS's zone, the `TZ` the core put in the environment,
+      // which was right only where `TZ` was. On Windows the C runtime and
+      // ICU read `TZ` differently and no value satisfies both, so
+      // America/Phoenix gave the machine's zone in a Worker ([B334]), and a
+      // second context with a zone of its own gave the session's ([B346]).
       const nsCString& languageOverride = mLoadInfo.mLanguageOverrideLocale;
       const nsAString& timezoneOverride = mLoadInfo.mTimezoneOverride;
 
@@ -6350,7 +6389,13 @@ void WorkerPrivate::UpdateLanguageOverrideInternal(
         if (aLanguageOverride.IsEmpty()) {
           JS::SetRealmLocaleOverride(realm, nullptr);
         } else {
-          JS::SetRealmLocaleOverride(realm, aLanguageOverride.get());
+          // STEALTHFOX: the override may be an Accept-Language list
+          // ("fr-FR, fr"); the realm's Intl default locale is a single BCP-47
+          // tag, as at birth (SetRealmTimeAndLanguage) and in the window
+          // (BrowsingContext::DidSet).
+          nsAutoCString primaryLocale;
+          intl::PrimaryLanguageTag(aLanguageOverride, primaryLocale);
+          JS::SetRealmLocaleOverride(realm, primaryLocale.get());
         }
       }
     }
@@ -6396,6 +6441,13 @@ void WorkerPrivate::UpdateTimezoneOverrideInternal(JSContext* aCx,
 
 void WorkerPrivate::UpdateLanguagesInternal(
     const nsTArray<nsString>& aLanguages) {
+  // STEALTHFOX: this is the intl.accept_languages broadcast. A worker that
+  // follows its owner's LanguageOverride ignores it, exactly as the owner's
+  // Navigator::GetLanguages does; its nested workers carry the same list.
+  if (!mLoadInfo.mLanguageOverride.IsEmpty()) {
+    return;
+  }
+
   WorkerGlobalScope* globalScope = GlobalScope();
   RefPtr<WorkerNavigator> nav = globalScope->GetExistingNavigator();
   if (nav) {

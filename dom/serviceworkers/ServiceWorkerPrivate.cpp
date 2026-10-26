@@ -27,6 +27,8 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StoragePrincipalHelper.h"
+#include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/Client.h"
 #include "mozilla/dom/ClientIPCTypes.h"
 #include "mozilla/dom/ClientManager.h"
@@ -805,8 +807,11 @@ nsresult ServiceWorkerPrivate::Initialize() {
       OriginTrials(), std::move(serviceWorkerData), regInfo->AgentClusterId(),
       remoteType.unwrap(),
       // Bug 2040904. Add support for language override for service workers.
+      // STEALTHFOX: the locale is filled by RefreshRemoteWorkerData, before
+      // every spawn; WorkerPrivate derives the language list from it.
       ""_ns, nsTArray<nsString>(),
       // Bug 2039330. Add support for timezone override for service workers.
+      // STEALTHFOX: filled by RefreshRemoteWorkerData as well.
       u""_ns);
 
   mRemoteWorkerData.referrerInfo() = MakeAndAddRef<ReferrerInfo>(nullptr);
@@ -1911,6 +1916,70 @@ void ServiceWorkerPrivate::Terminated() {
   Shutdown();
 }
 
+// STEALTHFOX: the language and the zone of the context a service worker
+// belongs to.
+//
+// A service worker has no owner document: it is keyed by principal, origin
+// attributes included, so it is shared by every page of ONE user context (one
+// Playwright browser context) and only by them. Juggler writes the same
+// LanguageOverride and TimezoneOverride on every top-level BrowsingContext of
+// a context (PageTarget.updateLanguageOverride, updateTimezoneOverride), so
+// any of those pages answers the question, and the window that registered the
+// worker and the worker itself end up with the same language and the same
+// clock. Retail Firefox 151, measured, gives a window and its dedicated,
+// shared and service workers the same navigator.languages, Intl locale and
+// zone; with one of each per process that is automatic, with one per context
+// it has to be carried here.
+//
+// Each is empty when no open page of that context is found, or when its pages
+// disagree on it (an override set per tab, not by Juggler): the worker then
+// gets the session's declaration in WorkerPrivate.
+static void ContextDeclaration(nsIPrincipal* aPrincipal, nsACString& aLanguage,
+                               nsAString& aZone) {
+  AssertIsOnMainThread();
+  MOZ_ASSERT(aPrincipal);
+
+  aLanguage.Truncate();
+  aZone.Truncate();
+
+  const OriginAttributes& attrs =
+      BasePrincipal::Cast(aPrincipal)->OriginAttributesRef();
+
+  nsTArray<RefPtr<BrowsingContextGroup>> groups;
+  BrowsingContextGroup::GetAllGroups(groups);
+
+  bool seen = false;
+  bool languageAgrees = true;
+  bool zoneAgrees = true;
+  for (const RefPtr<BrowsingContextGroup>& group : groups) {
+    for (const RefPtr<BrowsingContext>& top : group->Toplevels()) {
+      if (top->IsDiscarded() || !top->IsContent()) {
+        continue;
+      }
+      const OriginAttributes& topAttrs = top->OriginAttributesRef();
+      if (topAttrs.mUserContextId != attrs.mUserContextId ||
+          topAttrs.mPrivateBrowsingId != attrs.mPrivateBrowsingId) {
+        continue;
+      }
+      if (!seen) {
+        aLanguage = top->GetLanguageOverride();
+        aZone = top->GetTimezoneOverride();
+        seen = true;
+        continue;
+      }
+      languageAgrees =
+          languageAgrees && aLanguage.Equals(top->GetLanguageOverride());
+      zoneAgrees = zoneAgrees && aZone.Equals(top->GetTimezoneOverride());
+    }
+  }
+  if (!languageAgrees) {
+    aLanguage.Truncate();
+  }
+  if (!zoneAgrees) {
+    aZone.Truncate();
+  }
+}
+
 void ServiceWorkerPrivate::RefreshRemoteWorkerData(
     const RefPtr<ServiceWorkerRegistrationInfo>& aRegistration) {
   AssertIsOnMainThread();
@@ -1921,6 +1990,12 @@ void ServiceWorkerPrivate::RefreshRemoteWorkerData(
   serviceWorkerData.descriptor() = mInfo->Descriptor().ToIPC();
   serviceWorkerData.registrationDescriptor() =
       aRegistration->Descriptor().ToIPC();
+
+  // Only the locale travels: the resolved navigator.languages list stays
+  // empty and WorkerPrivate derives it from the locale in the worker process.
+  ContextDeclaration(mInfo->Principal(),
+                     mRemoteWorkerData.languageOverrideLocale(),
+                     mRemoteWorkerData.timezoneOverride());
 }
 
 RefPtr<FetchServicePromises> ServiceWorkerPrivate::SetupNavigationPreload(
