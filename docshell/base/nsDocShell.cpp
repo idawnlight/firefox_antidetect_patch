@@ -12195,8 +12195,10 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
       if (!mLoadState->HasSourceElement()) {
         mLoadState->SetSourceElement(mContent->AsElement());
       }
+      mRunning = true;
       mHandler->OnLinkClickSync(mContent, mLoadState, mNoOpenerImplied,
                                 mTriggeringPrincipal);
+      mRunning = false;
     }
     NotifyJugglerDone();
     return NS_OK;
@@ -12207,7 +12209,13 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
     // Don't clear mLoadState, etc. here since this can be called
     // from the OnLinkClickSync() above, and we might be holding
     // the last references to them.
-    NotifyJugglerDone();
+    // STEALTHFOX (juggler): it is, for a form: InternalLoad stops this
+    // docshell's network, which cancels its planned form navigation - the one
+    // running here - before the navigation is announced. Run says "after"
+    // once OnLinkClickSync has started it.
+    if (!mRunning) {
+      NotifyJugglerDone();
+    }
     return NS_OK;
   }
 
@@ -12228,6 +12236,7 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
   nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
   bool mNoOpenerImplied;
   bool mCancelled = false;
+  bool mRunning = false;
   bool mJugglerNotified = false;
 };
 
