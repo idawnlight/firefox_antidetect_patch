@@ -1055,7 +1055,8 @@ static bool EvaluateInEnv(
 
   CompileOptions options(cx);
   // Stealth: use generic filename instead of "debugger eval code" to prevent
-  // FingerprintJS Pro from detecting automation via Error.stack analysis.
+  // a commercial fingerprinting service from detecting automation via
+  // Error.stack analysis.
   const char* filename =
       evalOptions.filename() ? evalOptions.filename() : "eval code";
   options.setIsRunOnce(true)

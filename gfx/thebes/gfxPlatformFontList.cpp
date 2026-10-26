@@ -1920,12 +1920,12 @@ bool gfxPlatformFontList::FindAndAddFamiliesLocked(
   //
   // A name that is not a family can still resolve through Windows' substitute
   // table, and a detector reads the difference. Measured 2026-08-07 on the
-  // shipped firefox-18: FingerprintJS probes "HELV" and "Small Fonts", both
-  // resolved on Windows and neither on Linux (raw_fonts_n 8 vs 6), because
-  // gfxDWriteFontList reads them from the HOST REGISTRY with no bundle-only
-  // gate and Linux has no such registry. That made the answer depend on the OS
-  // and, on Windows, on the individual machine - third-party software adds
-  // registry entries.
+  // shipped firefox-18: a commercial fingerprinting service probes "HELV" and
+  // "Small Fonts", both resolved on Windows and neither on Linux (raw_fonts_n 8
+  // vs 6), because gfxDWriteFontList reads them from the HOST REGISTRY with no
+  // bundle-only gate and Linux has no such registry. That made the answer
+  // depend on the OS and, on Windows, on the individual machine - third-party
+  // software adds registry entries.
   //
   // This is the single place all three backends pass through: the DWrite
   // override calls up into this base after applying its own table, and the

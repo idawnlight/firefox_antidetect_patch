@@ -719,7 +719,7 @@ class Frame {
   //              `el.__vue__` and the page's functions are the page's, while
   //              `document.querySelector` is the native method even when the
   //              page wrapped it in a Proxy that counts who calls it. A
-  //              Cloudflare challenge does exactly that, and one lookup of its
+  //              bot-challenge page does exactly that, and one lookup of its
   //              token field from the page's realm got its clearance refused.
   //
   // ⛔ THE PRINCIPAL DECIDES AS MUCH AS THE FLAGS, measured on 2026-08-23: a

@@ -36,10 +36,11 @@ namespace gfx {
  * guess which pixels were text: the test was that the three colour channels
  * agreed, so that a colour-emoji BITMAP - whose alpha carries artwork, not an
  * antialiasing ramp - was left alone. That guess is wrong for the commonest
- * case there is, coloured text. Measured 2026-08-08 on FingerprintJS Pro's own
- * canvas, whose text is #006699 and rgba(102,204,0,0.2): not one ink pixel had
- * r==g==b, so the ladder was a total no-op and the Times New Roman line read
- * back 12 alpha levels on Windows against 208 on Linux.
+ * case there is, coloured text. Measured 2026-08-08 on a commercial
+ * fingerprinting service's own canvas, whose text is #006699 and
+ * rgba(102,204,0,0.2): not one ink pixel had r==g==b, so the ladder was a total
+ * no-op and the Times New Roman line read back 12 alpha levels on Windows
+ * against 208 on Linux.
  *
  * On the mask there is nothing to guess. SkMask::kA8_Format IS a greyscale
  * coverage mask by construction, a colour glyph is kARGB32_Format and never

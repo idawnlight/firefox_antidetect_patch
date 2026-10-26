@@ -173,7 +173,7 @@ jobs:
       # own, after a control arm found a headed window where it belongs, AND
       # that it still renders; Linux self-skips (Xvfb is the e2e.yml path).
       # The webgl guard catches a regression of the gamma readPixels noise back to
-      # the pixelscan-maskable ±1 spike form (covered on Linux + Windows).
+      # the scanner-maskable ±1 spike form (covered on Linux + Windows).
       # ⛔ THE CORE COMES FROM GIT, NOT FROM THE INDEX, and this is not a
       # convenience. `pip install ".[dev]"` installs the WRAPPER, which pins
       # invisible-core exactly, so pip resolves the PUBLISHED core - and during a

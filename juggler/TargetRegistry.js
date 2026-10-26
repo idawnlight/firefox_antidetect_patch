@@ -769,7 +769,7 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.setProperty('contain', 'size');
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
       // Stealth: skip RDM when stealth screen prefs are active.
-      // inRDMPane=true causes Pixelscan to hang on "Collecting Data..."
+      // inRDMPane=true causes a fingerprint-scanner page to hang on "Collecting Data..."
       // because RDM mode interferes with fingerprint collection.
       const stealthW = Preferences.get('zoom.stealth.screen.width', -1);
       if (stealthW <= 0) {
@@ -849,7 +849,7 @@ export class PageTarget {
 
   /**
    * After its content process crashed and the client was told, the tab is
-   * closed (the owner's decision, 2026-10-14, as camoufox #794/#795/#803).
+   * closed (the owner's decision, 2026-10-14, as in another anti-detect Firefox fork's reports).
    * Until firefox-48 the crash only disposed the target: the tab stayed in the
    * parent until the browser exited, 15-60 MB a crash with no bound, and no
    * command reached it any more, not page.close nor the context's close.

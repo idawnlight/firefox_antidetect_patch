@@ -236,12 +236,12 @@ TEST(StealthCanvasProjection, ABlendOfTwoColoursIsLeftAlone)
 {
   // Text at any contrast is the ink blended over the background: every pixel
   // on the segment between two colours. Coverage levels of a low-contrast
-  // coloured ink (FingerprintJS's rgba(102,204,0,0.2) over white has steps of
-  // 1-5 per channel), a black-on-white ramp, and the antialiased edge between
-  // two fills: none of it may move, whatever the step between neighbours.
-  // Each blend in a buffer of its own: two of them side by side would put a
-  // third colour in the neighbourhoods along their border, which the noise
-  // touches on purpose (two inks a pixel apart are three colours).
+  // coloured ink (a fingerprinting service's rgba(102,204,0,0.2) over white has
+  // steps of 1-5 per channel), a black-on-white ramp, and the antialiased edge
+  // between two fills: none of it may move, whatever the step between
+  // neighbours. Each blend in a buffer of its own: two of them side by side
+  // would put a third colour in the neighbourhoods along their border, which
+  // the noise touches on purpose (two inks a pixel apart are three colours).
   auto blend = [](const uint8_t aFrom[3], const uint8_t aTo[3]) {
     std::vector<uint8_t> px(kW * kH * 4, 255);
     for (int32_t y = 0; y < kH; ++y) {

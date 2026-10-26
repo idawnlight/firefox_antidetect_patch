@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Smoke test 4/4 — anti-bot site sees us as legitimate Firefox.
+"""Smoke test 4/4 — a bot-detection page sees us as legitimate Firefox.
 
 Verifies the stealth surface holds: navigator.webdriver=False, UA override,
 language override, plugins/hardware overrides.
+
+Set STEALTH_SMOKE_URL to the address of a public bot-detection test page to
+enable the soft pass-count check; when unset that check is skipped and only
+the hard navigator checks run.
 
 Uses InvisiblePlaywright with locale="" (C7 workaround) so we don't trip the
 known content-process crash with Browser.setLocaleOverride.
@@ -30,13 +34,15 @@ async def main() -> int:
     ) as browser:
         ctx = await browser.new_context()
         page = await ctx.new_page()
-        try:
-            await page.goto("https://bot.sannysoft.com/", timeout=20000)
-        except Exception as e:
-            print(f"[FAIL] goto sannysoft: {type(e).__name__}: {e}",
-                  file=sys.stderr)
-            return 1
-        await asyncio.sleep(3)
+        smoke_url = os.environ.get("STEALTH_SMOKE_URL")
+        if smoke_url:
+            try:
+                await page.goto(smoke_url, timeout=20000)
+            except Exception as e:
+                print(f"[FAIL] goto smoke url: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                return 1
+            await asyncio.sleep(3)
 
         markers = await page.evaluate("""() => ({
             webdriver: navigator.webdriver,
@@ -55,7 +61,10 @@ async def main() -> int:
                   file=sys.stderr)
             return 1
 
-        # Soft-check sannysoft pass count
+        # Soft-check the pass count of the bot-detection page
+        if not smoke_url:
+            print("[SKIP] STEALTH_SMOKE_URL not set")
+            return 0
         try:
             counts = await page.evaluate("""() => {
                 const rows = document.querySelectorAll('table tr');
@@ -71,10 +80,10 @@ async def main() -> int:
             }""")
             print(f"[PASS] webdriver={markers['webdriver']}, "
                   f"UA={markers['ua'][:40]}..., "
-                  f"sannysoft {counts['p']} passed / {counts['f']} failed")
+                  f"smoke page {counts['p']} passed / {counts['f']} failed")
             return 0
         except Exception as e:
-            print(f"[PASS] basic markers OK (sannysoft scrape skipped: {e})")
+            print(f"[PASS] basic markers OK (smoke page scrape skipped: {e})")
             return 0
 
 

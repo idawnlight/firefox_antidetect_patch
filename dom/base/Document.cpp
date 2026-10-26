@@ -17585,9 +17585,10 @@ VisibilityState Document::ComputeVisibilityState() const {
   if (!IsVisible() || !mWindow || !mWindow->GetOuterWindow() ||
       mWindow->GetOuterWindow()->IsBackground()) {
     // Stealth: GetForceActiveState removed in 150. The 146 hack relied on
-    // it to report Visible regardless of OS focus, defeating FP Pro
-    // detection via document.hidden. TODO: re-implement via a different
-    // mechanism (e.g. JS-side override or pref-gated unconditional Visible).
+    // it to report Visible regardless of OS focus, defeating a commercial
+    // fingerprinting service's detection via document.hidden. TODO:
+    // re-implement via a different mechanism (e.g. JS-side override or
+    // pref-gated unconditional Visible).
     return dom::VisibilityState::Hidden;
   }
 

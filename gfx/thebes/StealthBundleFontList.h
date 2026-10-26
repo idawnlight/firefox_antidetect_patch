@@ -213,10 +213,11 @@ class StealthBundleFontList final {
   // Canonical Windows font-substitute lookup, applied on EVERY OS.
   //
   // A name that is not a family can still resolve through Windows' substitute
-  // table, and a detector reads the difference: FingerprintJS probes "HELV"
-  // and "Small Fonts", and on the shipped firefox-18 both resolved on Windows
-  // and neither on Linux, because gfxDWriteFontList read them from the HOST
-  // REGISTRY with no bundle-only gate while Linux has no such registry.
+  // table, and a detector reads the difference: a commercial fingerprinting
+  // service probes "HELV" and "Small Fonts", and on the shipped firefox-18 both
+  // resolved on Windows and neither on Linux, because gfxDWriteFontList read
+  // them from the HOST REGISTRY with no bundle-only gate while Linux has no
+  // such registry.
   //
   // aName is matched case-insensitively; aOut receives the target family name.
   // False when the name is not an alias, which is the common case, so callers

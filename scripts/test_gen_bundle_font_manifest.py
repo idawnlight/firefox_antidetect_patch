@@ -192,7 +192,7 @@ def test_alias_table_is_present_and_canonical():
     """The v3 alias table, which replaces the host registry on Windows and
     gives the other two platforms an alias set they never had.
 
-    The two names FingerprintJS actually probes must be there: they are why
+    The two names a commercial fingerprinting service actually probes must be there: they are why
     this exists (raw_fonts_n was 8 on Windows and 6 on Linux, measured
     2026-08-07 on the shipped firefox-18).
     """

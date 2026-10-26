@@ -1083,10 +1083,10 @@ JS_PUBLIC_API bool BuildStackString(JSContext* cx, JSPrincipals* principals,
                                             skippedNextAsync);
 
       // Stealth: skip Juggler's frames from stack traces visible to web
-      // content. FingerprintJS Pro detects automation by checking Error.stack
-      // for juggler/debugger-specific frame sources. Juggler loads from
-      // resource://gre/modules/juggler/ (juggler/moz.build says why it is not
-      // a chrome package).
+      // content. A commercial fingerprinting service detects automation by
+      // checking Error.stack for juggler/debugger-specific frame sources.
+      // Juggler loads from resource://gre/modules/juggler/ (juggler/moz.build
+      // says why it is not a chrome package).
       {
         static constexpr char kJuggler[] = "resource://gre/modules/juggler/";
         static constexpr size_t kJugglerLength = sizeof(kJuggler) - 1;

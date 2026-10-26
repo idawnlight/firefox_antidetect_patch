@@ -2227,7 +2227,8 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
   // Stealth: BEFORE the native switch, consult per-enum override prefs so
   // Linux/Mesa driver numerics (MAX_TEXTURE_SIZE etc.) can be replaced with
   // Windows ANGLE canonical values. Hash of the parameter block becomes
-  // Windows-canonical — fixes FP Pro webgl_extensions.parameters mismatch.
+  // Windows-canonical — fixes a commercial fingerprinting service's
+  // webgl_extensions.parameters mismatch.
   {
     nsAutoCString intPref, floatPref, int2Pref;
     {
@@ -3182,10 +3183,11 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
 
   // Stealth: before consulting native shader precisions, check the pref
   // `zoom.stealth.webgl.shader_precisions` for a Windows-canonical triple
-  // that replaces Linux Mesa's driver values. FP Pro hashes the 12 triples
-  // (2 shader types × 6 precision types) into its webgl_extensions.
-  // shader_precisions signal — without an override, Linux produces a
-  // constant hash across every session that FP Pro can map to Mesa.
+  // that replaces Linux Mesa's driver values. A commercial fingerprinting
+  // service hashes the 12 triples (2 shader types × 6 precision types) into its
+  // webgl_extensions. shader_precisions signal — without an override, Linux
+  // produces a constant hash across every session that such a service can map
+  // to Mesa.
   {
     nsAutoCString pref;
     {

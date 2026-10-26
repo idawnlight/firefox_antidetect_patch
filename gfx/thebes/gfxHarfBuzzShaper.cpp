@@ -1610,9 +1610,9 @@ bool gfxHarfBuzzShaper::ShapeText(const char16_t* aText, uint32_t aOffset,
   hb_shape(mHBFont, mBuffer, features.Elements(), features.Length());
 
   // Stealth: the per-run advance jitter was REMOVED 2026-08-08. It is the one
-  // thing CreepJS ever caught this build doing - the single entry in its lie
-  // list, `CanvasRenderingContext2D.measureText: metric noise detected` - and
-  // it was both detectable and unrealistic.
+  // thing a public fingerprinting test page ever caught this build doing - the
+  // single entry in its lie list, `CanvasRenderingContext2D.measureText: metric
+  // noise detected` - and it was both detectable and unrealistic.
   //
   // DETECTABLE, by addition and nothing else. The offset was added to the LAST
   // glyph of every shaped run, so measuring a string in pieces accumulated one
@@ -1635,8 +1635,9 @@ bool gfxHarfBuzzShaper::ShapeText(const char16_t* aText, uint32_t aOffset,
   // from the screen - none of which had to lie about a font metric to get it.
   //
   // The v2 this replaces was itself a reduction of a v1 that perturbed every
-  // glyph and moved a long string by ~2.8px, which spiked FP Pro's tampering_ml.
-  // Halving a tell twice is not the same as removing it.
+  // glyph and moved a long string by ~2.8px, which spiked a commercial
+  // fingerprinting service's tampering_ml. Halving a tell twice is not the same
+  // as removing it.
 
   if (isRightToLeft) {
     hb_buffer_reverse(mBuffer);

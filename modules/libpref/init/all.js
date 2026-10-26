@@ -457,7 +457,7 @@ pref("accessibility.browsewithcaret_shortcut.enabled", true);
 //     Windows : family "Segoe UI", size 12px
 //     Linux   : family "Sans",     size 13.3333px
 //
-// CreepJS reads exactly this and reported `system_fonts: Segoe UI:Windows`
+// A public fingerprinting test page reads exactly this and reported `system_fonts: Segoe UI:Windows`
 // against `Sans:Linux` - a direct platform disclosure, and one that survived
 // sealing the font-family list, because "Sans" here never came from the font
 // list at all.

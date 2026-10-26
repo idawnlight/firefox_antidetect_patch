@@ -2,7 +2,7 @@
 //
 // The caller's code (page.evaluate and the like) ran in the page's own realm,
 // so a call to a standard API went through whatever the page had put in its
-// place: a Cloudflare challenge wraps Document.prototype.querySelector in a
+// place: a bot-challenge page wraps Document.prototype.querySelector in a
 // Proxy, and one lookup of its token field from an evaluate got the clearance
 // refused, 11 pairs out of 11. The client now declares a 'caller' world, a
 // sandbox with the page's principal and hybrid Xrays (the C++ is in

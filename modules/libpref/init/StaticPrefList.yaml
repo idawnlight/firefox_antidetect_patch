@@ -21482,7 +21482,7 @@
 
 # Diagnostic gate (2026-06-22): when false, disable the per-session OfflineAudioContext
 # noise even if hw_seed > 0. Lets us isolate whether the audio noise (vs the font jitter)
-# is what drives FP Pro tampering_ml on Windows. Default true = noise on (legacy behaviour).
+# is what drives a commercial fingerprinting service's tampering_ml on Windows. Default true = noise on (legacy behaviour).
 - name: zoom.stealth.audio.fp_noise
   type: RelaxedAtomicBool
   value: true
@@ -21519,7 +21519,7 @@
 # `AsyncResolveNative` diretto: `NetworkConnectivityService`, le sonde
 # dell'euristica DoH, e il resolver ICE. Misurato il 2026-08-25 dietro un proxy
 # HTTP, due giri identici: `example.org` 28, `ipv4only.arpa` 12,
-# `cloudflare-dns.com` 6 e - la peggiore - `stunprobe.invalid` 6, che e' un nome
+# il nome di un resolver DoH pubblico 6 e - la peggiore - `stunprobe.invalid` 6, che e' un nome
 # scelto DALLA PAGINA via `iceServers`, quindi il server autoritativo del sito
 # vede il resolver di casa mentre l'HTTP esce dal proxy. Dietro SOCKS gli stessi
 # nomi fanno 0 e ne restano 3 in tutto.
@@ -21758,7 +21758,7 @@
 # entries (ENUM in decimal, e.g. 3379 = GL_MAX_TEXTURE_SIZE). Used to
 # return Windows ANGLE canonical values from GetParameter(pname) when
 # the host's real driver (Mesa on Linux) would give different numbers —
-# FP Pro's parameter hash matches Windows only when this is populated.
+# A commercial fingerprinting service's parameter hash matches Windows only when this is populated.
 - name: zoom.stealth.webgl.int_params
   type: DataMutexString
   value: ""
@@ -21776,7 +21776,7 @@
   value: ""
   mirror: always
 
-# Windows ANGLE canonical getShaderPrecisionFormat() triples. Closes FP Pro
+# Windows ANGLE canonical getShaderPrecisionFormat() triples. Closes a commercial fingerprinting service's
 # webgl_extensions.shader_precisions hash signal — Linux Mesa returns
 # different range/precision than Win D3D11. Format:
 # "SHADERTYPE*PRECISIONTYPE|rangeMin:rangeMax:precision,..." where
@@ -21867,7 +21867,7 @@
 # construction. It was applied to the composited RGBA buffer at canvas readback
 # until 2026-08-08, where it had to guess which pixels were text by testing that
 # the three colour channels agreed - and coloured text has r != g != b, so on
-# FingerprintJS Pro's own canvas (#006699) it was a total no-op. The name still
+# a commercial fingerprinting service's own canvas (#006699) it was a total no-op. The name still
 # says "canvas" in the docs of that era; the pref is spelled for what it does.
 - name: zoom.stealth.text.coverage_ladder
   type: DataMutexString

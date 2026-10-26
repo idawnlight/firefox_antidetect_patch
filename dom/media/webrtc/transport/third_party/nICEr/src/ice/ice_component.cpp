@@ -138,7 +138,7 @@ static void nr_ice_stealth_srflx_fire_ready(NR_SOCKET s, int how, void *cb_arg)
  * candidates ended up created (DNS resolution failed for the STUN server,
  * UDP filtered, etc.), inject one synthetic srflx with the proxy egress
  * IP so the page sees a coherent "user behind NAT with STUN-able net"
- * profile (Scrapfly's frontendIps[0]==publicIp check).
+ * profile (a check that compares the first frontend IP with the public one).
  *
  * Returns 0 if a candidate was injected, non-zero otherwise. */
 int nr_ice_component_inject_fallback_srflx(nr_ice_component *component,
@@ -168,7 +168,7 @@ int nr_ice_component_inject_fallback_srflx(nr_ice_component *component,
      * ⛔ E COSTA TRE RIGHE DI JAVASCRIPT VEDERLO. Niente rete, niente server,
      * niente correlazione: si crea una connessione senza server e si guarda se
      * arriva un srflx. E' molto piu' economico del banco che correla lato
-     * server (`docs_research/scrapfly-re/`), e non lascia scampo.
+     * server (le nostre note di ricerca), e non lascia scampo.
      *
      * Non e' il gate su `real_srflx_ct` che era stato provato e tolto: quello
      * ASPETTAVA il fallimento dello STUN vero, quindi rimandava il ripiego di
@@ -374,8 +374,8 @@ int nr_ice_component_inject_fallback_srflx(nr_ice_component *component,
      * STUN round-trip, so host candidates are emitted first and the srflx
      * trickles in later (~RTT). Emitting it at 0 ms made it race/precede the
      * host candidates, which is unnatural and broke first-candidate-based
-     * collectors (CreepJS). 200 ms is a plausible STUN RTT and well inside
-     * typical 3 s gathering windows. */
+     * collectors (public test pages). 200 ms is a plausible STUN RTT and well
+     * inside typical 3 s gathering windows. */
     NR_ASYNC_TIMER_SET(200, nr_ice_stealth_srflx_fire_ready, (void *)cand,
                        &cand->ready_cb_timer);
     cand = 0;

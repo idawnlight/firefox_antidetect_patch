@@ -2688,15 +2688,15 @@ bool gfxFcPlatformFontList::FindAndAddFamiliesLocked(
   // /etc/fonts and ~/.config/fontconfig. Information goes into the host config
   // and comes back out, which is exactly the shape this build exists to remove.
   //
-  // It is not a theoretical leak. CreepJS reads the operating system off the
-  // font system, and measured 2026-08-07 on the shipped firefox-18 it reported
-  // `system_fonts: Segoe UI:Windows` on Windows and `system_fonts: Sans:Linux`
-  // on Linux - it named the platform outright. Probing the names directly:
-  // "Sans", "Serif", "Monospace" and "sans-serif" all resolved as families on
-  // Linux and none of them on Windows. No host font FILE leaked (DejaVu,
-  // Liberation, Ubuntu, Cantarell, Noto, FreeSans all failed to resolve, so the
-  // bundle-only family list itself is sealed) - what leaked was fontconfig's
-  // own alias NAMES, which no Windows install has.
+  // It is not a theoretical leak. A public fingerprinting test page reads the
+  // operating system off the font system, and measured 2026-08-07 on the
+  // shipped firefox-18 it reported `system_fonts: Segoe UI:Windows` on Windows
+  // and `system_fonts: Sans:Linux` on Linux - it named the platform outright.
+  // Probing the names directly: "Sans", "Serif", "Monospace" and "sans-serif"
+  // all resolved as families on Linux and none of them on Windows. No host font
+  // FILE leaked (DejaVu, Liberation, Ubuntu, Cantarell, Noto, FreeSans all
+  // failed to resolve, so the bundle-only family list itself is sealed) - what
+  // leaked was fontconfig's own alias NAMES, which no Windows install has.
   //
   // Delegating to the base class gives Windows' behaviour by construction: the
   // manifest's canonical substitute table (see StealthBundleFontList::GetAlias,

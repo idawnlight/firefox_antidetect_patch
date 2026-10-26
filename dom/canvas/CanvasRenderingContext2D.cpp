@@ -2285,10 +2285,11 @@ CanvasRenderingContext2D::SetContextOptions(JSContext* aCx,
 // It had to guess which pixels were text, and the test was that the three
 // colour channels agreed - greyscale-antialiased text has r==g==b, a colour
 // emoji's artwork does not. The guess is wrong for the commonest case there
-// is: coloured text. Measured on FingerprintJS Pro's own canvas, whose text is
-// #006699 and rgba(102,204,0,0.2), not one ink pixel had r==g==b, so the
-// ladder was a total no-op and the Times New Roman line read back 12 alpha
-// levels on Windows against 208 on Linux - the exact tell it existed to close.
+// is: coloured text. Measured on a commercial fingerprinting service's own
+// canvas, whose text is #006699 and rgba(102,204,0,0.2), not one ink pixel had
+// r==g==b, so the ladder was a total no-op and the Times New Roman line read
+// back 12 alpha levels on Windows against 208 on Linux - the exact tell it
+// existed to close.
 //
 // On the mask there is nothing to guess: kA8_Format IS greyscale coverage by
 // construction, a colour glyph is kARGB32_Format and never reaches it, and the
@@ -5460,13 +5461,14 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
       // and whole in retail; the correction is to put the missing steps back,
       // not to round again somewhere downstream.
       //
-      // This is the single lie CreepJS reports against this build. Its test is
-      // not about width and not about additivity despite the name it prints
-      // ("metric noise"): it measures the EMPTY string and flags any of
+      // This is the single lie a public fingerprinting test page reports
+      // against this build. Its test is not about width and not about
+      // additivity despite the name it prints ("metric noise"): it measures the
+      // EMPTY string and flags any of
       // actualBoundingBox{Ascent,Descent,Left,Right} or
-      // fontBoundingBox{Ascent,Descent} that is not whole
-      // (`const isFloat = (n) => n % 1 !== 0`, read from the vendored source
-      // after an earlier guess at additivity failed to clear it).
+      // fontBoundingBox{Ascent,Descent} that is not whole (`const isFloat = (n)
+      // => n % 1 !== 0`, read from the vendored source after an earlier guess
+      // at additivity failed to clear it).
       //
       // Measured 2026-08-08, Arial, retail Firefox 152 against this build:
       //
@@ -5488,7 +5490,7 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
         // splits the em box in the ratio of the ROUNDED usWin pair, so emAscent
         // stays fractional in retail too (72px Arial: 72 * 65/80 = 58.5) and
         // must stay fractional here. Rounding it would be a new divergence, not
-        // a fix - CreepJS never looks at emHeightAscent.
+        // a fix - that page never looks at emHeightAscent.
         const gfxFloat emH = font->GetAdjustedSize();
         emA = emH * maxA / maxH;
         emD = emH - emA;

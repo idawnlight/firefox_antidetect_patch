@@ -194,8 +194,9 @@ bool StealthProjectPixels(const uint8_t* aSrc, int32_t aSrcStride,
       // junction of three shapes). Text at any contrast and the edge between two
       // fills are left exactly as drawn. This replaced a band on the step to the
       // neighbours (zoom.stealth.canvas.edge_step), which no step value could
-      // make separate low-contrast coloured text from a gradient: FingerprintJS's
-      // own rgba(102,204,0,0.2) line has the steps of a gradient on retail too.
+      // make separate low-contrast coloured text from a gradient: a commercial
+      // fingerprinting service's own rgba(102,204,0,0.2) line has the steps of
+      // a gradient on retail too.
       const uint32_t around9[9] = {up[i - 1],  up[i],  up[i + 1],
                                    mid[i - 1], c,      mid[i + 1],
                                    down[i - 1], down[i], down[i + 1]};

@@ -375,7 +375,7 @@ def build_aliases(gfx_dir: str) -> list[tuple[str, str]]:
 
     WHY THIS IS DATA AND NOT A LOOKUP. A font name that is not a family can
     still resolve, through Windows' substitute table, and a detector sees the
-    difference: FingerprintJS probes `HELV` and `Small Fonts`, and on the
+    difference: a commercial fingerprinting service probes `HELV` and `Small Fonts`, and on the
     shipped firefox-18 both resolved on Windows and neither on Linux, because
     gfxDWriteFontList reads them from the HOST REGISTRY
     (HKLM\\...\\FontSubstitutes) with no bundle-only gate, and Linux has no
@@ -772,7 +772,7 @@ def build_manifest(fonts_dir: str, gfx_dir: str | None = None) -> dict:
         # 152.0.6 on Windows: "Franklin Gothic" resolves, "Franklin Gothic
         # Medium" does NOT. A page sees the base only, so exposing the compound
         # as well answered "present" where a real browser answers "absent" -
-        # and font-name probing is exactly what FingerprintJS does.
+        # and font-name probing is exactly what commercial fingerprinting services do.
         if family == gdi_name and not typo_name and not wws_name:
             words = gdi_name.split(" ")
             if (

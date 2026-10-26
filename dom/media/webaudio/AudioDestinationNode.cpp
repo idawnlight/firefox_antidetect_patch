@@ -142,8 +142,9 @@ class OfflineDestinationNodeEngine final : public AudioNodeEngine {
       //      (noise on pure silence is physically impossible on real hardware).
       //   2. mLength > 200: skip hasFakeAudio's OfflineAudioContext(1,100,44100)
       //      which tests for non-zero silence → would set audioIsFake=true.
-      //   3. mWriteIndex + s >= 100: skip first 100 samples because CreepJS
-      //      checks bins.slice(0,100) sum for noise detection.
+      //   3. mWriteIndex + s >= 100: skip first 100 samples because a public
+      //      fingerprinting test page checks bins.slice(0,100) sum for
+      //      noise detection.
       {
         int32_t seed = mozilla::StaticPrefs::zoom_stealth_fpp_hw_seed();
         if (seed > 0 && mozilla::StaticPrefs::zoom_stealth_audio_fp_noise() &&
@@ -152,7 +153,7 @@ class OfflineDestinationNodeEngine final : public AudioNodeEngine {
           float noiseScale =
               float((uint32_t(seed) % 2001u) + 500u) * 1.0e-9f;
           for (uint32_t s = 0; s < duration; ++s) {
-            // Skip first 100 samples (CreepJS noise detection check).
+            // Skip first 100 samples (audio noise detection check).
             if (mWriteIndex + s < 100) continue;
             // Deterministic XOR-hash of (seed, channel, sample_position).
             uint32_t h = uint32_t(seed);

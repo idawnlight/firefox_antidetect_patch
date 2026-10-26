@@ -58,7 +58,7 @@ git push origin stealth-head/v150.0.1 --force
 
 ### 4. Test
 - E2E mouse suite: `release/stealthfox/tests/test_mouse.py` (12 cases)
-- Stealth: CreepJS, FP Pro, sannysoft, reCAPTCHA
+- Stealth: public fingerprinting test pages, a commercial fingerprinting service, a public bot-detection test page, a captcha service
 
 ### 5. Quando branch produce build pulito + test verde, rigenera patch series
 
@@ -186,7 +186,7 @@ Aree con alta turbolenza upstream → priorità refactor verso pattern
 2. `test_launch.py` — Firefox launches under Playwright (gap C5 sentinel)
 3. `test_new_page.py` — `ctx.new_page()` non hang (gap C6 sentinel)
 4. `test_mouse.py` — `page.mouse.{move,down,up,click,wheel}` tutti OK
-5. `test_stealth.py` — `navigator.webdriver=false` + sannysoft pass count
+5. `test_stealth.py` — `navigator.webdriver=false` + pass count on a public bot-detection test page
 
 Tutti i test verdi → branch riproducibile e funzionante.
 

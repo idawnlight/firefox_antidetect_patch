@@ -36,7 +36,7 @@
  * this file and it is VERIFIED, not assumed: `tests/gates/chrome_cursor.py`
  * drives `page.mouse.move` and reads the counter this object keeps.
  *
- * ⛔ AND IT IS OURS, NOT MOZILLA'S. Camoufox does this by patching
+ * ⛔ AND IT IS OURS, NOT MOZILLA'S. Another anti-detect Firefox fork does this by patching
  * `browser/base/content/browser-init.js`, a Mozilla file, which is a conflict
  * to resolve at every major. Everything here lives under `juggler/`, which we
  * already own, and the only foreign line is two in `TargetRegistry.js`.
