@@ -39,13 +39,30 @@ gfxDWriteFontFileStream::gfxDWriteFontFileStream(FontData* aData,
                                                  uint64_t aFontFileKey)
     : mData(aData), mFontFileKey(aFontFileKey) {}
 
+gfxDWriteFontFileStream::gfxDWriteFontFileStream(const uint8_t* aData,
+                                                 uint32_t aLength,
+                                                 uint64_t aFontFileKey,
+                                                 Borrowed)
+    : mBorrowed(aData), mBorrowedLength(aLength), mFontFileKey(aFontFileKey) {
+  // Nothing to copy. The caller guarantees the bytes outlive this object; see
+  // the header for why that guarantee holds for the only caller.
+}
+
 gfxDWriteFontFileStream::~gfxDWriteFontFileStream() {
   sFontFileStreams.erase(mFontFileKey);
 }
 
+const uint8_t* gfxDWriteFontFileStream::Bytes() const {
+  return mBorrowed ? mBorrowed : mData->Data();
+}
+
+uint32_t gfxDWriteFontFileStream::BytesLength() const {
+  return mBorrowed ? mBorrowedLength : mData->Length();
+}
+
 HRESULT STDMETHODCALLTYPE
 gfxDWriteFontFileStream::GetFileSize(UINT64* fileSize) {
-  *fileSize = mData->Length();
+  *fileSize = BytesLength();
   return S_OK;
 }
 
@@ -58,11 +75,11 @@ HRESULT STDMETHODCALLTYPE gfxDWriteFontFileStream::ReadFileFragment(
     const void** fragmentStart, UINT64 fileOffset, UINT64 fragmentSize,
     void** fragmentContext) {
   // We are required to do bounds checking.
-  if (fileOffset + fragmentSize > (UINT64)mData->Length()) {
+  if (fileOffset + fragmentSize > (UINT64)BytesLength()) {
     return E_FAIL;
   }
   // We should be alive for the duration of this.
-  *fragmentStart = mData->Data() + fileOffset;
+  *fragmentStart = Bytes() + fileOffset;
   *fragmentContext = nullptr;
   return S_OK;
 }
@@ -90,11 +107,16 @@ HRESULT STDMETHODCALLTYPE gfxDWriteFontFileLoader::CreateStreamFromKey(
   return S_OK;
 }
 
-/* static */
-HRESULT
-gfxDWriteFontFileLoader::CreateCustomFontFile(
-    FontData* aFontData, IDWriteFontFile** aFontFile,
-    gfxDWriteFontFileStream** aFontFileStream) {
+// Stealth: the body of the two entry points below, which differ ONLY in whether
+// the stream holds a FontData or borrows the bytes. Written as one function
+// instead of two so the registration, the key allocation and the locking cannot
+// drift apart. aBorrowedData non-null selects the borrowed stream (aFontData is
+// then ignored and may be null).
+static HRESULT CreateFontFileImpl(FontData* aFontData,
+                                  const uint8_t* aBorrowedData,
+                                  uint32_t aBorrowedLength,
+                                  IDWriteFontFile** aFontFile,
+                                  gfxDWriteFontFileStream** aFontFileStream) {
   MOZ_ASSERT(aFontFile);
   MOZ_ASSERT(aFontFileStream);
 
@@ -108,13 +130,17 @@ gfxDWriteFontFileLoader::CreateCustomFontFile(
   sFontFileStreamsMutex.Lock();
   uint64_t fontFileKey = sNextFontFileKey++;
   RefPtr<gfxDWriteFontFileStream> ffsRef =
-      new gfxDWriteFontFileStream(aFontData, fontFileKey);
+      aBorrowedData ? new gfxDWriteFontFileStream(
+                          aBorrowedData, aBorrowedLength, fontFileKey,
+                          gfxDWriteFontFileStream::Borrowed::Yes)
+                    : new gfxDWriteFontFileStream(aFontData, fontFileKey);
   sFontFileStreams[fontFileKey] = ffsRef;
   sFontFileStreamsMutex.Unlock();
 
   RefPtr<IDWriteFontFile> fontFile;
   HRESULT hr = factory->CreateCustomFontFileReference(
-      &fontFileKey, sizeof(fontFileKey), Instance(), getter_AddRefs(fontFile));
+      &fontFileKey, sizeof(fontFileKey),
+      gfxDWriteFontFileLoader::Instance(), getter_AddRefs(fontFile));
   if (FAILED(hr)) {
     NS_WARNING("Failed to load font file from data!");
     return hr;
@@ -124,6 +150,25 @@ gfxDWriteFontFileLoader::CreateCustomFontFile(
   ffsRef.forget(aFontFileStream);
 
   return S_OK;
+}
+
+/* static */
+HRESULT
+gfxDWriteFontFileLoader::CreateCustomFontFile(
+    FontData* aFontData, IDWriteFontFile** aFontFile,
+    gfxDWriteFontFileStream** aFontFileStream) {
+  return CreateFontFileImpl(aFontData, /* aBorrowedData */ nullptr,
+                            /* aBorrowedLength */ 0, aFontFile,
+                            aFontFileStream);
+}
+
+/* static */
+HRESULT
+gfxDWriteFontFileLoader::CreateBorrowedFontFile(
+    const uint8_t* aFontData, uint32_t aLength, IDWriteFontFile** aFontFile,
+    gfxDWriteFontFileStream** aFontFileStream) {
+  return CreateFontFileImpl(/* aFontData */ nullptr, aFontData, aLength,
+                            aFontFile, aFontFileStream);
 }
 
 size_t gfxDWriteFontFileLoader::SizeOfIncludingThis(

@@ -106,6 +106,24 @@ class gfxDWriteFontFileStream final : public IDWriteFontFileStream {
    * @param aData Font data
    */
   gfxDWriteFontFileStream(FontData* aData, uint64_t aFontFileKey);
+
+  /**
+   * Stealth: a stream that does NOT hold a FontData. The caller LENDS bytes it
+   * guarantees outlive the stream; the only user is the bundled-font cache in
+   * StealthBundleFontList, which is immortal by construction - that object is
+   * deliberately leaked and never clears the cache, and it stores refcounted
+   * blobs so rehashing cannot move the bytes.
+   *
+   * Why it exists: the bundle is 218.7 MB over 126 files, the largest a 35.4 MB
+   * .ttc with two faces, and DirectWrite holds one stream per FACE. A FontData
+   * owns a malloc'd buffer and frees it (gfx/thebes/FontData.h), so wrapping
+   * the cache's bytes in one means a permanent copy per face on top of the
+   * cache's own: that single file cost 106 MB where 35.4 is enough.
+   */
+  enum class Borrowed { Yes };
+  gfxDWriteFontFileStream(const uint8_t* aData, uint32_t aLength,
+                          uint64_t aFontFileKey, Borrowed);
+
   ~gfxDWriteFontFileStream();
 
   // IUnknown interface
@@ -141,7 +159,9 @@ class gfxDWriteFontFileStream final : public IDWriteFontFileStream {
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
     // We don't report the size of mData, because the original user font entry
-    // will account for that.
+    // will account for that. A borrowed stream owns no bytes either, and
+    // counting the lender's would double-count them in about:memory: the
+    // bundle cache is where those bytes belong and where they are reported.
     return 0;
   }
 
@@ -150,7 +170,15 @@ class gfxDWriteFontFileStream final : public IDWriteFontFileStream {
   }
 
  private:
+  // Exactly one of these two is in use: mData when the stream holds a FontData,
+  // mBorrowed when it was lent bytes that outlive it (then mData is null).
+  // Defined in the .cpp because FontData is only forward-declared here.
+  const uint8_t* Bytes() const;
+  uint32_t BytesLength() const;
+
   RefPtr<FontData> mData;
+  const uint8_t* mBorrowed = nullptr;
+  uint32_t mBorrowedLength = 0;
   mozilla::Atomic<uint32_t> mRefCnt;
   uint64_t mFontFileKey;
 };
@@ -209,6 +237,15 @@ class gfxDWriteFontFileLoader : public IDWriteFontFileLoader {
    */
   static HRESULT CreateCustomFontFile(
       FontData* aFontData, IDWriteFontFile** aFontFile,
+      gfxDWriteFontFileStream** aFontFileStream);
+
+  /**
+   * Stealth: as above, but the stream BORROWS aFontData instead of copying it.
+   * Only for bytes that outlive the stream; today that is exactly the bundled
+   * font cache. See gfxDWriteFontFileStream's Borrowed constructor.
+   */
+  static HRESULT CreateBorrowedFontFile(
+      const uint8_t* aFontData, uint32_t aLength, IDWriteFontFile** aFontFile,
       gfxDWriteFontFileStream** aFontFileStream);
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;

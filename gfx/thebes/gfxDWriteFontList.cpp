@@ -6,6 +6,7 @@
 
 #include "../2d/AutoHelpersWin.h"
 #include "SharedFontList-impl.h"
+#include "StealthBundleFontList.h"
 #include "gfxDWriteCommon.h"
 #include "gfxDWriteFonts.h"
 #include "gfxRect.h"
@@ -576,7 +577,7 @@ nsresult gfxDWriteFontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
     }
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
     fontlist::FontList* sharedFontList = pfl->SharedFontList();
-    if (!IsUserFont() && mShmemFace) {
+    if (ShouldPublishCharacterMap()) {
       mShmemFace->SetCharacterMap(sharedFontList, charmap, mShmemFamily);
       if (TrySetShmemCharacterMap()) {
         setCharMap = false;
@@ -737,8 +738,14 @@ gfxFont* gfxDWriteFontEntry::CreateFontInstance(
     // Only pass in the underlying IDWriteFont if the unscaled font doesn't
     // reflect a data font. This signals whether or not we can safely query
     // a descriptor to represent the font for various transport use-cases.
+    // STEALTH: il percorso di bundle viaggia con l'unscaled font. Senza,
+    // `GetFontDescriptor` fallisce e Gecko manda a WebRender i BYTE del font;
+    // e non puo' ricavarselo da solo perche' il nostro caricatore non e' un
+    // `IDWriteLocalFontFileLoader`. Per ogni altro font resta vuoto e il
+    // comportamento upstream non si muove.
     unscaledFont =
-        new UnscaledFontDWrite(fontFace, !mIsDataUserFont ? mFont : nullptr);
+        new UnscaledFontDWrite(fontFace, !mIsDataUserFont ? mFont : nullptr,
+                               mBundleFilePath);
     if (useBoldSim) {
       mUnscaledFontBold = unscaledFont;
     } else {
@@ -788,8 +795,8 @@ nsresult gfxDWriteFontEntry::CreateFontFace(
       } else if (mFontFile) {
         IDWriteFontFile* fontFile = mFontFile.get();
         hr = Factory::GetDWriteFactory()->CreateFontFace(
-            mFaceType, 1, &fontFile, 0, DWRITE_FONT_SIMULATIONS_NONE,
-            getter_AddRefs(mFontFace));
+            mFaceType, 1, &fontFile, mBundleFaceIndex,
+            DWRITE_FONT_SIMULATIONS_NONE, getter_AddRefs(mFontFace));
       } else {
         MOZ_ASSERT_UNREACHABLE("invalid font entry");
         return NS_ERROR_FAILURE;
@@ -1099,6 +1106,76 @@ static void GetPostScriptNameFromNameTable(IDWriteFontFace* aFace,
 
 already_AddRefed<gfxFontEntry> gfxDWriteFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
+  if (mStealthBundleOnly) {
+    // Uniform bundle path: instantiate the face straight from its bundle file
+    // (the manifest family list drives everything; the DWrite collection is not
+    // consulted). Like MakePlatformFont, but keeps multi-face .ttc files and
+    // addresses the wanted face by index (mBundleFaceIndex).
+    auto* bundle = StealthBundleFontList::Get();  // never null; it crashes first
+    const nsCString file(aFace->mDescriptor.AsString(SharedFontList()));
+    // Stealth: ONE copy of the file - the bundle cache's - lent to every face.
+    // This used to be three copies per instantiation (the cache's, a per-call
+    // nsTArray, and a malloc+memcpy) of which the DWrite stream then kept a
+    // fourth permanently, PER FACE. On the 35.4 MB .ttc with two faces that was
+    // 106 MB resident where 35.4 is enough, and the bundle is 218.7 MB over 126
+    // files. The borrow is safe because the cache is immortal by construction:
+    // StealthBundleFontList is deliberately leaked and never clears it.
+    RefPtr<StealthBundleFontList::FileBlob> blob = bundle->GetFaceBlob(file);
+    if (!blob || !blob->Length()) {
+      return nullptr;
+    }
+    RefPtr<gfxDWriteFontFileStream> stream;
+    RefPtr<IDWriteFontFile> fontFile;
+    HRESULT hr = gfxDWriteFontFileLoader::CreateBorrowedFontFile(
+        blob->Data(), blob->Length(), getter_AddRefs(fontFile),
+        getter_AddRefs(stream));
+    if (FAILED(hr)) {
+      return nullptr;
+    }
+    nsAutoCString uniqueName;
+    if (NS_FAILED(gfxFontUtils::MakeUniqueUserFontName(uniqueName))) {
+      return nullptr;
+    }
+    RefPtr entry = MakeRefPtr<gfxDWriteFontEntry>(
+        uniqueName, fontFile, stream, aFace->mWeight, aFace->mWidth,
+        aFace->mStyle);
+    entry->mBundleFaceIndex = aFace->mIndex;
+    // Il percorso va dichiarato insieme ai byte: e' la stessa funzione che
+    // risolve il blob qui sopra, quindi non e' una seconda fonte. Se manca si
+    // prosegue: il font disegna, si paga solo la copia verso WebRender.
+    nsAutoCString percorso;
+    if (StealthBundleFontList::GetFacePath(file, percorso)) {
+      // `get()` torna un `char16ptr_t`, che su Windows converte da solo a
+      // `const wchar_t*` (`mfbt/Char16.h:49`): niente reinterpret_cast.
+      entry->mBundleFilePath = std::wstring(NS_ConvertUTF8toUTF16(percorso).get());
+    }
+    BOOL supported;
+    DWRITE_FONT_FILE_TYPE fileType;
+    UINT32 numFaces;
+    if (FAILED(fontFile->Analyze(&supported, &fileType, &entry->mFaceType,
+                                 &numFaces)) ||
+        !supported || aFace->mIndex >= numFaces) {
+      return nullptr;
+    }
+    // Wire the entry back to its shared-list face. This was the last of the
+    // three bundle-only branches still omitting it: Linux was fixed 2026-08-07,
+    // macOS already had it, and a comment in gfxFcPlatformFontList.cpp asserted
+    // THIS one did too, citing a line number that is in the host-collection
+    // branch below. The comment was wrong and the consequence was invisible -
+    // mShmemFace stayed null for every bundled face on Windows, so
+    // GetStealthBundleVMetrics returned false and the manifest's vertical
+    // metrics were never applied here at all.
+    //
+    // Nothing LOOKED broken, because Windows fell back to DirectWrite's own
+    // metrics and the manifest was computed to reproduce exactly those: the
+    // cross-OS parity gate passed 68/68 on numbers that came from two different
+    // sources happening to agree. That is a coincidence held in place by the
+    // generator being right, not a mechanism - had DWrite changed how it
+    // derives any metric, Windows would have drifted from the file that claims
+    // to define it and nothing would have said so.
+    entry->InitializeFrom(aFace, aFamily);
+    return entry.forget();
+  }
   IDWriteFontCollection* collection =
 #ifdef MOZ_BUNDLED_FONTS
       aFamily->IsBundled() ? mBundledFonts : mSystemFonts;
@@ -1365,6 +1442,11 @@ void gfxDWriteFontList::AppendFamiliesFromCollection(
 void gfxDWriteFontList::GetFacesInitDataForFamily(
     const fontlist::Family* aFamily, nsTArray<fontlist::Face::InitData>& aFaces,
     bool aLoadCmaps) const {
+  if (mStealthBundleOnly) {
+    StealthBundleFontList::Get()->GetFaces(
+        aFamily->DisplayName().AsString(SharedFontList()), aFaces);
+    return;
+  }
   IDWriteFontCollection* collection =
 #ifdef MOZ_BUNDLED_FONTS
       aFamily->IsBundled() ? mBundledFonts : mSystemFonts;
@@ -1451,6 +1533,13 @@ bool gfxDWriteFontList::ReadFaceNames(const fontlist::Family* aFamily,
                                       const fontlist::Face* aFace,
                                       nsCString& aPSName,
                                       nsCString& aFullName) {
+  if (mStealthBundleOnly) {
+    // STEALTH [B317]: the bundle's faces are in no DirectWrite collection
+    // (their Index() is kNoIndex), so the lookup below can only fail for them.
+    // The base reads their names from the bundle file, on every platform.
+    return gfxPlatformFontList::ReadFaceNames(aFamily, aFace, aPSName,
+                                              aFullName);
+  }
   IDWriteFontCollection* collection =
 #ifdef MOZ_BUNDLED_FONTS
       aFamily->IsBundled() ? mBundledFonts : mSystemFonts;
@@ -1529,6 +1618,14 @@ bool gfxDWriteFontList::ReadFaceNames(const fontlist::Family* aFamily,
 
 void gfxDWriteFontList::ReadFaceNamesForFamily(
     fontlist::Family* aFamily, bool aNeedFullnamePostscriptNames) {
+  if (mStealthBundleOnly) {
+    // STEALTH [B317]: see ReadFaceNames above. Returning early here, as the
+    // collection lookup below did, left every bundled family without its
+    // src:local() names and its alternate family names.
+    gfxPlatformFontList::ReadFaceNamesForFamily(aFamily,
+                                                aNeedFullnamePostscriptNames);
+    return;
+  }
   if (!aFamily->IsInitialized()) {
     if (!InitializeFamily(aFamily)) {
       return;
@@ -1578,39 +1675,7 @@ void gfxDWriteFontList::ReadFaceNamesForFamily(
         continue;
       }
 
-      AutoTArray<nsCString, 4> otherFamilyNames;
-      gfxFontUtils::ReadOtherFamilyNamesForFace(familyName, data, size,
-                                                otherFamilyNames, false);
-      for (const auto& alias : otherFamilyNames) {
-        nsAutoCString key(alias);
-        ToLowerCase(key);
-        auto aliasData = mAliasTable.GetOrInsertNew(key);
-        aliasData->InitFromFamily(aFamily, familyName);
-        aliasData->mFaces.AppendElement(facePtrs[i]);
-      }
-
-      nsAutoCString psname, fullname;
-      // Bug 1854090: don't load PSname if the family name ends with ".tmp",
-      // as some PDF-related software appears to pollute the font collection
-      // with spurious re-encoded versions of standard fonts like Arial, fails
-      // to alter the PSname, and thus can result in garbled rendering because
-      // the wrong resource may be found via src:local(...).
-      if (!StringEndsWith(key, ".tmp"_ns)) {
-        if (NS_SUCCEEDED(gfxFontUtils::ReadCanonicalName(
-                data, size, gfxFontUtils::NAME_ID_POSTSCRIPT, psname))) {
-          ToLowerCase(psname);
-          MaybeAddToLocalNameTable(psname,
-                                   fontlist::LocalFaceRec::InitData(key, i));
-        }
-      }
-      if (NS_SUCCEEDED(gfxFontUtils::ReadCanonicalName(
-              data, size, gfxFontUtils::NAME_ID_FULL, fullname))) {
-        ToLowerCase(fullname);
-        if (fullname != psname) {
-          MaybeAddToLocalNameTable(fullname,
-                                   fontlist::LocalFaceRec::InitData(key, i));
-        }
-      }
+      RecordFaceNamesFromTable(aFamily, i, key, familyName, data, size);
 
       dwFontFace->ReleaseFontTable(context);
     }
@@ -1680,16 +1745,24 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
       forceClassicFams.Sort();
     }
     nsTArray<fontlist::Family::InitData> families;
-    AppendFamiliesFromCollection(mSystemFonts, families, &forceClassicFams);
+    if (mStealthBundleOnly) {
+      // Uniform bundle: the family list is our manifest, not the DWrite
+      // collection enumeration (host fonts never enter). The collections above
+      // are still set up so mGDIInterop etc. stay valid; CreateFontEntry
+      // rasterizes each face straight from its bundle file.
+      families = StealthBundleFontList::Get()->Families().Clone();
+    } else {
+      AppendFamiliesFromCollection(mSystemFonts, families, &forceClassicFams);
 #ifdef MOZ_BUNDLED_FONTS
-    if (mBundledFonts) {
-      TimeStamp start2 = TimeStamp::Now();
-      AppendFamiliesFromCollection(mBundledFonts, families);
-      TimeStamp end2 = TimeStamp::Now();
-      glean::fontlist::bundledfonts_activate.AccumulateRawDuration(
-          (end1 - start1) + (end2 - start2));
-    }
+      if (mBundledFonts) {
+        TimeStamp start2 = TimeStamp::Now();
+        AppendFamiliesFromCollection(mBundledFonts, families);
+        TimeStamp end2 = TimeStamp::Now();
+        glean::fontlist::bundledfonts_activate.AccumulateRawDuration(
+            (end1 - start1) + (end2 - start2));
+      }
 #endif
+    }
     SharedFontList()->SetFamilyNames(families);
     GetPrefsAndStartLoader();
   }
@@ -1698,8 +1771,29 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
     return;
   }
 
-  GetDirectWriteSubstitutes();
-  GetFontSubstitutes();
+  // STEALTH: under bundle-only the aliases come from the manifest and are
+  // applied for every OS in gfxPlatformFontList::FindAndAddFamiliesLocked.
+  // These two build the platform's own table instead, and GetFontSubstitutes()
+  // reads it from the HOST REGISTRY (HKLM\...\FontSubstitutes) - so the set of
+  // resolvable alias names varied by machine (third-party software adds
+  // entries) and existed on no other OS. Measured 2026-08-07: "HELV" and
+  // "Small Fonts" resolved here and nowhere else, giving raw_fonts_n 8 on
+  // Windows against 6 on Linux.
+  //
+  // Note bundle-only made this WORSE rather than better: the pref
+  // gfx.windows-font-substitutes.always defaults false, i.e. "substitute only
+  // when the original family is absent", and with the family list cut to 72
+  // no alias name is ever present, so every possible substitution registered.
+  //
+  // Suppressed only when the manifest actually carries aliases; against a
+  // v1/v2 manifest the old behaviour stands, because removing the aliases
+  // outright would suppress a signal a real Windows Firefox does emit.
+  auto* stealthBundle =
+      mStealthBundleOnly ? StealthBundleFontList::Get() : nullptr;
+  if (!stealthBundle || !stealthBundle->HasAliases()) {
+    GetDirectWriteSubstitutes();
+    GetFontSubstitutes();
+  }
 }
 
 nsresult gfxDWriteFontList::InitFontListForPlatform() {
@@ -1765,12 +1859,18 @@ nsresult gfxDWriteFontList::InitFontListForPlatform() {
 
   QueryPerformanceCounter(&t3);  // system font collection
 
-  GetFontsFromCollection(mSystemFonts);
+  // Stealth bundle-only: skip the host system-font enumeration entirely; only
+  // the bundled collection (above) populates the list, so no host font enters.
+  if (!mStealthBundleOnly) {
+    GetFontsFromCollection(mSystemFonts);
+  }
 
   // if no fonts found, something is out of whack, bail and use GDI backend
-  NS_ASSERTION(mFontFamilies.Count() > kBundledCount,
+  // (skip this when stealth bundle-only is active: we intentionally add no
+  // system fonts, so Count()==kBundledCount is the expected, correct state).
+  NS_ASSERTION(mStealthBundleOnly || mFontFamilies.Count() > kBundledCount,
                "no fonts found in the system fontlist -- holy crap batman!");
-  if (mFontFamilies.Count() == kBundledCount) {
+  if (!mStealthBundleOnly && mFontFamilies.Count() == kBundledCount) {
     glean::fontlist::dwritefont_init_problem.AccumulateSingleSample(
         uint32_t(errNoFonts));
     return NS_ERROR_FAILURE;
@@ -1779,14 +1879,23 @@ nsresult gfxDWriteFontList::InitFontListForPlatform() {
   QueryPerformanceCounter(&t4);  // iterate over system fonts
 
   mOtherFamilyNamesInitialized = true;
-  GetFontSubstitutes();
+  // STEALTH: see the note at the shared-list call site above - under
+  // bundle-only with a v3 manifest the aliases are ours, not the host's.
+  auto* stealthBundle2 =
+      mStealthBundleOnly ? StealthBundleFontList::Get() : nullptr;
+  const bool stealthAliases = stealthBundle2 && stealthBundle2->HasAliases();
+  if (!stealthAliases) {
+    GetFontSubstitutes();
+  }
 
   // bug 642093 - DirectWrite does not support old bitmap (.fon)
   // font files, but a few of these such as "Courier" and "MS Sans Serif"
   // are frequently specified in shoddy CSS, without appropriate fallbacks.
   // By mapping these to TrueType equivalents, we provide better consistency
   // with both pre-DW systems and with IE9, which appears to do the same.
-  GetDirectWriteSubstitutes();
+  if (!stealthAliases) {
+    GetDirectWriteSubstitutes();
+  }
 
   // bug 551313 - DirectWrite creates a Gill Sans family out of
   // poorly named members of the Gill Sans MT family containing
