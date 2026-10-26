@@ -84,9 +84,9 @@ jobs:
         run: |
           cd dl
           EXPECTED="
-          firefox-151.0-stealth-linux-x86_64.tar.gz
-          firefox-151.0-stealth-linux-arm64.tar.gz
-          firefox-151.0-stealth-win-x86_64.zip
+          firefox-157.0.1-stealth-linux-x86_64.tar.gz
+          firefox-157.0.1-stealth-linux-arm64.tar.gz
+          firefox-157.0.1-stealth-win-x86_64.zip
           "
           for a in $EXPECTED; do
             [ -s "$a" ] || { echo "ERROR: missing/empty release asset: $a (a build leg silently dropped out?)"; exit 1; }
@@ -96,7 +96,7 @@ jobs:
         run: |
           cd dl; ls -la
           # explicit glob — never include checksums.txt itself (the `*`-includes-itself trap)
-          sha256sum firefox-151.0-stealth-* > checksums.txt
+          sha256sum firefox-157.0.1-stealth-* > checksums.txt
           echo "----- checksums.txt -----"; cat checksums.txt
       # The tag, its number for the title and the previous tag for the changelog
       # range are the caller's plan (scripts/release_plan.py), not derived here.
@@ -166,7 +166,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag }}
-          name: firefox_antidetect_patch (151.0) rev ${{ inputs.num }}
+          name: firefox_antidetect_patch (157.0.1) rev ${{ inputs.num }}
           draft: true
           prerelease: false
           fail_on_unmatched_files: true

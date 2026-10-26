@@ -31,7 +31,7 @@ on:
     inputs:
       source_ref:
         description: 'firefox_antidetect_patch ref to build'
-        default: 'stealth/151'
+        default: 'stealth/157'
       kind:
         description: >
           candidate: build and gate, publish nothing (no seal, no draft); its
@@ -65,7 +65,7 @@ on:
 
 env:
   SOURCE_REPO: feder-cr/firefox_antidetect_patch
-  SOURCE_REF: ${{ github.event.inputs.source_ref || 'stealth/151' }}
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'stealth/157' }}
 
 jobs:
   # What this run is, decided once and before the builds: a release with a bad
@@ -129,14 +129,14 @@ jobs:
             target: ''
             rust_target: x86_64-unknown-linux-gnu
             extra_pkgs: ''
-            asset: firefox-151.0-stealth-linux-x86_64.tar.gz
+            asset: firefox-157.0.1-stealth-linux-x86_64.tar.gz
           - leg: linux-arm64
             runner: ubuntu-24.04-arm
             family: linux
             target: ''
             rust_target: aarch64-unknown-linux-gnu
             extra_pkgs: ''
-            asset: firefox-151.0-stealth-linux-arm64.tar.gz
+            asset: firefox-157.0.1-stealth-linux-arm64.tar.gz
           - leg: win-x86_64
             runner: ubuntu-24.04
             family: win
@@ -144,7 +144,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust_target: x86_64-pc-windows-msvc
             extra_pkgs: 'msitools p7zip-full zip'
-            asset: firefox-151.0-stealth-win-x86_64.zip
+            asset: firefox-157.0.1-stealth-win-x86_64.zip
     steps:
       - name: Free disk + 16G swap (Linux runners)
         run: |

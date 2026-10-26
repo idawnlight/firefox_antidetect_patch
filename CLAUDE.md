@@ -2,7 +2,7 @@
 
 # Questo albero non e' mozilla-central: e' il nostro Firefox patchato
 
-Ramo `stealth/151`. Le istruzioni di Mozilla qui sopra valgono; queste vengono
+Ramo `stealth/157`. Le istruzioni di Mozilla qui sopra valgono; queste vengono
 prima quando si contraddicono.
 
 ## Sei nell'unico posto dove il sorgente si modifica
@@ -10,7 +10,7 @@ prima quando si contraddicono.
 `C:/ff/source` (da WSL `/mnt/c/ff/source`). Non cercarne un altro e non
 crearne: **`~/ff-build/firefox-150` e' uno specchio di build**, esiste solo
 perche' Firefox si compila nativamente su ciascun sistema, e un hook di
-pre-commit li' rifiuta i commit. Si allinea con `git fetch win stealth/151`.
+pre-commit li' rifiuta i commit. Si allinea con `git fetch win stealth/157`.
 macOS non ha checkout locale, lo costruisce la CI dalla stessa storia.
 
 Un solo `.mozconfig`, alla radice, identico per le due macchine - e decide
