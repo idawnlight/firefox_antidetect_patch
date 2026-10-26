@@ -48,6 +48,23 @@ ac_add_options --enable-release
 # MOZ_TELEMETRY_REPORTING, che ha `default=mozilla_official`.
 export MOZILLA_OFFICIAL=1
 
+# ⛔ UNA BUILD UFFICIALE DICE DA QUALE SORGENTE VIENE, e quel flag la rende
+# ufficiale: MOZ_INCLUDE_SOURCE_INFO ha `default=mozilla_official`
+# (toolkit/moz.configure), e scrive repository e changeset in source-repo.h e in
+# application.ini / platform.ini (SourceRepository, SourceStamp). Da un checkout
+# git di questo fork la build non sa nominarli, quindi li dichiariamo: quelli
+# del retail della stessa versione, letti da browser/config/upstream_source.txt
+# (il perche' e da dove si prendono sta li'; scripts/check_upstream_source.py
+# rifiuta un file rimasto alla versione precedente).
+#
+# Fino al 151 la loro assenza non si vedeva: packager.mk estraeva l'URL con awk,
+# che non stampava niente, e ogni binario fino a firefox-53 e' uscito senza
+# SourceRepository e SourceStamp, che il retail ha. Dal 157
+# make_sourcestamp_file.py rifiuta l'header vuoto e `mach package` fallisce.
+MOZ_SOURCE_REPO="$(sed -n 's/^repo=//p' "$topsrcdir/browser/config/upstream_source.txt")"
+MOZ_SOURCE_CHANGESET="$(sed -n 's/^changeset=//p' "$topsrcdir/browser/config/upstream_source.txt")"
+export MOZ_SOURCE_REPO MOZ_SOURCE_CHANGESET
+
 # Il canale compare nella URL di aggiornamento e determina MOZ_APP_REMOTINGNAME
 # (toolkit/moz.configure:3336-3350): con "release" vale `firefox`, altrimenti
 # `firefox-<canale>`, e il nostro era `firefox-default`.

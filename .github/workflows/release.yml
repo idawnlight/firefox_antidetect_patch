@@ -198,6 +198,16 @@ jobs:
         shell: bash
         run: python3 scripts/check_release_naming.py
 
+      # The source the official build states (browser/config/upstream_source.txt,
+      # read by the .mozconfig) must be the retail's of the version this tree
+      # builds; a port that moves the base and leaves the file behind would
+      # write the previous release's changeset into application.ini. Seconds,
+      # here, before the build; --online also asks Mozilla's build record.
+      - name: Check the declared upstream source matches the version this tree builds
+        if: matrix.leg == 'linux-x86_64'
+        shell: bash
+        run: python3 scripts/check_upstream_source.py --online
+
       # Juggler tested without a browser, seconds here before hours of build.
       # The channel between its two halves: a request answered from another
       # channel end's kept answers is never dispatched and nothing says so (a
@@ -220,6 +230,7 @@ jobs:
         run: |
           python3 scripts/validate_release.py --selftest
           python3 scripts/test_make_seal.py
+          python3 scripts/test_check_upstream_source.py
 
       # Record which firefox_antidetect_patch commit this build came from. The publish
       # job turns the range previous-release..this commit into the release notes
