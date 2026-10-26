@@ -275,8 +275,8 @@ void StealthBundleFontList::GetFaces(const nsACString& aFamilyName,
         false,  // mFixedPitch (manifest does not carry it yet)
         WeightRange(FontWeight::FromInt(f.mWeightMin),
                     FontWeight::FromInt(f.mWeightMax)),
-        StretchRange(FontStretch::FromFloat(f.mStretchMin),
-                     FontStretch::FromFloat(f.mStretchMax)),
+        WidthRange(FontWidth::FromFloat(f.mStretchMin),
+                   FontWidth::FromFloat(f.mStretchMax)),
         SlantStyleRange(f.mItalic ? FontSlantStyle::ITALIC
                                   : FontSlantStyle::NORMAL),
         nullptr,  // mCharMap

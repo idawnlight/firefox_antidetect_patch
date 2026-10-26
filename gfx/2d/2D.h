@@ -1222,23 +1222,22 @@ class FTUserFontData final
   // hash rialloca a spostarsi e' il puntatore e mai i byte.
   //
   // Serve un costruttore NUOVO: `FontData` e' il proprietario che chiama
-  // `free()` sui suoi byte, quindi un puntatore mappato incartato li' dentro
-  // finirebbe in pasto a `free` quando l'ultimo riferimento muore. Per questo
-  // qui il `FontData` riceve un riferimento in piu' che non viene mai
-  // rilasciato: non arriva mai a zero, `~FontData` non gira, i byte restano di
-  // chi li ha prestati. Cosi' `mFontData` e' valorizzato come per ogni altra
-  // faccia e `CloneFace` (gfx/2d/Factory.cpp) e i chiamanti di `GetData()` /
-  // `Length()` funzionano senza sapere nulla del prestito.
+  // `free()` sui suoi byte, quindi un puntatore mappato non puo' stare li'
+  // dentro. I byte prestati restano in `mBorrowedData` / `mBorrowedLength`,
+  // `mFontData` resta nullo, e `GetData()` / `Length()` rispondono per
+  // entrambi i casi, cosi' i chiamanti non sanno nulla del prestito.
+  // `CloneFace` (gfx/2d/Factory.cpp) apre i byte prestati quando manca
+  // `mFontData`.
   enum class Prestito { Si };
   FTUserFontData(const uint8_t* aData, uint32_t aLength, Prestito)
-      : mFontData(new FontData(std::move(aData), aLength)) {
-    (void)do_AddRef(mFontData).take();
-  }
+      : mBorrowedData(aData), mBorrowedLength(aLength) {}
 
   const uint8_t* GetData() const {
-    return mFontData ? mFontData->Data() : nullptr;
+    return mFontData ? mFontData->Data() : mBorrowedData;
   }
-  uint32_t Length() const { return mFontData ? mFontData->Length() : 0; }
+  uint32_t Length() const {
+    return mFontData ? mFontData->Length() : mBorrowedLength;
+  }
 
   already_AddRefed<mozilla::gfx::SharedFTFace> CloneFace(
       int aFaceIndex = 0) override;
@@ -1248,6 +1247,8 @@ class FTUserFontData final
 
   std::string mFilename;
   RefPtr<FontData> mFontData;
+  const uint8_t* mBorrowedData = nullptr;
+  uint32_t mBorrowedLength = 0;
 };
 
 /** SharedFTFace is a shared wrapper around an FT_Face. It is ref-counted,

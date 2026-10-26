@@ -16,7 +16,7 @@
 typedef struct hb_blob_t hb_blob_t;
 
 // One manifest face, stored as trivially-copyable raw values. Both
-// fontlist::Face::InitData and the CSS WeightRange/StretchRange/SlantStyleRange
+// fontlist::Face::InitData and the CSS WeightRange/WidthRange/SlantStyleRange
 // types are move-only (deleted copy), so we cannot cache them; instead we cache
 // these primitives and build a fresh Face::InitData (with fresh ranges) per
 // GetFaces call, the way the platform backends build theirs.

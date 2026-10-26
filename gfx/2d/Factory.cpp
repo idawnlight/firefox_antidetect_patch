@@ -119,9 +119,16 @@ FT_Library Factory::mFTLibrary = nullptr;
 StaticMutex Factory::mFTLock;
 
 already_AddRefed<SharedFTFace> FTUserFontData::CloneFace(int aFaceIndex) {
-  if (mFontData) {
-    RefPtr<SharedFTFace> face =
-        Factory::NewSharedFTFaceFromData(nullptr, mFontData, aFaceIndex, this);
+  if (mFontData || mBorrowedData) {
+    RefPtr<SharedFTFace> face;
+    if (mFontData) {
+      face = Factory::NewSharedFTFaceFromData(nullptr, mFontData, aFaceIndex,
+                                              this);
+    } else if (FT_Face ft = Factory::NewFTFaceFromData(
+                   nullptr, mBorrowedData, mBorrowedLength, aFaceIndex)) {
+      // STEALTH: bundle bytes lent by StealthBundleFontList (see 2D.h).
+      face = MakeAndAddRef<SharedFTFace>(ft, this);
+    }
     if (!face ||
         (FT_Select_Charmap(face->GetFace(), FT_ENCODING_UNICODE) != FT_Err_Ok &&
          FT_Select_Charmap(face->GetFace(), FT_ENCODING_MS_SYMBOL) !=
