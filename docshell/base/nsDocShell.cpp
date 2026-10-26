@@ -12153,6 +12153,24 @@ nsresult nsDocShell::EnsureCommandHandler() {
 
 // link handling
 
+// STEALTHFOX (juggler): a link click or form submission is a PLANNED
+// navigation, an OnLinkClickEvent that runs after the input that caused it
+// returns; from 157 a form submission is one too
+// (dom.forms.submit_async_navigation, true as in the retail). Juggler reports
+// the plan as Page.linkClicked "before" and its end as "after"
+// (juggler/content/PageAgent.js), so a client can tell an action that is about
+// to navigate from one that is not: without it the POST of a submitted form was
+// announced after page.click() had returned. Every "before" gets exactly one
+// "after", sent when the navigation starts or when the plan is cancelled
+// (another submission replaces it), so a client waiting on the pair is never
+// left waiting. Observer notifications: nothing a page can see.
+static void NotifyJugglerLinkClick(nsIContent* aContent, const char* aTopic) {
+  if (nsCOMPtr<nsIObserverService> observerService =
+          mozilla::services::GetObserverService()) {
+    observerService->NotifyObservers(ToSupports(aContent), aTopic, nullptr);
+  }
+}
+
 class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
  public:
   OnLinkClickEvent(nsDocShell* aHandler, nsIContent* aContent,
@@ -12180,6 +12198,7 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
       mHandler->OnLinkClickSync(mContent, mLoadState, mNoOpenerImplied,
                                 mTriggeringPrincipal);
     }
+    NotifyJugglerDone();
     return NS_OK;
   }
 
@@ -12188,7 +12207,18 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
     // Don't clear mLoadState, etc. here since this can be called
     // from the OnLinkClickSync() above, and we might be holding
     // the last references to them.
+    NotifyJugglerDone();
     return NS_OK;
+  }
+
+  // STEALTHFOX (juggler): the "after" of the "before" OnLinkClickWithLoadState
+  // sent, once, whichever of Run and Cancel comes first.
+  void NotifyJugglerDone() {
+    if (mJugglerNotified) {
+      return;
+    }
+    mJugglerNotified = true;
+    NotifyJugglerLinkClick(mContent, "juggler-link-click-sync");
   }
 
  private:
@@ -12198,6 +12228,7 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
   nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
   bool mNoOpenerImplied;
   bool mCancelled = false;
+  bool mJugglerNotified = false;
 };
 
 OnLinkClickEvent::OnLinkClickEvent(nsDocShell* aHandler, nsIContent* aContent,
@@ -12238,6 +12269,9 @@ Result<RefPtr<OnLinkClickEvent>, nsresult> nsDocShell::OnLinkClickWithLoadState(
   RefPtr<nsIRunnable> runnable = ev;
   nsresult rv = Dispatch(runnable.forget());
   NS_ENSURE_SUCCESS(rv, Err(rv));
+  // STEALTHFOX (juggler): the plan exists only once it is dispatched, so the
+  // "before" is sent here and never for a click that planned nothing.
+  NotifyJugglerLinkClick(aContent, "juggler-link-click");
   return ev;
 }
 
