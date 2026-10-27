@@ -490,6 +490,10 @@ jobs:
         # primo e ogni corsa da 1-2 ore ne mostra uno o due, che e' il modo piu'
         # lento di portare la pila su una versione nuova. Su una build che
         # riesce non cambia niente.
+        # The disk too: the Windows leg of run 40466778026 stopped logging after
+        # 86 of its 175 minutes with memory at 3 of 16 GB, and the runner never
+        # answered again - the pattern of a full disk, which the next run will
+        # show or rule out.
         # 300 since PGO + full LTO (2026-10-27): the first Windows leg with
         # them compiled for 156 minutes before its link, cold; the job's own
         # limit (350) stays above it.
@@ -501,7 +505,7 @@ jobs:
         # run 40446702889 failed after its log stream had stopped, and no
         # line of the failure was left to read.
         run: |
-          ( while sleep 120; do free -m | awk 'NR==2{m=$3"/"$2} NR==3{s=$3"/"$2} END{print "[mem] used " m " MB, swap " s " MB"}'; done ) &
+          ( while sleep 120; do echo "$(free -m | awk 'NR==2{m=$3"/"$2} NR==3{s=$3"/"$2} END{print "[mem] used " m " MB, swap " s " MB"}'), disk free $(df -BG --output=avail / | tail -1 | tr -d ' ')"; done ) &
           set -o pipefail
           ./mach build --keep-going 2>&1 | tee build.log
       - name: Upload the build log of a failed build
