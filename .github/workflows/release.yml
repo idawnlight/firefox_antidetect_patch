@@ -244,6 +244,7 @@ jobs:
           python3 scripts/validate_release.py --selftest
           python3 scripts/test_make_seal.py
           python3 scripts/test_check_upstream_source.py
+          python3 scripts/test_toolchain_parity.py
 
       # Record which firefox_antidetect_patch commit this build came from. The publish
       # job turns the range previous-release..this commit into the release notes
@@ -307,8 +308,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y util-linux binutils ${{ matrix.extra_pkgs }}
 
-      - name: Add Rust target
-        run: rustup target add ${{ matrix.rust_target }} || true
+      # The retail's Rust, not the runner's. --enable-bootstrap fetches clang
+      # from Mozilla but takes Rust from PATH, and the runner's "stable" built
+      # the 157 candidates with rustc 1.99.0 against the retail's 1.95.0 - and
+      # would have moved by itself next month. scripts/toolchain_parity.py
+      # compares the result with the retail's about:buildconfig at every build.
+      - name: Rust 1.95.0, the retail 157's
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --target ${{ matrix.rust_target }}
+          rustup default 1.95.0
+          rustc --version
 
       # LA CACHE DI COMPILAZIONE DELLE CANDIDATE (compile_cache=gha, deciso da
       # scripts/release_plan.py). La corsa dopo una correzione deve ricompilare

@@ -1,0 +1,11 @@
+{
+ "_comment": "Compile-time differences from the retail of the same version that are known and not fixed yet. Each says why. toolchain_parity.py fails on an undeclared difference and on a declaration that no longer matches one.",
+ "exceptions": [
+  {"key": "option --enable-profile-use", "platforms": ["win64", "linux-x86_64", "linux-aarch64"],
+   "why": "No PGO yet: the retail uses Mozilla's own training profile (merged.profdata). Whether a page can time the difference is to be measured on the same machine before PGO is built (2026-10-27)."},
+  {"key": "option --with-pgo-jarlog", "platforms": ["win64", "linux-x86_64", "linux-aarch64"],
+   "why": "Part of PGO: the startup order of omni.ja. Goes with --enable-profile-use."},
+  {"key": "option MOZ_LTO", "platforms": ["win64", "linux-x86_64", "linux-aarch64"],
+   "why": "No cross-language LTO yet; Mozilla turns it on together with PGO. Same measurement as --enable-profile-use."}
+ ]
+}
