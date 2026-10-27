@@ -264,6 +264,7 @@ jobs:
           python3 scripts/test_toolchain_parity.py
           python3 scripts/test_upstream_toolchain.py
           python3 scripts/test_memory_watch.py
+          python3 scripts/test_workflow_cache_rules.py
 
       # Record which firefox_antidetect_patch commit this build came from. The publish
       # job turns the range previous-release..this commit into the release notes
@@ -478,6 +479,7 @@ jobs:
           echo "----- final .mozconfig -----"; cat .mozconfig
 
       - name: Build
+        id: build
         # ⛔ Un tetto sul PASSO, non solo sul job. Il 2026-08-26 la gamba
         # win-x86_64 si e' piantata sul download del toolchain Microsoft che
         # `--enable-bootstrap` fa a inizio build: nessuna riga emessa per oltre
@@ -559,7 +561,10 @@ jobs:
       - name: Compile cache (candidates only) - save this leg's
         # Also when the build failed: the runs that fix a port fail by design,
         # and they are the ones the cache is for.
-        if: always() && needs.plan.outputs.compile_cache == 'gha'
+        # Never when the build did not start: run 40519477694, cancelled during
+        # checkout, saved an empty arm64 entry, and the next run would have
+        # restored that one - the newest of its leg - and compiled cold.
+        if: always() && needs.plan.outputs.compile_cache == 'gha' && (steps.build.outcome == 'success' || steps.build.outcome == 'failure' || steps.build.outcome == 'cancelled')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/sccache-ci
