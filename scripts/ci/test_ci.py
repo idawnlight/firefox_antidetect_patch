@@ -179,6 +179,12 @@ def main() -> int:
                      for i, l in enumerate(p.read_text(encoding="utf-8").splitlines()) if literal.search(l))
     cases.append(("no workflow writes a versioned asset name (%s)" % (", ".join(written) or "none"), not written))
 
+    # verify-hidden-desktop.yml was a copy of the gate's guards with another
+    # setup (the published core, no seal) and said it was the same command.
+    copies = sorted(p.name for p in wf.glob("*.yml")
+                    if "tests/test_hidden_desktop.py" in p.read_text(encoding="utf-8") and p.name != "gate.yml")
+    cases.append(("the gate's guards run in gate.yml only (copies: %s)" % (", ".join(copies) or "none"), not copies))
+
     import payload_guard as pg
 
     def guard(view, download=(0, "", ""), published=b"SEAL", ours=b"SEAL"):
