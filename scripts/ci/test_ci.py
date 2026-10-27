@@ -172,6 +172,44 @@ def main() -> int:
         cases.append(("a failed phase names why", "KILLED" in table[("win-x86_64", "build")][2]))
         cases.append(("a leg that never started is a row", table[("linux-arm64", "-")][2] == "⚪ never started"))
 
+    import re
+    literal = re.compile(r"firefox-\d+(\.\d+)*-stealth-")
+    wf = HERE.parent.parent / ".github" / "workflows"
+    written = sorted("%s:%d" % (p.name, i + 1) for p in wf.glob("*.yml")
+                     for i, l in enumerate(p.read_text(encoding="utf-8").splitlines()) if literal.search(l))
+    cases.append(("no workflow writes a versioned asset name (%s)" % (", ".join(written) or "none"), not written))
+
+    import payload_guard as pg
+
+    def guard(view, download=(0, "", ""), published=b"SEAL", ours=b"SEAL"):
+        with tempfile.TemporaryDirectory() as t:
+            seal = Path(t) / "seal.json"
+            seal.write_bytes(ours)
+
+            def gh(args):
+                if args[:2] == ["release", "view"]:
+                    return view
+                if download[0] == 0:
+                    out = Path(args[args.index("--dir") + 1])
+                    (out / "seal.json").write_bytes(published)
+                return download
+            try:
+                return pg.check("firefox-60", "o/r", seal, gh)
+            except pg.GuardError as exc:
+                return "REFUSED " + str(exc)
+    with_seal = (0, json.dumps({"assets": [{"name": "seal.json"}]}), "")
+    cases.append(("payload guard: no release yet proceeds",
+                  "first publish" in guard((1, "", "release not found"))))
+    cases.append(("payload guard: a network error is refused, not read as 'no seal yet'",
+                  guard((1, "", "HTTP 502: Bad Gateway")).startswith("REFUSED")))
+    cases.append(("payload guard: a release without a seal proceeds",
+                  "first seal" in guard((0, json.dumps({"assets": [{"name": "x.zip"}]}), ""))))
+    cases.append(("payload guard: an identical seal proceeds", "identical" in guard(with_seal)))
+    cases.append(("payload guard: a different seal is refused",
+                  "DIFFERENT" in guard(with_seal, published=b"OTHER")))
+    cases.append(("payload guard: a seal that cannot be downloaded is refused",
+                  guard(with_seal, download=(1, "", "HTTP 500")).startswith("REFUSED")))
+
     failures = 0
     for name, ok in cases:
         print(("ok    " if ok else "FAIL  ") + name)

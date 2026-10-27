@@ -6,6 +6,9 @@
                                   extend ./.mozconfig with the CI layers, print it
   phase NAME -- CMD...            run CMD as phase NAME, recording its events
   report DIR                      the run's summary from the legs' events
+  assets | version                every leg's asset name | the version the tree builds
+  payload-guard --tag T --repo R --seal F
+                                  refuse a seal that differs from T's published one
 """
 from __future__ import annotations
 
@@ -43,10 +46,27 @@ def main(argv) -> int:
     m.add_argument("--pgo-dir", type=Path, default=Path.home() / "pgo")
     r = sub.add_parser("report")
     r.add_argument("dir", type=Path)
+    sub.add_parser("assets")
+    sub.add_parser("version")
+    g = sub.add_parser("payload-guard")
+    g.add_argument("--tag", required=True)
+    g.add_argument("--repo", required=True)
+    g.add_argument("--seal", type=Path, required=True)
     args = ap.parse_args(argv)
 
     if args.cmd == "matrix":
         print(legs.matrix(legs.tree_version()))
+    elif args.cmd == "assets":
+        print("\n".join(l.asset(legs.tree_version()) for l in legs.LEGS))
+    elif args.cmd == "version":
+        print(legs.tree_version())
+    elif args.cmd == "payload-guard":
+        import payload_guard
+        try:
+            print(payload_guard.check(args.tag, args.repo, args.seal))
+        except payload_guard.GuardError as exc:
+            print("ERROR: %s" % exc, file=sys.stderr)
+            return 1
     elif args.cmd == "asset":
         print(legs.by_name(args.leg).asset(legs.tree_version()))
     elif args.cmd == "mozconfig":
