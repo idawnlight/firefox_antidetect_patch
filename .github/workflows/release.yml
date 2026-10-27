@@ -442,6 +442,14 @@ jobs:
             # profile (verified against its chain of trust) and the LTO mode
             # its CI uses on this platform (scripts/upstream_toolchain.py).
             python3 scripts/upstream_toolchain.py --leg ${{ matrix.leg }} pgo --out "$HOME/pgo"
+            # Mozilla's profile was recorded on Mozilla's source, and every
+            # function we changed reports "function control flow change detected
+            # (hash mismatch)": expected, harmless (that function is compiled
+            # without profile data), and tens of thousands of lines on the
+            # Windows leg, whose log stream stopped after 30 minutes of them in
+            # run 40446702889. The rest of the build output stays.
+            echo "export CFLAGS=-Wno-backend-plugin"
+            echo "export CXXFLAGS=-Wno-backend-plugin"
           } >> .mozconfig
           if [ -n "${{ matrix.target }}" ]; then echo "ac_add_options --target=${{ matrix.target }}" >> .mozconfig; fi
           if [ -n "${{ matrix.host }}" ]; then echo "ac_add_options --host=${{ matrix.host }}" >> .mozconfig; fi
@@ -482,13 +490,28 @@ jobs:
         # primo e ogni corsa da 1-2 ore ne mostra uno o due, che e' il modo piu'
         # lento di portare la pila su una versione nuova. Su una build che
         # riesce non cambia niente.
-        timeout-minutes: 180
+        # 300 since PGO + full LTO (2026-10-27): the first Windows leg with
+        # them compiled for 156 minutes before its link, cold; the job's own
+        # limit (350) stays above it.
+        timeout-minutes: 300
         # Memory and swap every two minutes: a leg that runs out of memory goes
         # silent and is terminated without a word (run 40437686466), and these
-        # lines are what tells that apart from a hang.
+        # lines are what tells that apart from a hang. The whole output also
+        # goes to build.log, uploaded when the build fails: the Windows leg of
+        # run 40446702889 failed after its log stream had stopped, and no
+        # line of the failure was left to read.
         run: |
           ( while sleep 120; do free -m | awk 'NR==2{m=$3"/"$2} NR==3{s=$3"/"$2} END{print "[mem] used " m " MB, swap " s " MB"}'; done ) &
-          ./mach build --keep-going
+          set -o pipefail
+          ./mach build --keep-going 2>&1 | tee build.log
+      - name: Upload the build log of a failed build
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: buildlog-${{ matrix.leg }}
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       # The compile cache's own gate: the build compiled through the sccache
       # pinned above, nothing else, and every object it compiled was stored.
