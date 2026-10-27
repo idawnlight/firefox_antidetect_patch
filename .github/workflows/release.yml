@@ -397,7 +397,12 @@ jobs:
           {
             echo ""
             echo "# --- release CI levers for ${{ matrix.leg }} (mold intentionally OFF — it segfaults libxul) ---"
-            echo "ac_add_options --disable-debug-symbols"
+            # Line tables and function names, the least that turns a crash dump
+            # into file:line. Full debug info would multiply the compile cache;
+            # this does not. The shipped files carry none of it: the Linux leg
+            # strips them below and Windows keeps it in the .pdb, which the
+            # "Crash symbols" step archives apart from the asset.
+            echo "ac_add_options --enable-debug-symbols=-gline-tables-only"
           } >> .mozconfig
           if [ -n "${{ matrix.target }}" ]; then echo "ac_add_options --target=${{ matrix.target }}" >> .mozconfig; fi
           if [ -n "${{ matrix.host }}" ]; then echo "ac_add_options --host=${{ matrix.host }}" >> .mozconfig; fi
@@ -548,6 +553,26 @@ jobs:
           path: out/${{ matrix.asset }}
           if-no-files-found: error
           retention-days: 7
+
+      # Crash dumps of this build turn into file:line only with its symbols, and
+      # until 2026-10-27 no build had any: a content-process crash at shutdown on
+      # the 157 candidates was a list of offsets in xul.dll. The archive is a
+      # separate artifact, never part of the asset (gate.yml and publish.yml take
+      # asset-* only).
+      - name: Crash symbols (never shipped)
+        run: |
+          set -e
+          ./mach buildsymbols
+          mkdir -p symbols
+          mv obj-rel/dist/*.crashreporter-symbols.zip symbols/
+          ls -la symbols/
+      - name: Upload crash symbols
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: symbols-${{ matrix.leg }}
+          path: symbols/*.zip
+          if-no-files-found: error
+          retention-days: 14
 
   # The gate and the publish are written once, in gate.yml and publish.yml,
   # and republish.yml calls the same two.
