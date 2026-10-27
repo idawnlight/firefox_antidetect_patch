@@ -554,6 +554,32 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # What this build was compiled with, complete: every configure value
+      # (compilers, CFLAGS/CXXFLAGS/LDFLAGS, optimisation, LTO, PGO, Rust flags)
+      # and every define, as configure wrote them. Until 2026-10-27 the objdir
+      # was thrown away with the runner and the answer to "which flags does the
+      # engine ship with" had to be pieced together from the mozconfig.
+      - name: Build configuration
+        run: |
+          set -e
+          mkdir -p buildconfig
+          python3 - obj-rel/config.status.json buildconfig/build-config-${{ matrix.leg }}.json <<'PY'
+          import json, sys
+          status = json.load(open(sys.argv[1]))
+          out = {"substs": status.get("substs", {}), "defines": status.get("defines", {})}
+          json.dump(out, open(sys.argv[2], "w"), indent=1, sort_keys=True)
+          for key in sorted(out["substs"]):
+              if any(t in key for t in ("FLAGS", "OPTIM", "LTO", "PGO", "RUST", "CC_VERSION", "CXX_VERSION")) or key in ("CC", "CXX", "LINKER_KIND"):
+                  print("%s = %s" % (key, out["substs"][key]))
+          PY
+      - name: Upload build configuration
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: buildconfig-${{ matrix.leg }}
+          path: buildconfig/*.json
+          if-no-files-found: error
+          retention-days: 90
+
       # Crash dumps of this build turn into file:line only with its symbols, and
       # until 2026-10-27 no build had any: a content-process crash at shutdown on
       # the 157 candidates was a list of offsets in xul.dll. The archive is a
