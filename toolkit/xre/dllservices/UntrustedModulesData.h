@@ -88,6 +88,19 @@ class ModuleRecord final {
   bool IsXUL() const;
   bool IsTrusted() const;
 
+  // STEALTH: whether aDllPath lies in the directory of aExePath (or below),
+  // case-insensitively. GetVersionAndVendorInfo skips the signature lookup for
+  // those modules that also carry firefox.exe's version (this build's own;
+  // the signed C++ runtime beside them keeps it): they carry no Authenticode
+  // signature,
+  // so the lookup always fell through to the catalog search, which hashes the
+  // whole file and walks every system catalog - 1.26 s of CPU per launch in
+  // the "Untrusted Modules" thread, on a 2026-10-27 profile, for an answer
+  // that cannot exist. GetTrust then classifies them as it already did:
+  // FirefoxDirectory (+AndVersion), from their path and version resource.
+  static bool IsInDirectoryOf(const nsAString& aDllPath,
+                              const nsAString& aExePath);
+
   ModuleRecord(const ModuleRecord&) = delete;
   ModuleRecord(ModuleRecord&&) = delete;
 

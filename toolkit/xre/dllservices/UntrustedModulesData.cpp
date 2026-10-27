@@ -5,6 +5,7 @@
 #include "UntrustedModulesData.h"
 
 #include <bit>
+#include <iterator>
 #include <windows.h>
 
 #include "mozilla/CmdLineAndEnvUtils.h"
@@ -17,6 +18,7 @@
 #include "ModuleVersionInfo.h"
 #include "nsCOMPtr.h"
 #include "nsDebug.h"
+#include "nsUnicharUtils.h"
 #include "nsXULAppAPI.h"
 #include "WinUtils.h"
 
@@ -111,23 +113,60 @@ ModuleRecord::ModuleRecord(const nsAString& aResolvedNtPath)
   mSanitizedDllName = strSanitizedPath;
 }
 
+/* static */
+bool ModuleRecord::IsInDirectoryOf(const nsAString& aDllPath,
+                                   const nsAString& aExePath) {
+  const int32_t slash = aExePath.RFindChar(u'\\');
+  if (slash <= 0) {
+    return false;
+  }
+  const nsDependentSubstring dir = Substring(aExePath, 0, slash + 1);
+  return StringBeginsWith(aDllPath, dir, nsCaseInsensitiveStringComparator);
+}
+
+// STEALTH: one of this build's own binaries - beside firefox.exe and with its
+// version - whose signature lookup can only fall through to the catalog
+// search (see IsInDirectoryOf). Anything else in the directory, such as the
+// signed C++ runtime, keeps the lookup and its classification.
+static bool IsOwnUnsignedBinary(const nsAString& aPath,
+                                const ModuleVersionInfo& aVerInfo) {
+  wchar_t exePath[MAX_PATH * 4];
+  const DWORD exeLen =
+      ::GetModuleFileNameW(nullptr, exePath, std::size(exePath));
+  if (exeLen == 0 || exeLen >= std::size(exePath)) {
+    return false;
+  }
+  const nsDependentString exe(exePath, exeLen);
+  if (!ModuleRecord::IsInDirectoryOf(aPath, exe)) {
+    return false;
+  }
+  ModuleVersionInfo exeVer;
+  return exeVer.GetFromImage(exe) && aVerInfo.mFileVersion.Version64() &&
+         exeVer.mFileVersion.Version64() == aVerInfo.mFileVersion.Version64();
+}
+
 void ModuleRecord::GetVersionAndVendorInfo(const nsAString& aPath) {
   RefPtr<DllServices> dllSvc(DllServices::Get());
+
+  ModuleVersionInfo verInfo;
+  const bool hasVersion = verInfo.GetFromImage(aPath);
 
   // WinVerifyTrust is too slow and of limited utility for our purposes, so
   // we pass SkipTrustVerification here to avoid it.
   bool hasNestedMicrosoftSignature = false;
-  UniquePtr<wchar_t[]> signedBy(dllSvc->GetBinaryOrgName(
-      PromiseFlatString(aPath).get(), &hasNestedMicrosoftSignature,
-      AuthenticodeFlags::SkipTrustVerification));
+  UniquePtr<wchar_t[]> signedBy(
+      hasVersion && IsOwnUnsignedBinary(aPath, verInfo)
+          ? nullptr
+          : dllSvc->GetBinaryOrgName(PromiseFlatString(aPath).get(),
+                                     &hasNestedMicrosoftSignature,
+                                     AuthenticodeFlags::SkipTrustVerification));
   if (signedBy) {
     mVendorInfo = Some(VendorInfo(VendorInfo::Source::Signature,
                                   nsDependentString(signedBy.get()),
                                   hasNestedMicrosoftSignature));
   }
 
-  ModuleVersionInfo verInfo;
-  if (!verInfo.GetFromImage(aPath)) {
+  if (!hasVersion) {
     return;
   }
 
