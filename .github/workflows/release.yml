@@ -94,6 +94,7 @@ jobs:
       seal_tag: ${{ steps.plan.outputs.seal_tag }}
       compile_cache: ${{ steps.plan.outputs.compile_cache }}
       build_date: ${{ steps.build_date.outputs.build_date }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout (for scripts/release_plan.py)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -123,6 +124,13 @@ jobs:
       - name: One build date for every leg
         id: build_date
         run: echo "build_date=$(date -u +%Y%m%d%H%M%S)" | tee -a "$GITHUB_OUTPUT"
+      # The legs, from scripts/ci/legs.py: runners, targets, and the asset
+      # names derived from the version the tree builds (never written here).
+      - name: The legs and their asset names
+        id: matrix
+        run: |
+          python3 scripts/ci/test_ci.py
+          echo "matrix=$(python3 scripts/ci matrix)" | tee -a "$GITHUB_OUTPUT"
 
   build:
     name: build-${{ matrix.leg }}
@@ -131,47 +139,14 @@ jobs:
     timeout-minutes: 350
     env:
       MOZ_BUILD_DATE: ${{ needs.plan.outputs.build_date }}
+      # Every event scripts/ci/phase.py records is this leg's.
+      CI_LEG: ${{ matrix.leg }}
     strategy:
       fail-fast: false
-      matrix:
-        # ⛔ `host:` NON e' una proprieta' della gamba, e' una proprieta' del
-        # RUNNER: ogni gamba che gira su `ubuntu-24.04` deve dichiarare il
-        # triplet host, o configure si ferma con
-        #     ERROR: Don't know how to translate x86_64-pc-linux-gnu for rustc
-        # L'immagine ubuntu-24.04 di oggi fa riportare al compilatore C
-        # `x86_64-pc-linux-gnu`, e Firefox non sa mappare quel nome su quello
-        # che rustc usa. E' lo stesso sistema: cambia solo come si chiama.
-        # Vale anche per win-x86_64, che si CROSS-COMPILA da quel runner linux:
-        # il suo --target dice dove va, non da dove parte, e a fermarsi e' la
-        # rilevazione dell'HOST. linux-arm64 gira su `ubuntu-24.04-arm`, host
-        # aarch64, che si traduce da solo - infatti e' l'unica delle tre che ha
-        # superato configure.
-        # A firefox-20 non serviva a nessuna: la matrice qui e' identica campo
-        # per campo, a cambiare e' stata l'immagine sotto.
-        include:
-          - leg: linux-x86_64
-            runner: ubuntu-24.04
-            family: linux
-            host: x86_64-unknown-linux-gnu
-            target: ''
-            rust_target: x86_64-unknown-linux-gnu
-            extra_pkgs: ''
-            asset: firefox-157.0.1-stealth-linux-x86_64.tar.gz
-          - leg: linux-arm64
-            runner: ubuntu-24.04-arm
-            family: linux
-            target: ''
-            rust_target: aarch64-unknown-linux-gnu
-            extra_pkgs: ''
-            asset: firefox-157.0.1-stealth-linux-arm64.tar.gz
-          - leg: win-x86_64
-            runner: ubuntu-24.04
-            family: win
-            host: x86_64-unknown-linux-gnu
-            target: x86_64-pc-windows-msvc
-            rust_target: x86_64-pc-windows-msvc
-            extra_pkgs: 'msitools p7zip-full zip'
-            asset: firefox-157.0.1-stealth-win-x86_64.zip
+      # The legs are data in scripts/ci/legs.py (runner, host, target, asset
+      # name), computed once by the plan job: the asset names used to be
+      # written here by hand, one per entry, with the version in each.
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Free disk + 24G swap (Linux runners)
         run: |
@@ -402,81 +377,18 @@ jobs:
           key: sccache-${{ matrix.leg }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: sccache-${{ matrix.leg }}-
 
-      - name: Extend the repo .mozconfig (NO mold; +target/SDK as needed)
+      # The .mozconfig in layers (scripts/ci/mozconfig.py): compile cache,
+      # symbols, the retail's PGO and LTO, platform, machine. Each layer writes
+      # its reason into the file, and the flags are fixed by scripts/ci/test_ci.py.
+      - name: The CI's .mozconfig, in layers
         env:
           COMPILE_CACHE: ${{ needs.plan.outputs.compile_cache }}
         run: |
-          test -f .mozconfig || { echo "ERROR: no .mozconfig in source"; exit 1; }
           rm -f mozconfig
-          # Il .mozconfig e' UNO SOLO per le due macchine di sviluppo e per la
-          # CI, e dichiara --with-ccache=sccache piu' RUSTC_WRAPPER=sccache
-          # senza percorso, apposta: il percorso e' una proprieta' della
-          # macchina, e sulle due macchine sccache sta nel PATH.
-          #
-          # Su questo runner quelle righe si tolgono SEMPRE, e con
-          # compile_cache=gha si rimettono col percorso ASSOLUTO del sccache
-          # installato sopra: col nome nudo configure prenderebbe quello che mach
-          # scarica in ~/.mozbuild (vedi i passi della cache). Con
-          # compile_cache=off (ogni release, e una candidata che si vuole poter
-          # ripubblicare) non si rimettono, e la build e' fredda per davvero.
-          # Case-insensitive, perche' c'e' anche SCCACHE_CACHE_SIZE maiuscolo.
-          # Solo le righe ATTIVE: i commenti che spiegano il perche' restano.
-          sed -i -E '/^[^#]*sccache/Id' .mozconfig
           if [ "$COMPILE_CACHE" = "gha" ]; then
             test -x "$SCCACHE_PATH" || { echo "ERROR: no sccache at SCCACHE_PATH=$SCCACHE_PATH"; exit 1; }
-            {
-              echo "ac_add_options --with-ccache=$SCCACHE_PATH"
-              echo "mk_add_options 'export RUSTC_WRAPPER=$SCCACHE_PATH'"
-            } >> .mozconfig
           fi
-          {
-            echo ""
-            echo "# --- release CI levers for ${{ matrix.leg }} (mold intentionally OFF — it segfaults libxul) ---"
-            # Line tables and function names, the least that turns a crash dump
-            # into file:line. Full debug info would multiply the compile cache;
-            # this does not. The shipped files carry none of it: the Linux leg
-            # strips them below and Windows keeps it in the .pdb, which the
-            # "Crash symbols" step archives apart from the asset.
-            echo "ac_add_options --enable-debug-symbols=-gline-tables-only"
-            # The value above reaches C and C++ only: with any debug symbols
-            # rust.configure asks rustc for FULL debuginfo (-C debuginfo=2), and
-            # the first run with symbols lost all three legs mid-compile, the
-            # runners silent for 8 minutes and then terminated (run 40437686466).
-            # rust.mk puts the environment's RUSTFLAGS after the defaults, so
-            # this one wins: line tables for Rust too.
-            echo "mk_add_options 'export RUSTFLAGS=-Cdebuginfo=line-tables-only'"
-            # PGO and LTO as the retail build of this tree: Mozilla's own
-            # profile (verified against its chain of trust) and the LTO mode
-            # its CI uses on this platform (scripts/upstream_toolchain.py).
-            python3 scripts/upstream_toolchain.py --leg ${{ matrix.leg }} pgo --out "$HOME/pgo"
-            # Mozilla's profile was recorded on Mozilla's source, and every
-            # function we changed reports "function control flow change detected
-            # (hash mismatch)": expected, harmless (that function is compiled
-            # without profile data), and tens of thousands of lines on the
-            # Windows leg, whose log stream stopped after 30 minutes of them in
-            # run 40446702889. The rest of the build output stays.
-            echo "export CFLAGS=-Wno-backend-plugin"
-            echo "export CXXFLAGS=-Wno-backend-plugin"
-          } >> .mozconfig
-          if [ -n "${{ matrix.target }}" ]; then echo "ac_add_options --target=${{ matrix.target }}" >> .mozconfig; fi
-          if [ -n "${{ matrix.host }}" ]; then echo "ac_add_options --host=${{ matrix.host }}" >> .mozconfig; fi
-          # No --disable-default-browser-agent here: the .mozconfig dropped it on
-          # 2026-08-19 because the retail release builds the agent (only the
-          # installer registers it, and we ship an archive), and this leg kept
-          # adding it back, so the agent's page-readable image was missing from
-          # every Windows build (B157, found by the page-surface gate).
-          if [ "${{ matrix.family }}" = "win" ]; then
-            # The C++ runtime ships beside the binaries, as the retail ships it
-            # (B306): windows.configure packages it only under MOZ_AUTOMATION or
-            # with this option, and this cross leg had neither, so a clean
-            # Windows could not start the browser. A toolchain without
-            # Redist/MSVC fails configure at once, loudly.
-            echo "ac_add_options --with-redist" >> .mozconfig
-          fi
-          NCPU=4
-          { echo "mk_add_options MOZ_PARALLEL_BUILD=$NCPU";
-            echo "mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-rel"; } >> .mozconfig
-          echo "----- final .mozconfig -----"; cat .mozconfig
+          python3 scripts/ci mozconfig --leg "$CI_LEG" --compile-cache "$COMPILE_CACHE"
 
       - name: Build
         id: build
@@ -509,7 +421,7 @@ jobs:
         # Memory, swap and disk (memory_watch.py): a leg that runs out of memory goes
         # silent and is terminated without a word (run 40437686466), and these
         # lines are what tells that apart from a hang. The whole output also
-        # goes to build.log, uploaded when the build fails: the Windows leg of
+        # goes to logs/build.log, uploaded when the build fails: the Windows leg of
         # run 40446702889 failed after its log stream had stopped, and no
         # line of the failure was left to read.
         run: |
@@ -518,16 +430,18 @@ jobs:
           # sample, then nothing): memory_watch.py samples every 5 seconds,
           # names the largest processes when memory runs low, and kills the
           # largest non-runner process before the machine freezes.
+          # The phase records its events and, failing, puts its first error
+          # lines and the watch's kills in the step summary (scripts/ci/phase.py);
+          # its whole output goes to logs/build.log.
           python3 -u scripts/memory_watch.py --log memwatch.log &
-          set -o pipefail
-          ./mach build --keep-going 2>&1 | tee build.log
-      - name: Upload the build log of a failed build
+          python3 scripts/ci phase build -- ./mach build --keep-going
+      - name: Upload the logs of a failed build
         if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: buildlog-${{ matrix.leg }}
           path: |
-            build.log
+            logs/
             memwatch.log
           if-no-files-found: ignore
           retention-days: 14
@@ -539,8 +453,8 @@ jobs:
       - name: Compile cache (candidates only) - the build used the pinned sccache
         if: always() && needs.plan.outputs.compile_cache == 'gha'
         run: |
-          "$SCCACHE_PATH" --show-stats || true
-          STATS="$("$SCCACHE_PATH" --show-stats 2>/dev/null || true)"
+          "$SCCACHE_PATH" --show-stats | tee sccache-stats.txt || true
+          STATS="$(cat sccache-stats.txt)"
           "$SCCACHE_PATH" --stop-server >/dev/null 2>&1 || true
           # configure.py writes the substs as JSON beside config.status.
           CONFIGURED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["substs"].get("CCACHE", ""))' obj-rel/config.status.json 2>/dev/null || true)"
@@ -570,70 +484,12 @@ jobs:
           path: ~/.cache/sccache-ci
           key: sccache-${{ matrix.leg }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-      # ── LINUX: dereference symlinks (issue #14) + strip + sanitize + tar@root + GATE
-      - name: Package + validate (Linux)
-        if: matrix.family == 'linux'
-        run: |
-          set -e
-          # The PACKAGED tree, as the Windows leg ships it (B310). This leg used
-          # to tar obj-rel/dist/bin, the development tree: the test binaries and
-          # TLS test servers went out with it, and the 44 locale .properties a
-          # page can read kept the comments the packager strips, so they differed
-          # from the retail's. A failing `mach package` fails the leg.
-          ./mach package
-          DIST=obj-rel/dist/firefox
-          [ -x "$DIST/firefox" ] || { echo "ERROR: mach package did not produce $DIST/firefox"; exit 1; }
-          STAGING=staging
-          rm -rf "$STAGING"; mkdir -p "$STAGING" out
-          cp -aL "$DIST/." "$STAGING/"                      # -L: dereference ALL symlinks into real files
-          N=$(find "$STAGING" -type l | wc -l)
-          [ "$N" -eq 0 ] || { echo "ERROR: $N symlinks remain after cp -aL"; exit 1; }
-          # JUGGLER GATE: present (Playwright cannot drive the binary without it).
-          # PAGE-SURFACE GATE: what a page can read of the build (registered
-          # names and the bytes of every readable file) is the retail's of the
-          # same version, judged against Mozilla's complete MAR (stock_parity.py).
-          # Both live in validate_release.py, which also runs on the archive below.
-          # Every gate runs and reports before the verdict (scripts/release_gates.py).
-          python3 scripts/release_gates.py "$STAGING"
-          find "$STAGING" -type f \
-            \( -name '*.so' -o -name firefox -o -name firefox-bin -o -name plugin-container \
-               -o -name pingsender -o -name glxtest -o -name vaapitest -o -name updater \) \
-            -exec strip --strip-debug {} + 2>/dev/null || true
-          STAGING="$STAGING" python3 scripts/linux_sanitize.py || true   # no-op in CI (no /home/feder), defensive
-          tar --owner=0 --group=0 --numeric-owner --mtime="2026-01-01 00:00:00 UTC" \
-              -czf "out/${{ matrix.asset }}" -C "$STAGING" .              # firefox at ROOT
-          echo "=== HARD GATE: scripts/validate_release.py (the issue-#14 protector) ==="
-          # --no-site-patterns: the site-name token list is deliberately not in this
-          # repository and cannot be on a CI runner, so this leg checks structure and
-          # build-machine paths only. Without the flag the run now exits 3 rather than
-          # printing a warning nobody reads. The full scan is the operator's
-          # pre-publish run, with STEALTH_EXTRA_LEAK_PATTERNS set.
-          python3 scripts/validate_release.py --linux "out/${{ matrix.asset }}" \
-            --linux-only --no-site-patterns
-          ls -la out/
-
-      # ── WINDOWS (cross): zip the CLEAN dist/firefox tree, firefox.exe at root
-      - name: Package (Windows cross)
-        if: matrix.family == 'win'
-        run: |
-          set -e
-          # Do NOT swallow a mach failure: `./mach package || echo` lets set -e pass
-          # and would fall through to a stale tree. A release MUST come from the clean
-          # dist/firefox; dist/bin is the dev tree (cruft + loose juggler that masked
-          # the firefox-7/8 packaging bugs), never acceptable for a release.
-          ./mach package
-          [ -f obj-rel/dist/firefox/firefox.exe ] \
-            || { echo "ERROR: mach package did not produce a clean dist/firefox tree"; exit 1; }
-          WIN_APP=obj-rel/dist/firefox
-          echo "packaging from: $WIN_APP"
-          # JUGGLER GATE: in omni.ja (Playwright cannot drive the binary without
-          # it), and the PAGE-SURFACE GATE against the retail of the same
-          # version: the same two checks as the Linux leg.
-          [ -f "$WIN_APP/omni.ja" ] || { echo "ERROR: no omni.ja in $WIN_APP"; exit 1; }
-          python3 scripts/release_gates.py "$WIN_APP"
-          mkdir -p out
-          ( cd "$WIN_APP" && zip -qr "$GITHUB_WORKSPACE/out/${{ matrix.asset }}" . )   # firefox.exe at zip ROOT
-          ls -la out/
+      # Packaging per family (scripts/ci/package_linux.sh, package_win.sh):
+      # the same gates, the archive layout each platform ships.
+      - name: Package + validate
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: python3 scripts/ci phase package -- bash scripts/ci/package_${{ matrix.family }}.sh
 
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -677,7 +533,7 @@ jobs:
       - name: Crash symbols (never shipped)
         run: |
           set -e
-          ./mach buildsymbols
+          python3 scripts/ci phase symbols -- ./mach buildsymbols
           mkdir -p symbols
           mv obj-rel/dist/*.crashreporter-symbols.zip symbols/
           ls -la symbols/
@@ -688,6 +544,43 @@ jobs:
           path: symbols/*.zip
           if-no-files-found: error
           retention-days: 14
+
+      # This leg's events for the run's summary (the report job): always, a
+      # failed or cancelled leg's most of all.
+      - name: Upload this leg's events
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: events-${{ matrix.leg }}
+          path: |
+            events.jsonl
+            memwatch.log
+            sccache-stats.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # One table for the whole run, on its summary page: leg x phase, result,
+  # time, memory peak, compile cache hits (scripts/ci/report.py). Always,
+  # so a failed or cancelled run says which leg stopped where, and why.
+  report:
+    needs: [plan, build]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (for scripts/ci)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+      - name: The legs' events
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: events-*
+          path: events
+      - name: The run's summary
+        run: python3 scripts/ci report events
 
   # The gate and the publish are written once, in gate.yml and publish.yml,
   # and republish.yml calls the same two.

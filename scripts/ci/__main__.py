@@ -1,0 +1,71 @@
+"""python3 scripts/ci <command>
+
+  matrix                          the build matrix (JSON), for the plan job
+  asset --leg L                   the asset name of leg L for this tree
+  mozconfig --leg L --compile-cache gha|off [--sccache PATH] [--pgo-dir DIR]
+                                  extend ./.mozconfig with the CI layers, print it
+  phase NAME -- CMD...            run CMD as phase NAME, recording its events
+  report DIR                      the run's summary from the legs' events
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))  # upstream_toolchain.py
+
+import legs  # noqa: E402
+import mozconfig  # noqa: E402
+import phase  # noqa: E402
+import report  # noqa: E402
+
+
+def main(argv) -> int:
+    if argv[:1] == ["phase"]:
+        if len(argv) < 4 or argv[2] != "--":
+            print("usage: phase NAME -- CMD...", file=sys.stderr)
+            return 2
+        return phase.run(argv[1], argv[3:])
+
+    ap = argparse.ArgumentParser(prog="scripts/ci")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("matrix")
+    a = sub.add_parser("asset")
+    a.add_argument("--leg", required=True)
+    m = sub.add_parser("mozconfig")
+    m.add_argument("--leg", required=True)
+    m.add_argument("--compile-cache", required=True, choices=("gha", "off"))
+    m.add_argument("--sccache", default=os.environ.get("SCCACHE_PATH", ""))
+    m.add_argument("--pgo-dir", type=Path, default=Path.home() / "pgo")
+    r = sub.add_parser("report")
+    r.add_argument("dir", type=Path)
+    args = ap.parse_args(argv)
+
+    if args.cmd == "matrix":
+        print(legs.matrix(legs.tree_version()))
+    elif args.cmd == "asset":
+        print(legs.by_name(args.leg).asset(legs.tree_version()))
+    elif args.cmd == "mozconfig":
+        import upstream_toolchain
+        path = Path(".mozconfig")
+        if not path.is_file():
+            print("ERROR: no .mozconfig in the source", file=sys.stderr)
+            return 1
+        plan = mozconfig.Plan(args.compile_cache, args.sccache, args.pgo_dir, upstream_toolchain.pgo)
+        text = mozconfig.compose(path.read_text(encoding="utf-8"), legs.by_name(args.leg), plan)
+        path.write_text(text, encoding="utf-8")
+        print("----- final .mozconfig -----")
+        print(text)
+    elif args.cmd == "report":
+        text = report.render(args.dir)
+        print(text)
+        phase.summary(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
