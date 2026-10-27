@@ -8,6 +8,7 @@
     3. another C++ optimisation level;
     4. a declared exception whose difference is gone (a stale declaration);
     5. a page with two compilers instead of three.
+    6. thin LTO on x86_64, where the retail's is full;
   known-good
     6. the retail's own page against itself;
     7. a difference that is declared, for its platform only;
@@ -29,11 +30,12 @@ import toolchain_parity as t  # noqa: E402
 
 
 def page(rustc="1.95.0", cxx_flags="-TP -O2 -Oy", options="--enable-rust-simd MOZ_LTO=cross",
-         rows=3):
+         rows=3, target="x86_64-pc-mingw32"):
     tools = [("['clang-cl']", "22.1.8", "-Gy"), ("['clang-cl', '-std:c++20']", "22.1.8", cxx_flags),
              ("/x/rustc", rustc, "")][:rows]
     body = "".join("<tr>\n<td>%s</td>\n<td>%s</td>\n<td>%s</td>\n</tr>\n" % r for r in tools)
-    return ("<table><tbody><tr><th>Compiler</th><th>Version</th><th>Compiler flags</th></tr>\n%s"
+    return ("<table><tbody><tr><th>target</th></tr><tr><td>%s</td></tr></tbody></table>\n" % target +
+            "<table><tbody><tr><th>Compiler</th><th>Version</th><th>Compiler flags</th></tr>\n%s"
             "</tbody></table>\n<h2>Configure options</h2>\n<p>%s</p>" % (body, options))
 
 
@@ -73,9 +75,20 @@ def main() -> int:
     cases.append(("two compilers instead of three", two_compilers))
     cases.append(("the retail against itself", lambda: diff(RETAIL) == {}))
     cases.append(("a declared difference, on its platform only", lambda: (
-        stale(["option MOZ_LTO"], page(options="--enable-rust-simd" + same_jarlog)) == ({}, [])
-        and "option MOZ_LTO" in stale(["option MOZ_LTO"], page(options="--enable-rust-simd" + same_jarlog),
+        stale(["lto"], page(options="--enable-rust-simd" + same_jarlog)) == ({}, [])
+        and "lto" in stale(["lto"], page(options="--enable-rust-simd" + same_jarlog),
                                       platform="linux-x86_64")[0])))
+    retail_x86 = "MOZ_AUTOMATION=1 --enable-profile-use=cross MOZ_LTO=cross --enable-rust-simd"
+    cases.append(("the retail's MOZ_LTO=cross on x86_64 is full LTO, as --enable-lto=full,cross asks",
+                  lambda: "lto" not in diff(page(options="--enable-profile-use=cross --enable-lto=full,cross --enable-rust-simd"),
+                                            page(options=retail_x86))))
+    cases.append(("thin LTO on x86_64 against the retail's full",
+                  lambda: "lto" in diff(page(options="--enable-profile-use=cross --enable-lto=cross --enable-rust-simd"),
+                                        page(options=retail_x86))))
+    cases.append(("arm64: the retail's MOZ_LTO=cross is thin, as --enable-lto=cross gives",
+                  lambda: "lto" not in diff(page(options="--enable-profile-use=cross --enable-lto=cross --enable-rust-simd",
+                                                 target="aarch64-pc-linux-gnu"),
+                                            page(options=retail_x86, target="aarch64-pc-linux-gnu"))))
     cases.append(("a path-valued option compares as set", lambda: diff(page(options="--enable-rust-simd MOZ_LTO=cross" + same_jarlog)) == {}))
 
     failures = 0

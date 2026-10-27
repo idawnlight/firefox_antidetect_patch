@@ -44,8 +44,6 @@ EXCEPTIONS = Path(__file__).resolve().parent / "toolchain_parity_exceptions.json
 CODEGEN_OPTIONS = {
     "--enable-profile-use": "profile-guided optimisation (PGO)",
     "--with-pgo-jarlog": "PGO ordering of omni.ja",
-    "MOZ_LTO": "link-time optimisation (LTO)",
-    "--enable-lto": "link-time optimisation (LTO)",
     "--enable-rust-simd": "SIMD in Rust code",
     "--enable-frame-pointers": "frame pointers",
     "--disable-optimize": "optimisation off",
@@ -63,6 +61,7 @@ def parse(page: str) -> dict:
     rows = re.findall(r"<tr>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*</tr>", page, re.S)
     tools = [tuple(html.unescape(c).strip() for c in row) for row in rows]
     m = re.search(r"<h2>Configure options</h2>\s*<p>(.*?)</p>", page, re.S)
+    target = re.search(r"<th>target</th>\s*</tr>\s*<tr>\s*<td>(.*?)</td>", page, re.S)
     if not tools or not m:
         raise ToolchainError("buildconfig.html has no build tools table or no configure options")
     options = {}
@@ -70,7 +69,30 @@ def parse(page: str) -> dict:
         token = token.strip("'")
         name, _, value = token.partition("=")
         options[name.strip()] = value
-    return {"tools": tools, "options": options}
+    return {"tools": tools, "options": options,
+            "target": html.unescape(target.group(1)).strip() if target else ""}
+
+
+def lto_mode(config: dict) -> str | None:
+    """The LTO the build got, as a sorted set of modes, or None.
+
+    One option with two spellings: --enable-lto=X, or MOZ_LTO=X in the
+    environment (lto-pgo.configure, option env="MOZ_LTO"); the retail uses the
+    second, our CI the first. And one rule configure applies on top: with no
+    "full" or "thin" given, it picks FULL when PGO and MOZ_AUTOMATION are on
+    and the target is x86_64 Windows or Linux, THIN otherwise. The retail's
+    page says MOZ_LTO=cross and the build was full on x86_64; ours asks for
+    full,cross explicitly because we do not set MOZ_AUTOMATION."""
+    opts = config["options"]
+    value = opts.get("--enable-lto", opts.get("MOZ_LTO"))
+    if value is None:
+        return None
+    modes = set(filter(None, value.split(","))) or {"cross"}
+    if not modes & {"full", "thin"}:
+        x86_64 = config.get("target", "").startswith("x86_64-")
+        full = x86_64 and "MOZ_AUTOMATION" in opts and "--enable-profile-use" in opts
+        modes.add("full" if full else "thin")
+    return ",".join(sorted(modes))
 
 
 def facts(config: dict) -> dict:
@@ -86,6 +108,9 @@ def facts(config: dict) -> dict:
         out["%s version" % tool] = version
         if tool != "rustc":
             out["%s optimisation" % tool] = " ".join(f for f in flags.split() if f.startswith("-O"))
+    lto = lto_mode(config)
+    if lto is not None:
+        out["lto"] = lto
     for option in CODEGEN_OPTIONS:
         if option in config["options"]:
             value = config["options"][option]
