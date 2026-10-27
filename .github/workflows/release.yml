@@ -403,6 +403,13 @@ jobs:
             # strips them below and Windows keeps it in the .pdb, which the
             # "Crash symbols" step archives apart from the asset.
             echo "ac_add_options --enable-debug-symbols=-gline-tables-only"
+            # The value above reaches C and C++ only: with any debug symbols
+            # rust.configure asks rustc for FULL debuginfo (-C debuginfo=2), and
+            # the first run with symbols lost all three legs mid-compile, the
+            # runners silent for 8 minutes and then terminated (run 40437686466).
+            # rust.mk puts the environment's RUSTFLAGS after the defaults, so
+            # this one wins: line tables for Rust too.
+            echo "mk_add_options 'export RUSTFLAGS=-Cdebuginfo=line-tables-only'"
           } >> .mozconfig
           if [ -n "${{ matrix.target }}" ]; then echo "ac_add_options --target=${{ matrix.target }}" >> .mozconfig; fi
           if [ -n "${{ matrix.host }}" ]; then echo "ac_add_options --host=${{ matrix.host }}" >> .mozconfig; fi
@@ -444,7 +451,12 @@ jobs:
         # lento di portare la pila su una versione nuova. Su una build che
         # riesce non cambia niente.
         timeout-minutes: 180
-        run: ./mach build --keep-going
+        # Memory and swap every two minutes: a leg that runs out of memory goes
+        # silent and is terminated without a word (run 40437686466), and these
+        # lines are what tells that apart from a hang.
+        run: |
+          ( while sleep 120; do free -m | awk 'NR==2{m=$3"/"$2} NR==3{s=$3"/"$2} END{print "[mem] used " m " MB, swap " s " MB"}'; done ) &
+          ./mach build --keep-going
 
       # The compile cache's own gate: the build compiled through the sccache
       # pinned above, nothing else, and every object it compiled was stored.
