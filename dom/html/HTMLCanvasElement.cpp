@@ -1550,8 +1550,11 @@ already_AddRefed<SourceSurface> HTMLCanvasElement::GetSurfaceSnapshot(
   // GPU: the projection is recorded and runs there, where the pixels are
   // (RecordedStealthProjectSurface). Reading it back here to project it would
   // cost a readback per drawImage that the real browser does not pay.
+  // The test is on the underlying type, as in StealthProjectedSurface: since
+  // 157 a canvas recording's snapshot answers CANVAS_RECORDING to GetType(),
+  // and asking GetType() sent every such drawImage to the readback below.
   if (aTarget && aTarget->IsRecording() &&
-      drawn->GetType() == SurfaceType::RECORDING) {
+      drawn->GetUnderlyingType() == SurfaceType::RECORDING) {
     const gfx::StealthCanvasNoise noise = CanvasUtils::StealthNoise(NodePrincipal());
     if (!noise) {
       return drawn.forget();
