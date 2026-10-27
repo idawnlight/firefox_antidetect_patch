@@ -191,7 +191,22 @@ jobs:
             "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" 2>/dev/null || true
           sudo docker image prune --all --force 2>/dev/null || true
           echo "disk after cleanup:"; df -h / | tail -1
-          sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile || true
+          # ⛔ The runner image ships its own /swapfile (3 GB, already on), and
+          # `fallocate` on it fails with "Text file busy". The `|| true` that was
+          # here hid it, every build ran with 3 GB of swap, and the first build
+          # with debug symbols was shut down out of memory (run 40441908109:
+          # 11.4 of 16 GB used and climbing, then "The runner has received a
+          # shutdown signal"). The image's swap goes off first, and fewer than
+          # 16 GB fails the step instead of letting the build find out.
+          sudo swapoff -a
+          sudo rm -f /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile >/dev/null
+          sudo swapon /swapfile
+          SWAP_MB="$(free -m | awk 'NR==3{print $2}')"
+          echo "swap: ${SWAP_MB} MB"
+          [ "$SWAP_MB" -ge 16000 ] || { echo "ERROR: only ${SWAP_MB} MB of swap"; exit 1; }
 
       - name: Checkout patched Firefox source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
