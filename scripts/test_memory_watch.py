@@ -43,6 +43,12 @@ def main() -> int:
         m = w.meminfo(root)
         procs = w.processes(root)
         cases.append(("meminfo in MB", m["MemAvailable"] == 500 and m["MemTotal"] == 15989))
+        # Run 40500378511: 600 MB of memory left, 16 GB of swap free, and the
+        # first version killed the libxul link that swap would have carried.
+        cases.append(("free swap counts: 500 MB of memory with 16 GB of swap free is not starving",
+                      w.left_mb(m) >= w.KILL_MB))
+        cases.append(("memory and swap both gone is starving",
+                      w.left_mb({"MemAvailable": 300, "SwapFree": 200}) < w.KILL_MB))
         cases.append(("largest first, kernel threads out", [p for _, p, _ in procs] == [10, 20, 30]))
         hit = w.victim(procs, me=99)
         cases.append(("the runner is spared, the largest other process is the victim",

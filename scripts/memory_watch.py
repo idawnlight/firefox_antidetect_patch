@@ -13,9 +13,12 @@ So every 5 seconds:
   - a "[mem]" line every minute: memory, swap, free disk;
   - below LOW_MB available, the largest processes by resident memory, at most
     every 15 seconds, so the burst has a name;
-  - below KILL_MB available for two samples in a row, the largest process
-    that is not the runner itself is killed. The build then fails with a
-    named culprit and its logs upload, instead of a frozen machine.
+  - below KILL_MB of memory AND swap left for two samples in a row, the
+    largest process that is not the runner itself is killed. The build then
+    fails with a named culprit and its logs upload, instead of a frozen
+    machine. Swap counts: the first version judged memory alone and killed
+    ld.lld linking libxul.so with full LTO at 14 GB (run 40500378511), a link
+    that finishes in swap (run 40466778026).
 Every line also goes to --log, which the workflow uploads with build.log.
 """
 from __future__ import annotations
@@ -61,6 +64,11 @@ def processes(proc: Path = Path("/proc")) -> list:
     return sorted(found, reverse=True)
 
 
+def left_mb(m: dict) -> int:
+    """What a process can still get before the kernel has nothing: memory, then swap."""
+    return m["MemAvailable"] + m["SwapFree"]
+
+
 def victim(procs: list, me: int):
     for rss, pid, cmd in procs:
         if pid != me and not any(s in cmd for s in SPARED):
@@ -98,7 +106,7 @@ def main(argv=None) -> int:
             say("[mem] available %d MB, largest: %s" % (
                 avail, "; ".join("%d MB pid %d %s" % (r, p, c[:160]) for r, p, c in top)))
             last_top = now
-        starving = starving + 1 if avail < KILL_MB else 0
+        starving = starving + 1 if left_mb(m) < KILL_MB else 0
         if starving >= 2:
             hit = victim(processes(), os.getpid())
             if hit:

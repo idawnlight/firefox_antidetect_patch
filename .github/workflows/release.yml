@@ -173,7 +173,7 @@ jobs:
             extra_pkgs: 'msitools p7zip-full zip'
             asset: firefox-157.0.1-stealth-win-x86_64.zip
     steps:
-      - name: Free disk + 16G swap (Linux runners)
+      - name: Free disk + 24G swap (Linux runners)
         run: |
           # The GH-hosted 14GB-free disk is tight for a full Firefox build: objdir
           # (.o + libxul) + `mach package` (a second dist copy) + the archive, plus
@@ -198,15 +198,17 @@ jobs:
           # 11.4 of 16 GB used and climbing, then "The runner has received a
           # shutdown signal"). The image's swap goes off first, and fewer than
           # 16 GB fails the step instead of letting the build find out.
+          # 24 GB since full LTO (2026-10-27): ld.lld linking libxul.so alone
+          # passed 14 GB resident (run 40500378511), on a 16 GB runner.
           sudo swapoff -a
           sudo rm -f /swapfile
-          sudo fallocate -l 16G /swapfile
+          sudo fallocate -l 24G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile >/dev/null
           sudo swapon /swapfile
           SWAP_MB="$(free -m | awk 'NR==3{print $2}')"
           echo "swap: ${SWAP_MB} MB"
-          [ "$SWAP_MB" -ge 16000 ] || { echo "ERROR: only ${SWAP_MB} MB of swap"; exit 1; }
+          [ "$SWAP_MB" -ge 24000 ] || { echo "ERROR: only ${SWAP_MB} MB of swap"; exit 1; }
 
       - name: Checkout patched Firefox source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
