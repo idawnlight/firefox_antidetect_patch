@@ -44,6 +44,7 @@ if CONFIG["OS_TARGET"] != "Android":
 if CONFIG["OS_TARGET"] == "WINNT":
     # gfxDWriteFonts' text quality and ClearType parameters, Windows only.
     UNIFIED_SOURCES += [
+        "TestStealthBundledCollection.cpp",
         "TestStealthTextQuality.cpp",
     ]
 

@@ -1724,7 +1724,9 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
   // We activate bundled fonts if the pref is > 0 (on) or < 0 (auto), only an
   // explicit value of 0 (off) will disable them.
   TimeStamp start1 = TimeStamp::Now();
-  if (StaticPrefs::gfx_bundled_fonts_activate_AtStartup() != 0) {
+  if (StaticPrefs::gfx_bundled_fonts_activate_AtStartup() != 0 &&
+      StealthBundleFontList::NeedsPlatformBundledCollection(
+          mStealthBundleOnly, XRE_IsParentProcess())) {
     mBundledFonts = CreateBundledFontsCollection(factory);
   }
   TimeStamp end1 = TimeStamp::Now();
