@@ -261,6 +261,7 @@ jobs:
           python3 scripts/test_check_upstream_source.py
           python3 scripts/test_toolchain_parity.py
           python3 scripts/test_upstream_toolchain.py
+          python3 scripts/test_memory_watch.py
 
       # Record which firefox_antidetect_patch commit this build came from. The publish
       # job turns the range previous-release..this commit into the release notes
@@ -498,22 +499,29 @@ jobs:
         # them compiled for 156 minutes before its link, cold; the job's own
         # limit (350) stays above it.
         timeout-minutes: 300
-        # Memory and swap every two minutes: a leg that runs out of memory goes
+        # Memory, swap and disk (memory_watch.py): a leg that runs out of memory goes
         # silent and is terminated without a word (run 40437686466), and these
         # lines are what tells that apart from a hang. The whole output also
         # goes to build.log, uploaded when the build fails: the Windows leg of
         # run 40446702889 failed after its log stream had stopped, and no
         # line of the failure was left to read.
         run: |
-          ( while sleep 120; do echo "$(free -m | awk 'NR==2{m=$3"/"$2} NR==3{s=$3"/"$2} END{print "[mem] used " m " MB, swap " s " MB"}'), disk free $(df -BG --output=avail / | tail -1 | tr -d ' ')"; done ) &
+          # Sampling every two minutes missed the burst that froze the Windows
+          # legs of runs 40446702889 and 40466778026 (3 of 16 GB in the last
+          # sample, then nothing): memory_watch.py samples every 5 seconds,
+          # names the largest processes when memory runs low, and kills the
+          # largest non-runner process before the machine freezes.
+          python3 -u scripts/memory_watch.py --log memwatch.log &
           set -o pipefail
           ./mach build --keep-going 2>&1 | tee build.log
       - name: Upload the build log of a failed build
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: buildlog-${{ matrix.leg }}
-          path: build.log
+          path: |
+            build.log
+            memwatch.log
           if-no-files-found: ignore
           retention-days: 14
 
