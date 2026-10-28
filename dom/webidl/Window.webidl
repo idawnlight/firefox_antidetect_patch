@@ -400,6 +400,8 @@ dictionary SynthesizeMouseEventData : SynthesizeEventData {
   // reports while the native pointer is locked. Must be specified together.
   long movementX;
   long movementY;
+  unsigned long jugglerEventId = 0;
+  double latency = 0;
 };
 
 // Mozilla-specific stuff

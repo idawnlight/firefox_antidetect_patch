@@ -27,6 +27,8 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StoragePrincipalHelper.h"
+#include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/Client.h"
 #include "mozilla/dom/ClientIPCTypes.h"
 #include "mozilla/dom/ClientManager.h"
@@ -36,6 +38,7 @@
 #include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/InternalHeaders.h"
 #include "mozilla/dom/InternalRequest.h"
+#include "mozilla/dom/Navigator.h"
 #include "mozilla/dom/NotificationEvent.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
 #include "mozilla/dom/PushEventBinding.h"
@@ -55,6 +58,7 @@
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/extensions/WebExtensionPolicy.h"  // WebExtensionPolicy
 #include "mozilla/glean/DomServiceworkersMetrics.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
@@ -1979,6 +1983,52 @@ void ServiceWorkerPrivate::Terminated() {
   Shutdown();
 }
 
+static void ContextDeclaration(nsIPrincipal* aPrincipal, nsACString& aLanguage,
+                               nsAString& aZone) {
+  AssertIsOnMainThread();
+  MOZ_ASSERT(aPrincipal);
+
+  aLanguage.Truncate();
+  aZone.Truncate();
+
+  const OriginAttributes& attrs =
+      BasePrincipal::Cast(aPrincipal)->OriginAttributesRef();
+
+  nsTArray<RefPtr<BrowsingContextGroup>> groups;
+  BrowsingContextGroup::GetAllGroups(groups);
+
+  bool seen = false;
+  bool languageAgrees = true;
+  bool zoneAgrees = true;
+  for (const RefPtr<BrowsingContextGroup>& group : groups) {
+    for (const RefPtr<BrowsingContext>& top : group->Toplevels()) {
+      if (top->IsDiscarded() || !top->IsContent()) {
+        continue;
+      }
+      const OriginAttributes& topAttrs = top->OriginAttributesRef();
+      if (topAttrs.mUserContextId != attrs.mUserContextId ||
+          topAttrs.mPrivateBrowsingId != attrs.mPrivateBrowsingId) {
+        continue;
+      }
+      if (!seen) {
+        aLanguage = top->GetLanguageOverride();
+        aZone = top->GetTimezoneOverride();
+        seen = true;
+        continue;
+      }
+      languageAgrees =
+          languageAgrees && aLanguage.Equals(top->GetLanguageOverride());
+      zoneAgrees = zoneAgrees && aZone.Equals(top->GetTimezoneOverride());
+    }
+  }
+  if (!languageAgrees) {
+    aLanguage.Truncate();
+  }
+  if (!zoneAgrees) {
+    aZone.Truncate();
+  }
+}
+
 void ServiceWorkerPrivate::RefreshRemoteWorkerData(
     const RefPtr<ServiceWorkerRegistrationInfo>& aRegistration) {
   AssertIsOnMainThread();
@@ -1989,6 +2039,18 @@ void ServiceWorkerPrivate::RefreshRemoteWorkerData(
   serviceWorkerData.descriptor() = mInfo->Descriptor().ToIPC();
   serviceWorkerData.registrationDescriptor() =
       aRegistration->Descriptor().ToIPC();
+  nsAutoCString language;
+  ContextDeclaration(mInfo->Principal(), language,
+                     mRemoteWorkerData.timezoneOverride());
+  intl::OrSessionLanguage(language);
+  intl::OrSessionTimezone(mRemoteWorkerData.timezoneOverride());
+  intl::PrimaryLanguageTag(language,
+                           mRemoteWorkerData.languageOverrideLocale());
+  auto& languages = mRemoteWorkerData.languageOverride();
+  languages.Clear();
+  if (!language.IsEmpty()) {
+    Navigator::GetAcceptLanguages(languages, &language);
+  }
 }
 
 RefPtr<FetchServicePromises> ServiceWorkerPrivate::SetupNavigationPreload(

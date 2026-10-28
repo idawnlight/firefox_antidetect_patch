@@ -8,6 +8,7 @@
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Console.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
 #include "mozilla/dom/WorkletGlobalScopeBinding.h"
 #include "mozilla/dom/WorkletImpl.h"
 #include "mozilla/dom/WorkletThread.h"
@@ -131,16 +132,12 @@ void WorkletGlobalScope::Dump(const Optional<nsAString>& aString) const {
 JS::RealmOptions WorkletGlobalScope::CreateRealmOptions() const {
   JS::RealmOptions options;
 
-  if (ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC)) {
-    nsCString timeZone = nsRFPService::GetSpoofedJSTimeZone();
-    options.behaviors().setTimeZoneOverride(timeZone.get());
-  }
+  SetRealmTimeAndLanguage(
+      options, ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
+      ShouldResistFingerprinting(RFPTarget::JSLocale),
+      mImpl->LoadInfo().Language(), mImpl->LoadInfo().Timezone());
   options.creationOptions().setAlwaysUseFdlibm(
       ShouldResistFingerprinting(RFPTarget::JSMathFdlibm));
-  if (ShouldResistFingerprinting(RFPTarget::JSLocale)) {
-    nsCString locale = nsRFPService::GetSpoofedJSLocale();
-    options.behaviors().setLocaleOverride(locale.get());
-  }
 
   // The SharedArrayBuffer global constructor property should not be present in
   // a fresh global object when shared memory objects aren't allowed (because

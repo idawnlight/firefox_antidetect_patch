@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "LocaleService.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/DebugOnly.h"
@@ -491,6 +492,17 @@ LocaleService::GetAppLocaleAsBCP47(nsACString& aRetVal) {
   return NS_OK;
 }
 
+static nsresult MachineRegionalPrefsLocales(nsTArray<nsCString>& aLocales) {
+  nsAutoCString language;
+  SessionLanguageTag(language);
+  if (!language.IsEmpty()) {
+    aLocales.Clear();
+    aLocales.AppendElement(language);
+    return NS_OK;
+  }
+  return OSPreferences::GetInstance()->GetRegionalPrefsLocales(aLocales);
+}
+
 NS_IMETHODIMP
 LocaleService::GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal) {
   bool useOSLocales =
@@ -499,8 +511,7 @@ LocaleService::GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal) {
   // If the user specified that they want to use OS Regional Preferences
   // locales, try to retrieve them and use.
   if (useOSLocales) {
-    if (NS_SUCCEEDED(
-            OSPreferences::GetInstance()->GetRegionalPrefsLocales(aRetVal))) {
+    if (NS_SUCCEEDED(MachineRegionalPrefsLocales(aRetVal))) {
       return NS_OK;
     }
 
@@ -519,8 +530,7 @@ LocaleService::GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal) {
   AutoTArray<nsCString, 10> regionalPrefsLocales;
   LocaleService::GetInstance()->GetAppLocaleAsBCP47(appLocale);
 
-  if (NS_FAILED(OSPreferences::GetInstance()->GetRegionalPrefsLocales(
-          regionalPrefsLocales))) {
+  if (NS_FAILED(MachineRegionalPrefsLocales(regionalPrefsLocales))) {
     GetAppLocalesAsBCP47(aRetVal);
     return NS_OK;
   }

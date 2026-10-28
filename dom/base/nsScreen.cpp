@@ -4,7 +4,9 @@
 
 #include "nsScreen.h"
 
+#include "StealthDeclarationGate.h"
 #include "mozilla/GeckoBindings.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BrowsingContextBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DocumentInlines.h"
@@ -45,6 +47,11 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsScreen, DOMEventTargetHelper,
                                    mScreenOrientation)
 
 int32_t nsScreen::PixelDepth() {
+  const int32_t declared = StaticPrefs::zoom_stealth_screen_color_depth();
+  if (declared > 0) {
+    return declared;
+  }
+
   // Return 24 to prevent fingerprinting.
   if (ShouldResistFingerprinting(RFPTarget::ScreenPixelDepth)) {
     return 24;
@@ -68,6 +75,12 @@ nsDeviceContext* nsScreen::GetDeviceContext() const {
 }
 
 CSSIntRect nsScreen::GetRect() {
+  const int32_t width = StaticPrefs::zoom_stealth_screen_width();
+  const int32_t height = StaticPrefs::zoom_stealth_screen_height();
+  if (width > 0 && height > 0) {
+    return {0, 0, width, height};
+  }
+
   // Return window inner rect to prevent fingerprinting.
   if (ShouldResistFingerprinting(RFPTarget::ScreenRect)) {
     return GetTopWindowInnerRectForRFP();
@@ -100,6 +113,14 @@ CSSIntRect nsScreen::GetRect() {
 }
 
 CSSIntRect nsScreen::GetAvailRect() {
+  const int32_t width = StaticPrefs::zoom_stealth_screen_width();
+  const int32_t height = StaticPrefs::zoom_stealth_screen_height();
+  if (width > 0 && height > 0) {
+    mozilla::gfx::StealthAssertDeclarationsComplete();
+    return {0, 0, width,
+            height - StaticPrefs::zoom_stealth_screen_taskbar_px()};
+  }
+
   // Return window inner rect to prevent fingerprinting.
   if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
     return GetTopWindowInnerRectForRFP();

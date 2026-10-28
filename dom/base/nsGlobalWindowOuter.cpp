@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "StealthDeclarationGate.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/ScopeExit.h"
 #include "nsDeviceContext.h"
@@ -92,6 +93,8 @@
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 #include "nsJSEnvironment.h"
 #include "nsJSUtils.h"
 #include "nsLayoutUtils.h"
@@ -2089,13 +2092,18 @@ static nsresult CreateNativeGlobalForInner(
   creationOptions.setDefineSharedArrayBufferConstructor(
       aDefineSharedArrayBufferConstructor);
 
+  nsAutoCString declaredLanguage;
+  nsAutoCString primaryLocale;
+  nsAutoString declaredZone;
+  GetDeclaredLanguage(aDocument->GetBrowsingContext(), declaredLanguage);
+  GetDeclaredTimezone(aDocument->GetBrowsingContext(), declaredZone);
+  intl::PrimaryLanguageTag(declaredLanguage, primaryLocale);
   xpc::InitGlobalObjectOptions(
       options, principal->IsSystemPrincipal(), aIsSecureContext,
       aDocument->ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
       aDocument->ShouldResistFingerprinting(RFPTarget::JSMathFdlibm),
-      aDocument->ShouldResistFingerprinting(RFPTarget::JSLocale),
-      aDocument->GetBrowsingContext()->Top()->GetLanguageOverride(),
-      aDocument->GetBrowsingContext()->Top()->GetTimezoneOverride());
+      aDocument->ShouldResistFingerprinting(RFPTarget::JSLocale), primaryLocale,
+      declaredZone);
 
   if (principal->IsSystemPrincipal()) {
     creationOptions.setFreezeBuiltins(true);
@@ -3553,6 +3561,35 @@ CSSIntSize nsGlobalWindowOuter::GetOuterSize(CallerType aCallerType,
     return {};
   }
 
+  if (mozilla::gfx::StealthEngineActive()) {
+    mozilla::gfx::StealthAssertDeclarationsComplete();
+    nsCOMPtr<nsIBaseWindow> treeOwnerAsWin = GetTreeOwnerWindow();
+    if (!treeOwnerAsWin) {
+      aError.Throw(NS_ERROR_FAILURE);
+      return {};
+    }
+    const CSSToLayoutDeviceScale scale =
+        CSSToDevScaleForBaseWindow(treeOwnerAsWin);
+    if (IsInStealthPopup()) {
+      const auto frame = mozilla::gfx::StealthDeclaredWindowFrame();
+      BrowsingContext* bc = GetBrowsingContext();
+      if (frame && bc) {
+        const LayoutDeviceIntSize inner =
+            RoundedToInt(CSSSize(bc->TopInnerSizeSpoofedForRFP().width,
+                                 bc->TopInnerSizeSpoofedForRFP().height) *
+                         scale);
+        const LayoutDeviceIntSize outer =
+            inner + LayoutDeviceIntSize(2 * frame->mBorder,
+                                        frame->mPopupUi + frame->mBorder);
+        return RoundedToInt(outer / scale);
+      }
+    } else if (const auto maximized =
+                   mozilla::gfx::StealthDeclaredMaximizedWindow()) {
+      return RoundedToInt(maximized->Size() / scale);
+    }
+    return {};
+  }
+
   // Windows showing documents in RDM panes and any subframes within them
   // return the simulated device size.
   if (mDoc) {
@@ -3614,6 +3651,13 @@ CSSIntPoint nsGlobalWindowOuter::GetScreenXY(CallerType aCallerType,
     return CSSIntPoint(0, 0);
   }
 
+  if (mozilla::gfx::StealthEngineActive() && !IsInStealthPopup()) {
+    if (const auto maximized = mozilla::gfx::StealthDeclaredMaximizedWindow()) {
+      return RoundedToInt(maximized->TopLeft() /
+                          CSSToDevScaleForBaseWindow(treeOwnerAsWin));
+    }
+  }
+
   LayoutDeviceIntPoint windowPos;
   aError = treeOwnerAsWin->GetPosition(&windowPos.x.value, &windowPos.y.value);
 
@@ -3647,6 +3691,42 @@ nsRect nsGlobalWindowOuter::GetInnerScreenRect() {
   }
 
   return rootFrame->GetScreenRectInAppUnits();
+}
+
+Maybe<nsPoint> nsGlobalWindowOuter::StealthContentOriginShift(
+    nsPresContext* aPresContext) {
+  if (!aPresContext || !mozilla::gfx::StealthEngineActive()) {
+    return Nothing();
+  }
+  nsCOMPtr<nsIWidget> rootWidget = aPresContext->GetRootWidget();
+  if (!rootWidget) {
+    return Nothing();
+  }
+  const int32_t auPerDevPx = aPresContext->AppUnitsPerDevPixel();
+  const nsPoint real = LayoutDevicePixel::ToAppUnits(
+      rootWidget->WidgetToScreenOffset(), auPerDevPx);
+  Maybe<LayoutDeviceIntPoint> popupOrigin;
+  Document* doc = aPresContext->Document();
+  BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
+  if (bc && bc->Top()->GetIsPopupRequested()) {
+    BrowserChild* child = rootWidget->GetOwningBrowserChild();
+    if (!child) {
+      return Nothing();
+    }
+    LayoutDeviceIntPoint outer;
+    if (NS_FAILED(child->GetDimensions(mozilla::DimensionKind::Outer,
+                                       &outer.x.value, &outer.y.value, nullptr,
+                                       nullptr))) {
+      return Nothing();
+    }
+    popupOrigin = Some(outer);
+  }
+  return mozilla::gfx::StealthDeclaredOriginShift(real, popupOrigin,
+                                                  auPerDevPx);
+}
+
+bool nsGlobalWindowOuter::IsInStealthPopup() const {
+  return mBrowsingContext && mBrowsingContext->Top()->GetIsPopupRequested();
 }
 
 Maybe<CSSIntSize> nsGlobalWindowOuter::GetRDMDeviceSize(
@@ -3695,6 +3775,10 @@ float nsGlobalWindowOuter::GetMozInnerScreenXOuter(CallerType aCallerType) {
   }
 
   nsRect r = GetInnerScreenRect();
+  nsPresContext* pc = mDocShell ? mDocShell->GetPresContext() : nullptr;
+  if (const auto shift = StealthContentOriginShift(pc)) {
+    return nsPresContext::AppUnitsToFloatCSSPixels(r.x + shift->x);
+  }
   return nsPresContext::AppUnitsToFloatCSSPixels(r.x);
 }
 
@@ -3706,6 +3790,10 @@ float nsGlobalWindowOuter::GetMozInnerScreenYOuter(CallerType aCallerType) {
   }
 
   nsRect r = GetInnerScreenRect();
+  nsPresContext* pc = mDocShell ? mDocShell->GetPresContext() : nullptr;
+  if (const auto shift = StealthContentOriginShift(pc)) {
+    return nsPresContext::AppUnitsToFloatCSSPixels(r.y + shift->y);
+  }
   return nsPresContext::AppUnitsToFloatCSSPixels(r.y);
 }
 

@@ -13,6 +13,7 @@
 #include "mozilla/dom/OffThreadCSPContext.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "nsRFPService.h"
+#include "nsString.h"
 
 class nsPIDOMWindowInner;
 class nsIPrincipal;
@@ -34,11 +35,15 @@ class WorkletLoadInfo {
 
   uint64_t OuterWindowID() const { return mOuterWindowID; }
   uint64_t InnerWindowID() const { return mInnerWindowID; }
+  const nsCString& Language() const { return mLanguage; }
+  const nsString& Timezone() const { return mTimezone; }
 
  private:
   // Modified only in constructor.
   uint64_t mOuterWindowID;
   const uint64_t mInnerWindowID;
+  nsCString mLanguage;
+  nsString mTimezone;
 };
 
 /**

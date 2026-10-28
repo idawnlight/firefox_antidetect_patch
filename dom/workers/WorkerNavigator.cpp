@@ -9,6 +9,7 @@
 #include "RuntimeService.h"
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/LockManager.h"
 #include "mozilla/dom/MediaCapabilities.h"
 #include "mozilla/dom/Navigator.h"
@@ -227,6 +228,11 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
 }
 
 uint64_t WorkerNavigator::HardwareConcurrency() const {
+  const int32_t declared = StaticPrefs::zoom_stealth_hw_concurrency();
+  if (declared > 0) {
+    return uint64_t(declared);
+  }
+
   RuntimeService* rts = RuntimeService::GetService();
   MOZ_ASSERT(rts);
 
