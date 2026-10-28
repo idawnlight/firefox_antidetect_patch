@@ -106,7 +106,29 @@ void WebGLShader::CompileShader() {
     printf_stderr("\n==== end ====\n");
   }
 
+  mObjectCodePerLaPagina.clear();
+
   if (!success) return;
+
+  {
+    const auto dichiarata = webgl::StealthDeclaredShaderOutput();
+    if (dichiarata && *dichiarata != webgl::ShaderOutputPerIlDriver(gl)) {
+      const auto perLaPagina = mContext->CreateShaderValidator(mType, true);
+      if (perLaPagina) {
+        const auto resa = perLaPagina->ValidateAndTranslate(mSource.c_str());
+        // Se la seconda traduzione fallisce si tiene quella del driver: una
+        // risposta nella lingua sbagliata e' un difetto di realness, una
+        // risposta vuota e' una pagina rotta.
+        if (resa && resa->mValid) {
+          mObjectCodePerLaPagina = resa->mObjectCode;
+        } else {
+          NS_WARNING(
+              "la resa nella lingua dichiarata non ha validato; "
+              "getTranslatedShaderSource restituira' quella del driver");
+        }
+      }
+    }
+  }
 
   const std::array<const char*, 1> parts = {
       mCompileResults->mObjectCode.c_str()};

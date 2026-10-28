@@ -13,6 +13,7 @@
 #include "MediaInfo.h"
 #include "MediaRecorder.h"
 #include "PDMFactorySupport.h"
+#include "StealthMediaDeclaration.h"
 #include "VPXDecoder.h"
 #include "WindowRenderer.h"
 #include "mozilla/CheckedInt.h"
@@ -233,6 +234,49 @@ mozilla::LazyLogModule sMediaCapabilitiesLog("MediaCapabilities");
 namespace mozilla::dom {
 using mediacaps::IsValidMediaDecodingConfiguration;
 using mediacaps::IsValidMediaEncodingConfiguration;
+
+// AND the video codec declarations; audio-only configurations use normal queries.
+static bool StealthDeclaredDecodingInfoFor(
+    const MediaDecodingConfiguration& aConfiguration, bool& aSupported,
+    bool& aSmooth, bool& aPowerEfficient) {
+  if (!aConfiguration.mVideo.WasPassed()) {
+    return false;
+  }
+  Maybe<MediaContainerType> container =
+      MakeMediaContainerType(aConfiguration.mVideo.Value().mContentType);
+  if (!container) {
+    return false;
+  }
+  // Preserve Gecko container, codec-profile and level validation before lookup.
+  if (DecoderTraits::CanHandleContainerType(*container, nullptr) ==
+      CANPLAY_NO) {
+    return false;
+  }
+  const MediaCodecs& codecs = container->ExtendedType().Codecs();
+  if (codecs.IsEmpty()) {
+    return false;
+  }
+  bool supported = true, smooth = true, powerEfficient = true;
+  bool sawOne = false;
+  for (const auto& codec : codecs.Range()) {
+    bool s = false, m = false, p = false;
+    if (!StealthDeclaredDecodingInfo(container->Type().AsString(),
+                                     NS_ConvertUTF16toUTF8(codec), s, m, p)) {
+      return false;
+    }
+    sawOne = true;
+    supported &= s;
+    smooth &= m;
+    powerEfficient &= p;
+  }
+  if (!sawOne) {
+    return false;
+  }
+  aSupported = supported;
+  aSmooth = smooth;
+  aPowerEfficient = powerEfficient;
+  return true;
+}
 
 static gfx::IntSize ClampedIntSize(uint32_t aWidth, uint32_t aHeight) {
   return gfx::IntSize(
@@ -1213,6 +1257,20 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
                holder->Complete();
                nsIGlobalObject* global = holder->GetParentObject();
                NS_ENSURE_TRUE_VOID(global);
+               // Apply the declared decodingInfo result to both async success and failure.
+               {
+                 bool dSupported = false, dSmooth = false, dPower = false;
+                 if (StealthDeclaredDecodingInfoFor(aConfiguration, dSupported,
+                                                    dSmooth, dPower)) {
+                   MediaCapabilitiesDecodingInfo declaredInfo;
+                   declaredInfo.mSupported = dSupported;
+                   declaredInfo.mSmooth = dSmooth;
+                   declaredInfo.mPowerEfficient = dPower;
+                   LOG("{} -> DECLARED {}", aConfiguration, declaredInfo);
+                   promise->MaybeResolve(std::move(declaredInfo));
+                   return;
+                 }
+               }
                if (aValue.IsReject()) {
                  MediaCapabilitiesDecodingInfo info;
                  info.mSupported = false;

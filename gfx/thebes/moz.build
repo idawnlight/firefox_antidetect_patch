@@ -59,6 +59,10 @@ EXPORTS += [
     "gfxUtils.h",
     "SharedFontList.h",
     "SoftwareVsyncSource.h",
+    # STEALTH: exported because dom/canvas reads the coverage ladder from
+    # it (the alpha-quantisation hook in CanvasRenderingContext2D).
+    "StealthBundleFontList.h",
+    "StealthDeclarationGate.h",
     "ThebesRLBoxTypes.h",
     "VsyncSource.h",
 ]
@@ -221,6 +225,13 @@ UNIFIED_SOURCES += [
     "SkMemoryReporter.cpp",
     "SoftwareVsyncSource.cpp",
     "VsyncSource.cpp",
+]
+
+# Our uniform bundle-only font-list builder. Non-unified: it defines a few
+# short-named file-static helpers that could collide in a unified blob.
+SOURCES += [
+    "StealthBundleFontList.cpp",
+    "StealthDeclarationGate.cpp",
 ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":

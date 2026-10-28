@@ -458,7 +458,8 @@ class gfxFontEntry {
     explicit AutoHBFace(hb_face_t* aFace) : mFace(aFace) {}
     ~AutoHBFace() { hb_face_destroy(mFace); }
 
-    operator hb_face_t*() const { return mFace; }
+    operator hb_face_t*() const& { return mFace; }
+    operator hb_face_t*() const&& = delete;
 
     // Not default-constructible, not copyable.
     AutoHBFace() = delete;
@@ -863,6 +864,8 @@ class gfxFontEntry {
   mozilla::Atomic<SkrifaFontRef*> mSkrifaFontFace;
   mozilla::MemoryMappedFile mSkrifaFontFile;
 #endif
+
+  bool ShouldPublishCharacterMap() const;
 
   // Shaper-specific face objects, shared by all instantiations of the same
   // physical font, regardless of size.

@@ -7,6 +7,7 @@
 #include "FontVisibilityProvider.h"
 #include "GeckoProfiler.h"
 #include "SharedFontList-impl.h"
+#include "StealthBundleFontList.h"
 #include "base/eintr_wrapper.h"
 #include "gfxScriptItemizer.h"
 #include "gfxTextRun.h"
@@ -21,6 +22,7 @@
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_mathml.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/TextUtils.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/BlobImpl.h"
@@ -36,6 +38,7 @@
 #include "mozilla/intl/OSPreferences.h"
 #include "mozilla/ipc/FileDescriptorUtils.h"
 #include "nsCRT.h"
+#include "nsCharSeparatedTokenizer.h"
 #include "nsGkAtoms.h"
 #include "nsPresContext.h"
 #include "nsServiceManagerUtils.h"
@@ -255,6 +258,26 @@ gfxPlatformFontList::MemoryReporter::CollectReports(
                        "Memory used for (platform-specific) font loader.");
   }
 
+  // Report the bundle cache heap allocations and file mappings separately.
+  if (auto* bundle = StealthBundleFontList::Get()) {
+    size_t bundleHeap = bundle->SizeOfIncludingThis(FontListMallocSizeOf);
+    MOZ_COLLECT_REPORT(
+        "explicit/gfx/font-bundle-files", KIND_HEAP, UNITS_BYTES, bundleHeap,
+        "Bundled font files held on this process's HEAP. Zero once they are "
+        "mapped instead of read; one entry per FILE, never per face.");
+
+    // Reported apart and as NONHEAP, because these pages are the file's: the
+    // operating system shares them with every process that maps the same file,
+    // so adding them to the heap figure would count one physical page N times.
+    size_t bundleMapped = bundle->MappedBytes();
+    if (bundleMapped) {
+      MOZ_COLLECT_REPORT(
+          "font-bundle-files-mapped", KIND_NONHEAP, UNITS_BYTES, bundleMapped,
+          "Bundled font files MAPPED read-only. Shared with every other "
+          "process that mapped them, and evictable by the OS.");
+    }
+  }
+
   if (sizes.mSharedSize) {
     MOZ_COLLECT_REPORT(
         "font-list-shmem", KIND_NONHEAP, UNITS_BYTES, sizes.mSharedSize,
@@ -318,6 +341,9 @@ gfxPlatformFontList::gfxPlatformFontList(bool aNeedFullnamePostscriptNames)
   LoadIconFontOverrideList();
 
   mFontPrefs = MakeUnique<FontPrefs>();
+
+  // Build the font list from bundled families only.
+  mStealthBundleOnly = true;
 
   gfxFontUtils::GetPrefsFontList(kFontSystemWhitelistPref, mEnabledFontsList);
   mFontFamilyWhitelistActive = !mEnabledFontsList.IsEmpty();
@@ -1134,6 +1160,91 @@ void gfxPlatformFontList::MaybeAddToLocalNameTable(
   });
 }
 
+void gfxPlatformFontList::RecordFaceNamesFromTable(
+    fontlist::Family* aFamily, uint32_t aFaceIndex, const nsACString& aKey,
+    const nsCString& aFamilyName, const char* aNameTable, uint32_t aLength) {
+  // Moved here unchanged from gfxDWriteFontList::ReadFaceNamesForFamily, so
+  // that the bundle's faces get exactly what DirectWrite gives an installed
+  // font, and nothing that could drift from it.
+  const fontlist::Pointer* facePtrs = aFamily->Faces(SharedFontList());
+  AutoTArray<nsCString, 4> otherFamilyNames;
+  gfxFontUtils::ReadOtherFamilyNamesForFace(aFamilyName, aNameTable, aLength,
+                                            otherFamilyNames, false);
+  for (const auto& alias : otherFamilyNames) {
+    nsAutoCString key(alias);
+    ToLowerCase(key);
+    auto aliasData = mAliasTable.GetOrInsertNew(key);
+    aliasData->InitFromFamily(aFamily, aFamilyName);
+    aliasData->mFaces.AppendElement(facePtrs[aFaceIndex]);
+  }
+
+  nsAutoCString psname, fullname;
+  if (!StringEndsWith(aKey, ".tmp"_ns)) {
+    if (NS_SUCCEEDED(gfxFontUtils::ReadCanonicalName(
+            aNameTable, aLength, gfxFontUtils::NAME_ID_POSTSCRIPT, psname))) {
+      ToLowerCase(psname);
+      MaybeAddToLocalNameTable(
+          psname, fontlist::LocalFaceRec::InitData(aKey, aFaceIndex));
+    }
+  }
+  if (NS_SUCCEEDED(gfxFontUtils::ReadCanonicalName(
+          aNameTable, aLength, gfxFontUtils::NAME_ID_FULL, fullname))) {
+    ToLowerCase(fullname);
+    if (fullname != psname) {
+      MaybeAddToLocalNameTable(
+          fullname, fontlist::LocalFaceRec::InitData(aKey, aFaceIndex));
+    }
+  }
+}
+
+void gfxPlatformFontList::ReadFaceNamesForFamily(
+    fontlist::Family* aFamily, bool aNeedFullnamePostscriptNames) {
+  if (!mStealthBundleOnly) {
+    return;
+  }
+  if (!aFamily->IsInitialized() && !InitializeFamily(aFamily)) {
+    return;
+  }
+  fontlist::FontList* list = SharedFontList();
+  const fontlist::Pointer* facePtrs = aFamily->Faces(list);
+  nsAutoCString familyName(aFamily->DisplayName().AsString(list));
+  nsAutoCString key(aFamily->Key().AsString(list));
+  auto* bundle = StealthBundleFontList::Get();
+  for (uint32_t i = 0; i < aFamily->NumFaces(); ++i) {
+    auto* face = facePtrs[i].ToPtr<fontlist::Face>(list);
+    if (!face) {
+      continue;
+    }
+    gfxFontUtils::AutoHBBlob names(bundle->GetFaceNameTable(
+        nsCString(face->mDescriptor.AsString(list)), face->mIndex));
+    if (!names) {
+      continue;
+    }
+    unsigned int length = 0;
+    const char* data = hb_blob_get_data(names, &length);
+    RecordFaceNamesFromTable(aFamily, i, key, familyName, data, length);
+  }
+}
+
+bool gfxPlatformFontList::ReadFaceNames(const fontlist::Family* aFamily,
+                                        const fontlist::Face* aFace,
+                                        nsCString& aPSName,
+                                        nsCString& aFullName) {
+  if (!mStealthBundleOnly) {
+    return false;
+  }
+  gfxFontUtils::AutoHBBlob names(StealthBundleFontList::Get()->GetFaceNameTable(
+      nsCString(aFace->mDescriptor.AsString(SharedFontList())), aFace->mIndex));
+  if (!names) {
+    return false;
+  }
+  (void)gfxFontUtils::ReadCanonicalName(names, gfxFontUtils::NAME_ID_POSTSCRIPT,
+                                        aPSName);
+  (void)gfxFontUtils::ReadCanonicalName(names, gfxFontUtils::NAME_ID_FULL,
+                                        aFullName);
+  return !aPSName.IsEmpty() || !aFullName.IsEmpty();
+}
+
 void gfxPlatformFontList::LoadBadUnderlineList() {
   gfxFontUtils::GetPrefsFontList("font.blacklist.underline_offset",
                                  mBadUnderlineFamilyNames);
@@ -1345,8 +1456,27 @@ already_AddRefed<gfxFont> gfxPlatformFontList::CommonFontFallback(
     uint32_t aNextCh, Script aRunScript, FontPresentation aPresentation,
     const gfxFontStyle* aMatchStyle, FontFamily& aMatchedFamily) {
   AutoTArray<const char*, NUM_FALLBACK_FONTS> defaultFallbacks;
-  gfxPlatform::GetPlatform()->GetCommonFallbackFonts(
-      aCh, aRunScript, aPresentation, defaultFallbacks);
+  // Use manifest fallback order for each script and character range.
+  bool fromManifest = false;
+  if (mStealthBundleOnly) {
+    {
+      auto* bundle =
+          StealthBundleFontList::Get();  // never null; it crashes first
+      const uint32_t b = aCh >> 8;
+      const bool symbolish =
+          aRunScript == Script::COMMON ||           // stray COMMON chars
+          (b >= 0x20 && b <= 0x2b) || b == 0x2e ||  // BMP symbols/punctuation
+          GetGenCategory(aCh) == nsUGenCategory::kSymbol ||
+          GetGenCategory(aCh) == nsUGenCategory::kPunctuation;
+      fromManifest = bundle->GetCommonFallback(int16_t(aRunScript),
+                                               PrefersColor(aPresentation),
+                                               symbolish, defaultFallbacks);
+    }
+  }
+  if (!fromManifest) {
+    gfxPlatform::GetPlatform()->GetCommonFallbackFonts(
+        aCh, aRunScript, aPresentation, defaultFallbacks);
+  }
   GlobalFontMatch data(aCh, aNextCh, *aMatchStyle, aPresentation);
   FontVisibility level = aFontVisibilityProvider
                              ? aFontVisibilityProvider->GetFontVisibility()
@@ -1424,7 +1554,8 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
     uint32_t aNextCh, Script aRunScript, FontPresentation aPresentation,
     const gfxFontStyle* aMatchStyle, uint32_t& aCmapCount,
     FontFamily& aMatchedFamily) {
-  bool useCmaps = IsFontFamilyWhitelistActive() ||
+  // Search bundle character maps instead of the platform fallback engine.
+  bool useCmaps = IsFontFamilyWhitelistActive() || mStealthBundleOnly ||
                   gfxPlatform::GetPlatform()->UseCmapsDuringSystemFallback();
   FontVisibility level = aFontVisibilityProvider
                              ? aFontVisibilityProvider->GetFontVisibility()
@@ -1474,9 +1605,8 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
         if (!IsVisibleToCSS(family, level)) {
           continue;
         }
-        if (!family.IsFullyInitialized() &&
-            StaticPrefs::gfx_font_rendering_fallback_async() &&
-            !XRE_IsParentProcess()) {
+        // Share the cmap deferral decision with gfxFontGroup.
+        if (!family.IsFullyInitialized() && MayDeferCmapLoading()) {
           // Start loading all the missing charmaps; but this is async,
           // so for now we just continue, ignoring this family.
           StartCmapLoadingFromFamily(i);
@@ -1723,6 +1853,14 @@ bool gfxPlatformFontList::FindAndAddFamiliesLocked(
   nsAutoCString key;
   GenerateFontListKey(aFamily, key);
 
+  // Resolve the manifest substitute table before looking up family names.
+  if (mStealthBundleOnly) {
+    nsAutoCString target;
+    if (StealthBundleFontList::Get()->GetAlias(key, target)) {
+      GenerateFontListKey(target, key);
+    }
+  }
+
   bool allowHidden = bool(aFlags & FindFamiliesFlags::eSearchHiddenFamilies);
   FontVisibility visibilityLevel =
       aFontVisibilityProvider ? aFontVisibilityProvider->GetFontVisibility()
@@ -1950,6 +2088,13 @@ class InitializeFamilyRunnable : public mozilla::Runnable {
   bool mLoadCmaps;
 };
 
+bool gfxPlatformFontList::MayDeferCmapLoading() const {
+  // Load bundle character maps synchronously so fallback does not depend on use order.
+  return !mStealthBundleOnly &&
+         StaticPrefs::gfx_font_rendering_fallback_async() &&
+         !XRE_IsParentProcess();
+}
+
 bool gfxPlatformFontList::InitializeFamily(fontlist::Family* aFamily,
                                            bool aLoadCmaps) {
   MOZ_ASSERT(SharedFontList());
@@ -1977,24 +2122,20 @@ bool gfxPlatformFontList::InitializeFamily(fontlist::Family* aFamily,
     AutoTArray<fontlist::Face::InitData, 16> faceList;
     GetFacesInitDataForFamily(aFamily, faceList, aLoadCmaps);
     aFamily->AddFaces(list, faceList);
-  } else {
-    // The family's face list was already initialized, but if aLoadCmaps is
-    // true we also want to eagerly load character maps. This is used when a
-    // child process is doing SearchAllFontsForChar, to have the parent load
-    // all the cmaps at once and reduce IPC traffic (and content-process file
-    // access overhead, which is crippling for DirectWrite on Windows).
-    if (aLoadCmaps) {
-      if (auto* faces = aFamily->Faces(list)) {
-        for (size_t i = 0; i < aFamily->NumFaces(); i++) {
-          auto* face = faces[i].ToPtr<fontlist::Face>(list);
-          if (face && face->mCharacterMap.IsNull()) {
-            // We don't want to cache this font entry, as the parent will most
-            // likely never use it again; it's just to populate the charmap for
-            // the benefit of the child process.
-            RefPtr<gfxFontEntry> fe = CreateFontEntry(face, aFamily);
-            if (fe) {
-              fe->ReadCMAP();
-            }
+  }
+
+  // Populate missing face character maps before constructing the family map.
+  if (aLoadCmaps) {
+    if (auto* faces = aFamily->Faces(list)) {
+      for (size_t i = 0; i < aFamily->NumFaces(); i++) {
+        auto* face = faces[i].ToPtr<fontlist::Face>(list);
+        if (face && face->mCharacterMap.IsNull()) {
+          // We don't want to cache this font entry, as the parent will most
+          // likely never use it again; it's just to populate the charmap for
+          // the benefit of the child process.
+          RefPtr<gfxFontEntry> fe = CreateFontEntry(face, aFamily);
+          if (fe) {
+            fe->ReadCMAP();
           }
         }
       }
@@ -2219,6 +2360,9 @@ void gfxPlatformFontList::MaybeRemoveCmap(gfxCharacterMap* aCharMap,
 static void GetSystemUIFontFamilies(
     FontVisibilityProvider* aFontVisibilityProvider,
     [[maybe_unused]] nsAtom* aLangGroup, nsTArray<nsCString>& aFamilies) {
+  // Resolve system-ui to the bundled Windows UI family.
+  aFamilies.AppendElement("Segoe UI"_ns);
+  return;
   // TODO: On macOS, use CTCreateUIFontForLanguage or such thing (though the
   // code below ends up using [NSFont systemFontOfSize: 0.0].
   nsFont systemFont;
@@ -2245,6 +2389,59 @@ static void GetSystemUIFontFamilies(
   CopyUTF16toUTF8(systemFontName, *aFamilies.AppendElement());
 }
 
+// Resolve CSS generics through the per-language bundle declarations.
+static bool StealthDeclaredGenericFont(StyleGenericFontFamily aGeneric,
+                                       const char* aLang, nsACString& aOut) {
+  const char* generic = nullptr;
+  switch (aGeneric) {
+    case StyleGenericFontFamily::Serif:
+      generic = "serif";
+      break;
+    case StyleGenericFontFamily::SansSerif:
+      generic = "sans-serif";
+      break;
+    case StyleGenericFontFamily::Monospace:
+      generic = "monospace";
+      break;
+    case StyleGenericFontFamily::Cursive:
+      generic = "cursive";
+      break;
+    default:
+      return false;
+  }
+  nsAutoCString spec;
+  {
+    auto lock = mozilla::StaticPrefs::zoom_stealth_fonts_generics();
+    spec = *lock;
+  }
+  if (spec.IsEmpty()) {
+    return false;
+  }
+  const nsDependentCString wantGeneric(generic);
+  const nsDependentCString wantLang(aLang ? aLang : "");
+  // Two passes: an exact langgroup match wins over the default row, so the
+  // order of the records in the pref cannot change the answer.
+  for (int pass = 0; pass < 2; ++pass) {
+    for (const nsACString& entry : spec.Split('\n')) {
+      nsCString rec(entry);
+      const int32_t bar1 = rec.FindChar('|');
+      if (bar1 <= 0) continue;
+      const int32_t bar2 = rec.FindChar('|', bar1 + 1);
+      if (bar2 <= bar1) continue;
+      if (!wantGeneric.Equals(Substring(rec, 0, bar1))) continue;
+      const nsDependentCSubstring lang(
+          Substring(rec, bar1 + 1, bar2 - bar1 - 1));
+      const bool isDefault = lang.IsEmpty();
+      if (pass == 0 ? (isDefault || !wantLang.Equals(lang)) : !isDefault) {
+        continue;
+      }
+      aOut.Assign(Substring(rec, bar2 + 1));
+      return !aOut.IsEmpty();
+    }
+  }
+  return false;
+}
+
 void gfxPlatformFontList::ResolveGenericFontNames(
     FontVisibilityProvider* aFontVisibilityProvider,
     StyleGenericFontFamily aGenericType, eFontPrefLang aPrefLang,
@@ -2268,6 +2465,17 @@ void gfxPlatformFontList::ResolveGenericFontNames(
   // load fonts for "font.name-list.generic.lang"
   if (mFontPrefs->LookupNameList(prefName, value)) {
     gfxFontUtils::ParseFontList(value, genericFamilies);
+  }
+
+  // Stealth: force the standard generics to the bundled Windows fonts on every
+  // host (prepend = highest priority), so they never resolve to a dropped host
+  // font. No external font.name-list.* needed.
+  if (mStealthBundleOnly) {
+    // The declaration gate has already checked these generic mappings.
+    nsAutoCString declared;
+    if (StealthDeclaredGenericFont(aGenericType, langGroupStr, declared)) {
+      genericFamilies.InsertElementAt(0, declared);
+    }
   }
 
   nsAtom* langGroup = GetLangGroupForPrefLang(aPrefLang);
@@ -2303,6 +2511,11 @@ void gfxPlatformFontList::ResolveEmojiFontNames(
   nsAutoCString value;
   if (mFontPrefs->LookupNameList(PrefName("emoji", ""), value)) {
     gfxFontUtils::ParseFontList(value, genericFamilies);
+  }
+
+  // Apply the same declared generic precedence as ResolveGenericFontNames.
+  if (mStealthBundleOnly) {
+    genericFamilies.InsertElementAt(0, "Segoe UI Emoji"_ns);
   }
 
   GetFontFamiliesFromGenericFamilies(

@@ -13,6 +13,7 @@
 #include "harfbuzz/hb-ot.h"
 #include "harfbuzz/hb.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/intl/String.h"
 #include "mozilla/intl/UnicodeProperties.h"
 #include "mozilla/intl/UnicodeScriptCodes.h"
@@ -55,6 +56,7 @@ gfxHarfBuzzShaper::~gfxHarfBuzzShaper() {
   hb_blob_destroy(mLocaTable);
   hb_blob_destroy(mGlyfTable);
   hb_font_destroy(mHBFont);
+  hb_font_destroy(mDesignFont);  // null is fine, hb_font_destroy takes it
   hb_buffer_destroy(mBuffer);
 }
 
@@ -720,6 +722,79 @@ hb_bool_t gfxHarfBuzzShaper::GetGlyphExtents(
   aExtents->height =
       FloatToFixed((int16_t(glyf->yMin) - int16_t(glyf->yMax)) * f);
 
+  return true;
+}
+
+hb_font_t* gfxHarfBuzzShaper::GetDesignFont() const {
+  // Protect the lazily created design font with the shaper mutex.
+  mozilla::RecursiveMutexAutoLock lock(mMutex);
+
+  // Use a separate OpenType font for design metrics, avoiding shaping callbacks.
+  // Set OpenType functions explicitly and use font-unit scale with no ppem.
+  if (mDesignFont) {
+    return mDesignFont;
+  }
+  const uint16_t upem = mFont->GetFontEntry()->UnitsPerEm();
+  if (!upem || upem == gfxFontEntry::kInvalidUPEM) {
+    return nullptr;
+  }
+  // Keep the AutoHBFace owner alive until hb_font_create takes its reference.
+  const auto face(mFont->GetFontEntry()->GetHBFace());
+  if (!face) {
+    return nullptr;
+  }
+  hb_font_t* font = hb_font_create(face);
+  if (!font) {
+    return nullptr;
+  }
+  hb_ot_font_set_funcs(font);
+  hb_font_set_scale(font, upem, upem);
+  hb_font_set_ppem(font, 0, 0);
+
+  // Variations travel too, or a variable font would be measured at its default
+  // instance while it renders at another.
+  AutoTArray<gfxFontVariation, 8> vars;
+  mFont->GetFontEntry()->GetVariationsForStyle(vars, *mFont->GetStyle());
+  if (vars.Length() > 0) {
+    static_assert(sizeof(gfxFontVariation) == sizeof(hb_variation_t),
+                  "gfxFontVariation and hb_variation_t must be compatible");
+    hb_font_set_variations(font,
+                           reinterpret_cast<hb_variation_t*>(vars.Elements()),
+                           vars.Length());
+  }
+  mDesignFont = font;
+  return mDesignFont;
+}
+
+bool gfxHarfBuzzShaper::GetDesignGlyphExtents(uint16_t aGID, int32_t& aXBearing,
+                                              int32_t& aYBearing,
+                                              int32_t& aWidth,
+                                              int32_t& aHeight) const {
+  hb_font_t* font = GetDesignFont();
+  if (!font) {
+    return false;
+  }
+  hb_glyph_extents_t ext;
+  if (!hb_font_get_glyph_extents(font, aGID, &ext)) {
+    // A glyph with no outline at all - a space - has no extents, and an empty
+    // box is the honest answer rather than a failure.
+    aXBearing = aYBearing = aWidth = aHeight = 0;
+    return true;
+  }
+  aXBearing = ext.x_bearing;
+  aYBearing = ext.y_bearing;
+  aWidth = ext.width;
+  aHeight = ext.height;
+  return true;
+}
+
+bool gfxHarfBuzzShaper::GetDesignAdvance(uint16_t aGID,
+                                         int32_t& aAdvance) const {
+  hb_font_t* font = GetDesignFont();
+  if (!font) {
+    return false;
+  }
+  aAdvance = hb_font_get_glyph_h_advance(font, aGID);
   return true;
 }
 
@@ -1485,6 +1560,7 @@ bool gfxHarfBuzzShaper::ShapeText(const char16_t* aText, uint32_t aOffset,
                       0, length);
 
   hb_shape(mHBFont, mBuffer, features.Elements(), features.Length());
+
 
   if (isRightToLeft) {
     hb_buffer_reverse(mBuffer);

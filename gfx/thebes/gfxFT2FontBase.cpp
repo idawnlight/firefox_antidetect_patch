@@ -16,11 +16,13 @@
 #include "harfbuzz/hb.h"
 #include "mozilla/Likely.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_zoom.h"
 
 #include FT_TRUETYPE_TAGS_H
 #include FT_TRUETYPE_TABLES_H
 #include FT_ADVANCES_H
 #include FT_MULTIPLE_MASTERS_H
+#include "StealthDeclarationGate.h"
 
 #ifndef FT_LOAD_COLOR
 #  define FT_LOAD_COLOR (1L << 20)
@@ -724,11 +726,28 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
   // dealing with a variation font; also use it for scalable fonts when not
   // applying hinting. Otherwise, prefer hinted width from glyph->advance.x.
   if (aAdvance) {
-    FT_Fixed advance;
-    if (!roundX || FT_HAS_MULTIPLE_MASTERS(face.get())) {
-      advance = face.get()->glyph->linearHoriAdvance;
-    } else {
-      advance = face.get()->glyph->advance.x << 10;  // convert 26.6 to 16.16
+    FT_Fixed advance = 0;
+    // Scale HarfBuzz design advances by the unrounded requested size.
+    bool declaredAdvance = false;
+    if (mozilla::gfx::StealthEngineActive() && GetAdjustedSize() > 0.0) {
+      gfxHarfBuzzShaper* shaper = GetHarfBuzzShaper();
+      const uint16_t upem = GetFontEntry()->UnitsPerEm();
+      int32_t designAdvance = 0;
+      if (shaper && upem && shaper->GetDesignAdvance(aGID, designAdvance)) {
+        // The design advance arrives in FONT UNITS, so this is the only place
+        // the unrounded size enters, and 65536 puts it in the 16.16 the rest of
+        // this block speaks.
+        advance = NS_lround(double(designAdvance) * GetAdjustedSize() *
+                            65536.0 / double(upem));
+        declaredAdvance = true;
+      }
+    }
+    if (!declaredAdvance) {
+      if (!roundX || FT_HAS_MULTIPLE_MASTERS(face.get())) {
+        advance = face.get()->glyph->linearHoriAdvance;
+      } else {
+        advance = face.get()->glyph->advance.x << 10;  // convert 26.6 to 16.16
+      }
     }
     if (advance) {
       advance += bold.x << 10;  // convert 26.6 to 16.16
@@ -737,10 +756,13 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
     // Round the advance here to approximate hinting as Cairo does. This must
     // happen BEFORE we apply the glyph extents scale, just like FT hinting
     // would.
-    if (hintMetrics && roundX && unhintedX) {
+    if (hintMetrics && roundX && unhintedX && !declaredAdvance) {
       advance = (advance + 0x8000) & 0xffff0000u;
     }
-    *aAdvance = NS_lround(advance * extentsScale);
+    // The declared advance was already computed at the desired size, so it must
+    // not go through GetAdjustedSize() / mFTSize a second time.
+    *aAdvance = declaredAdvance ? NS_lround(advance)
+                                : NS_lround(advance * extentsScale);
   }
 
   if (aBounds) {
@@ -824,6 +846,22 @@ gfxFT2FontBase::GlyphMetrics gfxFT2FontBase::GetCachedGlyphMetrics(
 
 bool gfxFT2FontBase::GetGlyphBounds(uint16_t aGID, gfxRect* aBounds,
                                     bool aTight) {
+  // Use HarfBuzz outline bounds for both TrueType and CFF glyphs.
+  if (mozilla::gfx::StealthEngineActive()) {
+    gfxHarfBuzzShaper* shaper = GetHarfBuzzShaper();
+    const uint16_t upem = mFontEntry->UnitsPerEm();
+    int32_t xb, yb, w, h;
+    if (shaper && upem && shaper->GetDesignGlyphExtents(aGID, xb, yb, w, h)) {
+      // Build the bounds in font units before scaling by the float conversion factor.
+      // Invert HarfBuzz y-up coordinates to the gfxRect y-down convention.
+      const float conv = float(GetAdjustedSize() / gfxFloat(upem));
+      gfxRect bounds(double(xb), double(-yb), double(w), double(-h));
+      bounds.Scale(conv);
+      *aBounds = bounds;
+      return true;
+    }
+  }
+
   IntRect bounds;
   const GlyphMetrics metrics = GetCachedGlyphMetrics(aGID, &bounds);
   if (!metrics.HasValidBounds()) {

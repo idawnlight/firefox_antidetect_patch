@@ -24,6 +24,7 @@
 #include "mozilla/PermissionDelegateHandler.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
@@ -2150,8 +2151,16 @@ bool MediaManager::EnumerationParams::HasFakeMics() const {
 bool MediaManager::EnumerationParams::RealDeviceRequested() const {
   auto isReal = [](const auto& aDev) { return aDev.mType == DeviceType::Real; };
   return mVideo.map(isReal).valueOr(false) ||
-         mAudio.map(isReal).valueOr(false) ||
-         mFlags.contains(EnumerationFlag::EnumerateAudioOutputs);
+         mAudio.map(isReal).valueOr(false) || HostSpeakersRequested();
+}
+
+static bool HostSpeakersMayBeAsked() {
+  return StaticPrefs::zoom_stealth_media_enumeration_ms() == 0;
+}
+
+bool MediaManager::EnumerationParams::HostSpeakersRequested() const {
+  return mFlags.contains(EnumerationFlag::EnumerateAudioOutputs) &&
+         HostSpeakersMayBeAsked();
 }
 
 MediaSourceEnum MediaManager::EnumerationParams::VideoInputType() const {
@@ -2261,8 +2270,7 @@ MediaManager::MaybeRequestPermissionAndEnumerateRawDevices(
 
   const bool hasVideo = aParams.mVideo.isSome();
   const bool hasAudio = aParams.mAudio.isSome();
-  const bool hasAudioOutput =
-      aParams.mFlags.contains(EnumerationFlag::EnumerateAudioOutputs);
+  const bool hasAudioOutput = aParams.HostSpeakersRequested();
   const bool hasFakeCams = aParams.HasFakeCams();
   const bool hasFakeMics = aParams.HasFakeMics();
   // True if at least one of video input or audio input is a real device
@@ -2410,7 +2418,7 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
                     video->mForcedDeviceName.get());
     devices->AppendElements(std::move(videos));
   }
-  if (aParams.mFlags.contains(EnumerationFlag::EnumerateAudioOutputs)) {
+  if (aParams.HostSpeakersRequested()) {
     MediaDeviceSet outputs;
     MOZ_ASSERT(realBackend);
     realBackend->EnumerateDevices(MediaSourceEnum::Other,
@@ -2438,7 +2446,7 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
       GetMediaDevices(videoBackend, MediaSourceEnum::Microphone, audios,
                       aParams.mVideo->mForcedMicrophoneName.get());
     }
-    if (videoBackend == realBackend) {
+    if (videoBackend == realBackend && HostSpeakersMayBeAsked()) {
       // When using the real backend for video, there could also be
       // speakers to correlate with. There are no fake speakers.
       if (speakers.isSome()) {
@@ -2474,14 +2482,27 @@ RefPtr<ConstDeviceSetPromise> MediaManager::GetPhysicalDevices() {
           GetCurrentSerialEventTarget(), __func__,
           [self = RefPtr(this), this, promises = mPendingDevicesPromises](
               RefPtr<MediaDeviceSetRefCnt> aDevices) mutable {
-            for (auto& promiseHolder : *promises) {
-              promiseHolder.Resolve(aDevices, __func__);
+            auto resolve = [self, this, promises,
+                            aDevices = std::move(aDevices)]() mutable {
+              for (auto& promiseHolder : *promises) {
+                promiseHolder.Resolve(aDevices, __func__);
+              }
+              // mPendingDevicesPromises may have changed if devices have
+              // changed.
+              if (promises == mPendingDevicesPromises) {
+                mPendingDevicesPromises = nullptr;
+                mPhysicalDevices = std::move(aDevices);
+              }
+            };
+            if (uint32_t ms =
+                    StaticPrefs::zoom_stealth_media_enumeration_ms()) {
+              NS_DelayedDispatchToCurrentThread(
+                  NS_NewRunnableFunction("MediaManager::DeclaredEnumeration",
+                                         std::move(resolve)),
+                  ms);
+              return;
             }
-            // mPendingDevicesPromises may have changed if devices have changed.
-            if (promises == mPendingDevicesPromises) {
-              mPendingDevicesPromises = nullptr;
-              mPhysicalDevices = std::move(aDevices);
-            }
+            resolve();
           },
           [](RefPtr<MediaMgrError>&& reason) {
             MOZ_ASSERT_UNREACHABLE(

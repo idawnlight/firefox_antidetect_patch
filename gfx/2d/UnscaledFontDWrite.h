@@ -7,6 +7,7 @@
 
 #include <dwrite.h>
 
+#include <string>
 #include <vector>
 
 #include "2D.h"
@@ -19,8 +20,9 @@ class UnscaledFontDWrite final : public UnscaledFont {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(UnscaledFontDWrite, override)
   UnscaledFontDWrite(const RefPtr<IDWriteFontFace>& aFontFace,
-                     const RefPtr<IDWriteFont>& aFont)
-      : mFontFace(aFontFace), mFont(aFont) {}
+                     const RefPtr<IDWriteFont>& aFont,
+                     const std::wstring& aFilePath = std::wstring())
+      : mFontFace(aFontFace), mFont(aFont), mPercorsoDichiarato(aFilePath) {}
 
   FontType GetType() const override { return FontType::DWRITE; }
 
@@ -51,6 +53,8 @@ class UnscaledFontDWrite final : public UnscaledFont {
   RefPtr<IDWriteFontFace> mFontFaceBold;
   RefPtr<IDWriteFont> mFont;
   std::vector<WCHAR> mFontFileName;
+  // Empty for fonts outside the bundle.
+  std::wstring mPercorsoDichiarato;
 };
 
 }  // namespace mozilla::gfx

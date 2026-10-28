@@ -54,6 +54,9 @@ EXPORTS.mozilla.gfx += [
     "SourceSurfaceCairo.h",
     "SourceSurfaceRawData.h",
     "StackArray.h",
+    "StealthCanvasProjection.h",
+    "StealthGlyphCoverage.h",
+    "StealthRefuse.h",
     "Swizzle.h",
     "Tools.h",
     "Triangle.h",
@@ -167,6 +170,8 @@ UNIFIED_SOURCES += [
     "SourceSurfaceCairo.cpp",
     "SourceSurfaceRawData.cpp",
     "SourceSurfaceSkia.cpp",
+    "StealthCanvasProjection.cpp",
+    "StealthGlyphCoverage.cpp",
     "Swizzle.cpp",
     "Types.cpp",
 ]

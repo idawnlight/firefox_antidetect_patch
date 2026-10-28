@@ -1230,11 +1230,19 @@ class SharedFTFace : public external::AtomicRefCounted<SharedFTFace> {
 
   SharedFTFace(FT_Face aFace, UniquePtr<char[]>&& aFilename, int aFaceIndex);
   SharedFTFace(FT_Face aFace, FontData* aFontData, int aFaceIndex);
+  SharedFTFace(FT_Face aFace, const uint8_t* aData, uint32_t aLength,
+               int aFaceIndex);
   virtual ~SharedFTFace();
 
   FT_Face GetFace() const { return mFace; }
   const char* GetFilename() const { return mFilename.get(); }
   const RefPtr<FontData>& GetFontData() const { return mFontData; }
+  const uint8_t* GetData() const {
+    return mFontData ? mFontData->Data() : mBorrowedData;
+  }
+  uint32_t GetDataLength() const {
+    return mFontData ? mFontData->Length() : mBorrowedLength;
+  }
   int GetFaceIndex() const { return mFaceIndex; }
 
   /** Locks the face for exclusive access by a given owner. Returns false if
@@ -1269,6 +1277,8 @@ class SharedFTFace : public external::AtomicRefCounted<SharedFTFace> {
   // Since multiple faces may use the same data, use RefPtr to assure that the
   // data is only cleared out when all uses expire.
   RefPtr<FontData> mFontData;
+  const uint8_t* mBorrowedData = nullptr;
+  uint32_t mBorrowedLength = 0;
   int mFaceIndex = 0;
   Mutex mLock{"SharedFTFace::mLock"};
   // Remember the last owner of the lock, even after unlocking, to allow users
@@ -2375,6 +2385,8 @@ class GFX2D_API Factory {
                                    uint32_t aLength, int aFaceIndex);
   static already_AddRefed<SharedFTFace> NewSharedFTFaceFromData(
       FontData* aFontData, int aFaceIndex);
+  static already_AddRefed<SharedFTFace> NewSharedFTFaceFromBorrowedData(
+      const uint8_t* aData, uint32_t aLength, int aFaceIndex);
   static void ReleaseFTFace(FT_Face aFace);
   static FT_Error LoadFTGlyph(FT_Face aFace, uint32_t aGlyphIndex,
                               int32_t aFlags);

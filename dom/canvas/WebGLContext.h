@@ -956,7 +956,7 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
   mutable GLenum mWebGLError = 0;
 
   std::unique_ptr<webgl::ShaderValidator> CreateShaderValidator(
-      GLenum shaderType) const;
+      GLenum shaderType, bool aPerLaPagina = false) const;
 
   // some GL constants
   uint32_t mGLMaxFragmentUniformVectors = 0;

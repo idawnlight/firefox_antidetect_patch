@@ -79,7 +79,8 @@ class gfxFontconfigFontEntry final : public gfxFT2FontEntryBase {
   explicit gfxFontconfigFontEntry(const nsACString& aFaceName,
                                   WeightRange aWeight, WidthRange aWidth,
                                   SlantStyleRange aStyle,
-                                  RefPtr<mozilla::gfx::SharedFTFace>&& aFace);
+                                  RefPtr<mozilla::gfx::SharedFTFace>&& aFace,
+                                  const char* aFile = nullptr, int aIndex = 0);
 
   // used for @font-face local system fonts with explicit patterns
   explicit gfxFontconfigFontEntry(const nsACString& aFaceName,

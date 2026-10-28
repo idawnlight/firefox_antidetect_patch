@@ -3111,9 +3111,7 @@ already_AddRefed<gfxFont> gfxFontGroup::FindFallbackFaceForChar(
 
   // If async fallback is enabled, and the family isn't fully initialized yet,
   // just start the async cmap loading and return.
-  if (!aFamily->IsFullyInitialized() &&
-      StaticPrefs::gfx_font_rendering_fallback_async() &&
-      !XRE_IsParentProcess()) {
+  if (!aFamily->IsFullyInitialized() && pfl->MayDeferCmapLoading()) {
     pfl->StartCmapLoadingFromFamily(aFamily - list->Families());
     return nullptr;
   }

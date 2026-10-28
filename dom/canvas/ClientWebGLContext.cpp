@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 
 #include <bitset>
+#include <cinttypes>
 
 #include "ClientWebGLExtensions.h"
 #include "HostWebGLContext.h"
@@ -25,6 +26,7 @@
 #include "mozilla/ResultVariant.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_webgl.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BufferSourceBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/GeneratePlaceholderCanvasData.h"
@@ -33,6 +35,7 @@
 #include "mozilla/dom/WebGLContextEvent.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/gfx/CanvasManagerChild.h"
+#include "mozilla/gfx/StealthCanvasProjection.h"
 #include "mozilla/gfx/Swizzle.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/Shmem.h"
@@ -1118,6 +1121,8 @@ already_AddRefed<gfx::SourceSurface> ClientWebGLContext::GetSurfaceSnapshot(
   auto ret = BackBufferSnapshot();
   if (!ret) return nullptr;
 
+  // Keep compositor snapshots unchanged; apply projection at page readback.
+
   // -
 
   const auto& options = notLost->info.options;
@@ -1361,6 +1366,9 @@ UniquePtr<uint8_t[]> ClientWebGLContext::GetImageBuffer(
   gfxAlphaType any;
   RefPtr<gfx::SourceSurface> snapshot = GetSurfaceSnapshot(&any);
   if (!snapshot) return nullptr;
+  // toDataURL/toBlob: the canvas noise, as every reader of this canvas reads.
+  snapshot = CanvasUtils::StealthProjectSnapshot(
+      snapshot, any != gfxAlphaType::NonPremult, PrincipalOrNull());
 
   RefPtr<gfx::DataSourceSurface> dataSurface = snapshot->GetDataSurface();
 
@@ -1391,6 +1399,9 @@ ClientWebGLContext::GetInputStream(
   gfxAlphaType any;
   RefPtr<gfx::SourceSurface> snapshot = GetSurfaceSnapshot(&any);
   if (!snapshot) return NS_ERROR_FAILURE;
+  // toDataURL/toBlob: the canvas noise, as every reader of this canvas reads.
+  snapshot = CanvasUtils::StealthProjectSnapshot(
+      snapshot, any != gfxAlphaType::NonPremult, PrincipalOrNull());
 
   RefPtr<gfx::DataSourceSurface> dataSurface = snapshot->GetDataSurface();
   const auto& premultAlpha = notLost->info.options.premultipliedAlpha;
@@ -2166,6 +2177,37 @@ Maybe<std::string> ClientWebGLContext::GetString(const GLenum pname) {
   return ret;
 }
 
+// Stealth: parse a comma-separated "ENUM|VALUE" pref entry for GetParameter
+// override. ENUM in decimal, VALUE may itself contain ':' for vec2. Returns
+// true if `aPname` was found and fills out the split body into `aValueOut`.
+static bool LookupStealthParamEntry(const nsACString& aPref, GLenum aPname,
+                                    nsACString& aValueOut) {
+  if (aPref.IsEmpty()) return false;
+  const char* data = aPref.BeginReading();
+  int32_t len = int32_t(aPref.Length());
+  int32_t start = 0;
+  for (int32_t i = 0; i <= len; i++) {
+    if (i == len || data[i] == ',') {
+      if (i > start) {
+        nsDependentCSubstring entry(data + start, i - start);
+        int32_t bar = entry.FindChar('|');
+        if (bar > 0) {
+          nsDependentCSubstring namePart(entry, 0, bar);
+          nsAutoCString nameStr(namePart);
+          int32_t enumVal = 0;
+          if (sscanf(nameStr.get(), "%d", &enumVal) == 1 &&
+              GLenum(enumVal) == aPname) {
+            aValueOut = Substring(entry, bar + 1, entry.Length() - bar - 1);
+            return true;
+          }
+        }
+      }
+      start = i + 1;
+    }
+  }
+  return false;
+}
+
 void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                                       JS::MutableHandle<JS::Value> retval,
                                       ErrorResult& rv, const bool debug) {
@@ -2177,6 +2219,70 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
   }
   const auto& limits = Limits();
   const auto& state = State();
+
+  // Read declared per-enum values before native parameter queries.
+  {
+    nsAutoCString intPref, floatPref, int2Pref;
+    {
+      auto lk = mozilla::StaticPrefs::zoom_stealth_webgl_int_params();
+      intPref = *lk;
+    }
+    {
+      auto lk = mozilla::StaticPrefs::zoom_stealth_webgl_float_params();
+      floatPref = *lk;
+    }
+    {
+      auto lk = mozilla::StaticPrefs::zoom_stealth_webgl_int2_params();
+      int2Pref = *lk;
+    }
+    nsAutoCString body;
+    if (LookupStealthParamEntry(intPref, pname, body)) {
+      int64_t v = 0;
+      nsAutoCString bodyCopy(body);
+      if (sscanf(bodyCopy.get(), "%" SCNd64, &v) == 1) {
+        retval.set(JS::NumberValue(double(v)));
+        return;
+      }
+    }
+    if (LookupStealthParamEntry(floatPref, pname, body)) {
+      nsAutoCString bodyCopy(body);
+      int32_t colon = bodyCopy.FindChar(':');
+      if (colon > 0) {
+        nsAutoCString a(Substring(bodyCopy, 0, colon));
+        nsAutoCString b(
+            Substring(bodyCopy, colon + 1, bodyCopy.Length() - colon - 1));
+        double fa = 0, fb = 0;
+        if (sscanf(a.get(), "%lf", &fa) == 1 &&
+            sscanf(b.get(), "%lf", &fb) == 1) {
+          const auto arr = std::array<float, 2>{float(fa), float(fb)};
+          retval.set(Create<dom::Float32Array>(cx, this, arr, rv));
+          return;
+        }
+      } else {
+        double fv = 0;
+        if (sscanf(bodyCopy.get(), "%lf", &fv) == 1) {
+          retval.set(JS::NumberValue(fv));
+          return;
+        }
+      }
+    }
+    if (LookupStealthParamEntry(int2Pref, pname, body)) {
+      nsAutoCString bodyCopy(body);
+      int32_t colon = bodyCopy.FindChar(':');
+      if (colon > 0) {
+        nsAutoCString a(Substring(bodyCopy, 0, colon));
+        nsAutoCString b(
+            Substring(bodyCopy, colon + 1, bodyCopy.Length() - colon - 1));
+        int32_t ia = 0, ib = 0;
+        if (sscanf(a.get(), "%d", &ia) == 1 &&
+            sscanf(b.get(), "%d", &ib) == 1) {
+          const auto arr = std::array<int32_t, 2>{ia, ib};
+          retval.set(Create<dom::Int32Array>(cx, this, arr, rv));
+          return;
+        }
+      }
+    }
+  }
 
   // -
 
@@ -2456,6 +2562,20 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
 
     // -
 
+    // Stealth: GPU renderer/vendor from StaticPrefs (DataMutexString with
+    // mirror: always — propagates to content processes and is thread-safe,
+    // so workers (OffscreenCanvas + WebGL) see the same spoofed value.
+    nsAutoCString stealthRenderer;
+    nsAutoCString stealthVendor;
+    {
+      auto lock = mozilla::StaticPrefs::zoom_stealth_webgl_renderer();
+      stealthRenderer = *lock;
+    }
+    {
+      auto lock = mozilla::StaticPrefs::zoom_stealth_webgl_vendor();
+      stealthVendor = *lock;
+    }
+
     Maybe<std::string> ret;
 
     switch (pname) {
@@ -2464,19 +2584,25 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
         break;
 
       case LOCAL_GL_RENDERER: {
-        bool allowRenderer = StaticPrefs::webgl_enable_renderer_query();
-        if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
-            ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
-          allowRenderer = false;
-        }
-        if (allowRenderer) {
-          ret = GetUnmaskedRenderer();
-          if (ret) {
-            ret = Some(webgl::SanitizeRenderer(*ret));
+        if (!stealthRenderer.IsEmpty()) {
+          // Use Firefox renderer sanitization for the declared renderer.
+          ret =
+              Some(std::string{webgl::SanitizeRenderer(stealthRenderer.get())});
+        } else {
+          bool allowRenderer = StaticPrefs::webgl_enable_renderer_query();
+          if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
+              ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
+            allowRenderer = false;
           }
-        }
-        if (!ret) {
-          ret = Some(std::string{"Mozilla"});
+          if (allowRenderer) {
+            ret = GetUnmaskedRenderer();
+            if (ret) {
+              ret = Some(webgl::SanitizeRenderer(*ret));
+            }
+          }
+          if (!ret) {
+            ret = Some(std::string{"Mozilla"});
+          }
         }
         break;
       }
@@ -2506,8 +2632,16 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
 
         switch (pname) {
           case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_RENDERER_WEBGL:
-            if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
-                ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
+            if (!stealthRenderer.IsEmpty()) {
+              // Stealth: same sanitization as gl.RENDERER for consistency.
+              if (StaticPrefs::webgl_sanitize_unmasked_renderer()) {
+                ret = Some(webgl::SanitizeRenderer(stealthRenderer.get()));
+              } else {
+                ret = Some(nsCString{stealthRenderer});
+              }
+            } else if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
+                       ShouldResistFingerprinting(
+                           RFPTarget::WebGLRendererConstant)) {
               ret = Some("Mozilla"_ns);
             } else {
               ret = GetUnmaskedRenderer();
@@ -2518,11 +2652,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
             break;
 
           case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_VENDOR_WEBGL:
-            if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo)) {
+            if (!stealthVendor.IsEmpty()) {
+              ret = Some(nsCString{stealthVendor});
+            } else if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo)) {
               ret = Some("Mozilla"_ns);
             } else if (ShouldResistFingerprinting(
                            RFPTarget::WebGLVendorRandomize)) {
-              // Generate "Mozilla <Base64(uint64)>"
               auto randomValue = RandomUint64();
               if (randomValue.isSome()) {
                 uint64_t value = randomValue.value();
@@ -2656,27 +2791,23 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
   }
 }
 
+Maybe<double> ClientWebGLContext::BufferParameter(GLenum target,
+                                                  GLenum pname) const {
+  RefPtr<webgl::NotLostData> notLost(mNotLost);
+  if (!notLost) return Nothing();
+  const auto& child = notLost->outOfProcess;
+  child->FlushPendingCmds();
+  Maybe<double> ret;
+  if (!child->SendGetBufferParameter(target, pname, &ret)) ret.reset();
+  return ret;
+}
+
 void ClientWebGLContext::GetBufferParameter(
     JSContext* cx, GLenum target, GLenum pname,
     JS::MutableHandle<JS::Value> retval) const {
   retval.setNull();
-  RefPtr<webgl::NotLostData> notLost(mNotLost);
-  if (!notLost) {
-    return;
-  }
-
-  const auto maybe = [&]() {
-    const auto& child = notLost->outOfProcess;
-    child->FlushPendingCmds();
-    Maybe<double> ret;
-    if (!child->SendGetBufferParameter(target, pname, &ret)) {
-      ret.reset();
-    }
-    return ret;
-  }();
-  if (maybe) {
-    retval.setNumber(*maybe);
-  }
+  if (const auto value = BufferParameter(target, pname))
+    retval.setNumber(*value);
 }
 
 bool IsFramebufferTarget(const bool isWebgl2, const GLenum target) {
@@ -3018,6 +3149,50 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
   RefPtr<webgl::NotLostData> notLost(mNotLost);
   if (!notLost) {
     return nullptr;
+  }
+
+  // Read declared shader precision triples before querying the driver.
+  {
+    nsAutoCString pref;
+    {
+      auto lk = mozilla::StaticPrefs::zoom_stealth_webgl_shader_precisions();
+      pref = *lk;
+    }
+    if (!pref.IsEmpty()) {
+      // Find entry "SHADERTYPE*PRECISIONTYPE|rmin:rmax:p"
+      const char* data = pref.BeginReading();
+      int32_t plen = int32_t(pref.Length());
+      int32_t start = 0;
+      for (int32_t i = 0; i <= plen; i++) {
+        if (i == plen || data[i] == ',') {
+          if (i > start) {
+            nsDependentCSubstring entry(data + start, i - start);
+            int32_t bar = entry.FindChar('|');
+            if (bar > 0) {
+              nsAutoCString key(Substring(entry, 0, bar));
+              nsAutoCString val(
+                  Substring(entry, bar + 1, entry.Length() - bar - 1));
+              int32_t star = key.FindChar('*');
+              if (star > 0) {
+                unsigned int st = 0, pt = 0;
+                if (sscanf(key.get(), "%u*%u", &st, &pt) == 2 &&
+                    st == shadertype && pt == precisiontype) {
+                  int rmin = 0, rmax = 0, prec = 0;
+                  if (sscanf(val.get(), "%d:%d:%d", &rmin, &rmax, &prec) == 3) {
+                    webgl::ShaderPrecisionFormat fake;
+                    fake.rangeMin = static_cast<uint8_t>(rmin & 0xFF);
+                    fake.rangeMax = static_cast<uint8_t>(rmax & 0xFF);
+                    fake.precision = static_cast<uint8_t>(prec & 0xFF);
+                    return AsAddRefed(new WebGLShaderPrecisionFormatJS(fake));
+                  }
+                }
+              }
+            }
+          }
+          start = i + 1;
+        }
+      }
+    }
   }
 
   const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
@@ -5416,6 +5591,66 @@ void ClientWebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
                                           {format, type},
                                           state.mPixelPackState};
   Run<RPROC(ReadPixelsPbo)>(desc, static_cast<uint64_t>(offset));
+  StealthProjectReadPixelsPbo(desc, static_cast<uint64_t>(offset));
+}
+
+void ClientWebGLContext::StealthProjectReadPixelsPbo(
+    const webgl::ReadPixelsDesc& aDesc, const uint64_t aOffset) const {
+  if (aDesc.pi.format != LOCAL_GL_RGBA ||
+      aDesc.pi.type != LOCAL_GL_UNSIGNED_BYTE || !aDesc.size.x ||
+      !aDesc.size.y) {
+    return;
+  }
+  if (!CanvasUtils::StealthNoise(PrincipalOrNull())) {
+    return;
+  }
+  const auto& bound = State().mBoundBufferByTarget;
+  const auto found = bound.find(LOCAL_GL_PIXEL_PACK_BUFFER);
+  if (found == bound.end() || !found->second) {
+    return;  // the host refused the read and raised the error
+  }
+  const RefPtr<WebGLBufferJS> pbo = found->second;
+  // Where the page's packing put each row in the buffer. For UNSIGNED_BYTE
+  // the alignment is in bytes.
+  const auto& packing = aDesc.packState;
+  const uint64_t rowPixels =
+      packing.rowLength ? packing.rowLength : aDesc.size.x;
+  const uint64_t align = packing.alignmentInTypeElems;
+  const uint64_t stride = (rowPixels * 4 + align - 1) / align * align;
+  const uint64_t needed = aOffset +
+                          (packing.skipRows + aDesc.size.y - 1) * stride +
+                          (packing.skipPixels + aDesc.size.x) * 4;
+  const auto size =
+      BufferParameter(LOCAL_GL_PIXEL_PACK_BUFFER, LOCAL_GL_BUFFER_SIZE);
+  if (!size || needed > uint64_t(*size)) {
+    return;  // too small: the host refused the read and wrote nothing
+  }
+  // The same pixels read into memory, with the buffer unbound for the time of
+  // the read, and the noise applied as readPixels into an array applies it.
+  webgl::ReadPixelsDesc tight = aDesc;
+  tight.packState = {};
+  std::vector<uint8_t> bytes(size_t(aDesc.size.x) * aDesc.size.y * 4);
+  Run<RPROC(BindBuffer)>(LOCAL_GL_PIXEL_PACK_BUFFER, 0);
+  const auto written = DoReadPixels(tight, Span<uint8_t>(bytes));
+  if (written) {
+    StealthProjectReadPixels(tight, Span<uint8_t>(bytes), *written);
+  }
+  Run<RPROC(BindBuffer)>(LOCAL_GL_PIXEL_PACK_BUFFER, pbo->mId);
+  if (!written || written->subrect.IsEmpty()) {
+    return;
+  }
+  // Over the bytes the host wrote, row by row, so the gaps a packing leaves
+  // between rows stay what they were.
+  const auto& sub = written->subrect;
+  for (int32_t y = sub.Y(); y < sub.YMost(); ++y) {
+    const uint64_t dst = aOffset + (packing.skipRows + uint64_t(y)) * stride +
+                         (packing.skipPixels + uint64_t(sub.X())) * 4;
+    const uint8_t* src =
+        bytes.data() + size_t(y) * written->byteStride + size_t(sub.X()) * 4;
+    Run<RPROC(BufferSubData)>(LOCAL_GL_PIXEL_PACK_BUFFER, dst,
+                              Span<const uint8_t>(src, size_t(sub.Width()) * 4),
+                              /* unsynchronized */ false);
+  }
 }
 
 void ClientWebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
@@ -5463,8 +5698,9 @@ void ClientWebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
                                             *uvec2::From(width, height),
                                             {format, type},
                                             state.mPixelPackState};
-    bool succeeded = DoReadPixels(desc, *range);
-    if (succeeded) {
+    const auto written = DoReadPixels(desc, *range);
+    if (written) {
+      StealthProjectReadPixels(desc, *range, *written);
       CanvasUtils::ImageExtraction extraction =
           ImageExtractionResult(mCanvasElement, mOffscreenCanvas);
 
@@ -5499,11 +5735,11 @@ void ClientWebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
   });
 }
 
-bool ClientWebGLContext::DoReadPixels(const webgl::ReadPixelsDesc& desc,
-                                      const Span<uint8_t> dest) const {
+Maybe<webgl::ReadPixelsResult> ClientWebGLContext::DoReadPixels(
+    const webgl::ReadPixelsDesc& desc, const Span<uint8_t> dest) const {
   RefPtr<webgl::NotLostData> notLost(mNotLost);
   if (!notLost) {
-    return false;
+    return Nothing();
   }
   const auto& child = notLost->outOfProcess;
   child->FlushPendingCmds();
@@ -5511,13 +5747,13 @@ bool ClientWebGLContext::DoReadPixels(const webgl::ReadPixelsDesc& desc,
   if (!child->SendReadPixels(desc, dest.size(), &res)) {
     res = {};
   }
-  if (!res.byteStride || !res.shmem) return false;
+  if (!res.byteStride || !res.shmem) return Nothing();
   const auto& byteStride = res.byteStride;
   const auto& subrect = res.subrect;
   const webgl::RaiiShmem shmem{child, res.shmem.ref()};
   if (!shmem) {
     EnqueueError(LOCAL_GL_OUT_OF_MEMORY, "Failed to map in back buffer.");
-    return false;
+    return Nothing();
   }
 
   const auto& shmemBytes = Span{shmem.ByteRange()};
@@ -5525,7 +5761,7 @@ bool ClientWebGLContext::DoReadPixels(const webgl::ReadPixelsDesc& desc,
   const auto pii = webgl::PackingInfoInfo::For(desc.pi);
   if (!pii) {
     gfxCriticalError() << "ReadPixels: Bad " << desc.pi;
-    return false;
+    return Nothing();
   }
   const auto bpp = pii->BytesPerPixel();
 
@@ -5546,7 +5782,72 @@ bool ClientWebGLContext::DoReadPixels(const webgl::ReadPixelsDesc& desc,
     Memcpy(&destRow, srcRow);
   }
 
-  return true;
+  return Some(webgl::ReadPixelsResult{subrect, byteStride});
+}
+
+void ClientWebGLContext::StealthProjectReadPixels(
+    const webgl::ReadPixelsDesc& aDesc, const Span<uint8_t> aDest,
+    const webgl::ReadPixelsResult& aWritten) const {
+  // Project RGBA/UNSIGNED_BYTE readback only.
+  if (aDesc.pi.format != LOCAL_GL_RGBA ||
+      aDesc.pi.type != LOCAL_GL_UNSIGNED_BYTE) {
+    return;
+  }
+  const gfx::StealthCanvasNoise noise =
+      CanvasUtils::StealthNoise(PrincipalOrNull());
+  if (!noise || aWritten.subrect.IsEmpty() || !aWritten.byteStride) {
+    return;
+  }
+  // Read a one-pixel border so cropped requests use the full image neighborhood.
+  webgl::ReadPixelsDesc wide = aDesc;
+  wide.srcOffset = {aDesc.srcOffset.x - 1, aDesc.srcOffset.y - 1};
+  wide.size = {aDesc.size.x + 2, aDesc.size.y + 2};
+  wide.packState = {};
+  const size_t wideStride = size_t(wide.size.x) * 4;
+  std::vector<uint8_t> wideBytes(wideStride * wide.size.y);
+  const auto wideRead = DoReadPixels(wide, Span<uint8_t>(wideBytes));
+  if (!wideRead || wideRead->subrect.IsEmpty() ||
+      wideRead->byteStride != wideStride) {
+    return;
+  }
+  const gfx::IntRect fb = wideRead->subrect;
+  uint8_t* const fbBase =
+      wideBytes.data() + size_t(fb.Y()) * wideStride + size_t(fb.X()) * 4;
+  // The page's pixels inside the framebuffer, in `fb` coordinates.
+  const gfx::IntRect asked =
+      (aWritten.subrect + gfx::IntPoint(1, 1) - fb.TopLeft())
+          .Intersect(gfx::IntRect(gfx::IntPoint(), fb.Size()));
+  if (asked.IsEmpty()) {
+    return;
+  }
+  // The default framebuffer of a premultipliedAlpha context stores
+  // premultiplied pixels; a user framebuffer stores whatever was drawn.
+  const auto& options = mNotLost->info.options;
+  const bool premultiplied =
+      !State().mBoundReadFb && options.alpha && options.premultipliedAlpha;
+  uint8_t* const askedBase =
+      fbBase + size_t(asked.Y()) * wideStride + size_t(asked.X()) * 4;
+  if (!gfx::StealthProjectPixels(fbBase, int32_t(wideStride), fb.Size(),
+                                 gfx::SurfaceFormat::R8G8B8A8, asked, askedBase,
+                                 int32_t(wideStride), premultiplied, noise)) {
+    return;
+  }
+  // Back where the page's read put them, with the page's own packing.
+  const auto& packing = aDesc.packState;
+  const size_t bytes = size_t(asked.Width()) * 4;
+  for (int32_t row = 0; row < asked.Height(); ++row) {
+    // Request coordinates of this row's first pixel.
+    const int32_t rx = asked.X() + fb.X() - 1;
+    const int32_t ry = asked.Y() + fb.Y() - 1 + row;
+    const size_t destOffset =
+        size_t(packing.skipRows + ry) * aWritten.byteStride +
+        size_t(packing.skipPixels + rx) * 4;
+    if (destOffset + bytes > aDest.size()) {
+      return;
+    }
+    memcpy(aDest.data() + destOffset, askedBase + size_t(row) * wideStride,
+           bytes);
+  }
 }
 
 RefPtr<dom::HTMLCanvasElement::SurfaceSnapshotPromise>
@@ -5569,6 +5870,8 @@ ClientWebGLContext::DoReadPixelsAsync() {
   }
 
   const auto& options = notLost->info.options;
+  const auto noise = CanvasUtils::StealthNoise(PrincipalOrNull());
+  const bool premultiplied = options.alpha && options.premultipliedAlpha;
   const auto size = DrawingBufferSize();
   const auto surfaceFormat = options.alpha ? gfx::SurfaceFormat::B8G8R8A8
                                            : gfx::SurfaceFormat::B8G8R8X8;
@@ -5595,7 +5898,8 @@ ClientWebGLContext::DoReadPixelsAsync() {
   ipcPromise->Then(
       GetCurrentSerialEventTarget(), __func__,
       [self = RefPtr{this}, promise, child, desc, size, surfaceFormat,
-       expectedSize](webgl::ReadPixelsResultIpc&& aReply) mutable {
+       expectedSize, noise,
+       premultiplied](webgl::ReadPixelsResultIpc&& aReply) mutable {
         if (!aReply.byteStride || !aReply.shmem) {
           promise->Reject(NS_ERROR_FAILURE, __func__);
           return;
@@ -5674,6 +5978,13 @@ ClientWebGLContext::DoReadPixelsAsync() {
             Memcpy(&destRow, srcRow);
           }
 
+          if (noise) {
+            gfx::StealthProjectPixels(
+                pixels.data(), stride, gfx::IntSize(size.x, size.y),
+                gfx::SurfaceFormat::R8G8B8A8,
+                gfx::IntRect(0, 0, size.x, size.y), pixels.data(), stride,
+                premultiplied, noise);
+          }
           // RGBA->BGRA and flip-y.
           MOZ_RELEASE_ASSERT(gfx::SwizzleYFlipData(
               pixels.data(), stride, gfx::SurfaceFormat::R8G8B8A8,
@@ -6403,9 +6714,46 @@ bool ClientWebGLContext::IsExtensionForbiddenForCaller(
   }
 }
 
+// Stealth: read comma-separated WebGL extensions whitelist from the
+// corresponding pref (webgl1 vs webgl2). Returns vector of trimmed names.
+// Empty = no stealth override (use native list).
+static std::vector<nsCString> GetStealthExtensionWhitelist(bool aIsWebGL2) {
+  std::vector<nsCString> out;
+  nsAutoCString raw;
+  {
+    auto lock = aIsWebGL2
+                    ? mozilla::StaticPrefs::zoom_stealth_webgl2_extensions()
+                    : mozilla::StaticPrefs::zoom_stealth_webgl_extensions();
+    raw = *lock;
+  }
+  if (raw.IsEmpty()) return out;
+  int32_t start = 0;
+  while (start < static_cast<int32_t>(raw.Length())) {
+    int32_t comma = raw.FindChar(',', start);
+    if (comma < 0) comma = raw.Length();
+    nsAutoCString item(Substring(raw, start, comma - start));
+    item.Trim(" \t\r\n");
+    if (!item.IsEmpty()) out.push_back(item);
+    start = comma + 1;
+  }
+  return out;
+}
+
 bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
                                      const dom::CallerType callerType) const {
   if (IsExtensionForbiddenForCaller(ext, callerType)) {
+    return false;
+  }
+
+  // Stealth: if the user configured an extension whitelist, gate visibility
+  // through it — extensions not in the list are reported as unsupported,
+  // regardless of what the real driver provides.
+  auto whitelist = GetStealthExtensionWhitelist(mIsWebGL2);
+  if (!whitelist.empty()) {
+    const auto& extName = GetExtensionName(ext);
+    for (const auto& allowed : whitelist) {
+      if (allowed.Equals(extName)) return true;
+    }
     return false;
   }
 
@@ -6423,6 +6771,17 @@ void ClientWebGLContext::GetSupportedExtensions(
   }
 
   auto& retarr = retval.SetValue();
+
+  // Stealth: if a whitelist is set, return it verbatim. This keeps the list
+  // and getExtension()/IsSupported consistent.
+  auto whitelist = GetStealthExtensionWhitelist(mIsWebGL2);
+  if (!whitelist.empty()) {
+    for (const auto& name : whitelist) {
+      retarr.AppendElement(NS_ConvertUTF8toUTF16(name));
+    }
+    return;
+  }
+
   for (const auto i : MakeEnumeratedRange(WebGLExtensionID::Max)) {
     if (!IsSupported(i, callerType)) continue;
 

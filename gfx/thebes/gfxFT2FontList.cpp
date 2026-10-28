@@ -442,7 +442,7 @@ nsresult FT2FontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
   if (NS_SUCCEEDED(rv)) {
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
     fontlist::FontList* sharedFontList = pfl->SharedFontList();
-    if (!IsUserFont() && mShmemFace) {
+    if (ShouldPublishCharacterMap()) {
       mShmemFace->SetCharacterMap(sharedFontList, charmap, mShmemFamily);
       if (TrySetShmemCharacterMap()) {
         setCharMap = false;
@@ -575,7 +575,9 @@ hb_blob_t* FT2FontEntry::GetFontTableInternal(uint32_t aTableTag) {
   if (auto* ufd = GetUserFontData()) {
     // If there's a cairo font face, we may be able to return a blob
     // that just wraps a range of the attached user font data
-    return gfxFontUtils::GetTableFromFontData(ufd->Data(), aTableTag);
+    return gfxFontUtils::GetTableFromFontData(
+        ufd->Data(), aTableTag,
+        mFTFace ? uint32_t(mFTFace->GetFaceIndex()) & 0x7FFF : 0);
   }
 
   // Try to read table directly via harfbuzz API, unless CreateHBFace will be

@@ -370,6 +370,7 @@ class MediaManager final : public nsIMediaManagerService,
     bool HasFakeCams() const;
     bool HasFakeMics() const;
     bool RealDeviceRequested() const;
+    bool HostSpeakersRequested() const;
     dom::MediaSourceEnum VideoInputType() const;
     dom::MediaSourceEnum AudioInputType() const;
     EnumerationFlags mFlags;

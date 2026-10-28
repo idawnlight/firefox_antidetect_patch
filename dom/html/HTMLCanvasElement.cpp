@@ -37,6 +37,7 @@
 #include "mozilla/dom/OffscreenCanvas.h"
 #include "mozilla/dom/OffscreenCanvasDisplayHelper.h"
 #include "mozilla/dom/VideoStreamTrack.h"
+#include "mozilla/gfx/DrawTargetRecording.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/layers/CanvasRenderer.h"
 #include "mozilla/layers/WebRenderCanvasRenderer.h"
@@ -1560,10 +1561,41 @@ void HTMLCanvasElement::SetFrameCapture(
 
 already_AddRefed<SourceSurface> HTMLCanvasElement::GetSurfaceSnapshot(
     gfxAlphaType* const aOutAlphaType, DrawTarget* aTarget) {
+  gfxAlphaType alphaType = gfxAlphaType::Premult;
+  RefPtr<SourceSurface> drawn =
+      GetSurfaceSnapshotAsDrawn(aOutAlphaType ? &alphaType : nullptr, aTarget);
+  if (aOutAlphaType) {
+    *aOutAlphaType = alphaType;
+  }
+  if (!drawn) {
+    return nullptr;
+  }
+  // A 2D or bitmaprenderer canvas is a source as it was drawn, as on retail:
+  // the canvas noise is a WebGL/WebGPU readback only.
+  if (!CanvasUtils::StealthProjectsContextType(GetCurrentContextType())) {
+    return drawn.forget();
+  }
+  const bool premultiplied = alphaType != gfxAlphaType::NonPremult;
+  if (aTarget && aTarget->IsRecording() &&
+      drawn->GetUnderlyingType() == SurfaceType::RECORDING) {
+    const gfx::StealthCanvasNoise noise =
+        CanvasUtils::StealthNoise(NodePrincipal());
+    if (!noise) {
+      return drawn.forget();
+    }
+    return static_cast<DrawTargetRecording*>(aTarget)->StealthProjectedSurface(
+        drawn, premultiplied, noise);
+  }
+  return CanvasUtils::StealthProjectSnapshot(drawn, premultiplied,
+                                             NodePrincipal());
+}
+
+already_AddRefed<SourceSurface> HTMLCanvasElement::GetSurfaceSnapshotAsDrawn(
+    gfxAlphaType* const aOutAlphaType, DrawTarget* aTarget) {
   if (mCurrentContext) {
     return mCurrentContext->GetOptimizedSnapshot(aTarget, aOutAlphaType);
   } else if (mOffscreenDisplay) {
-    return mOffscreenDisplay->GetSurfaceSnapshot();
+    return mOffscreenDisplay->GetSurfaceSnapshotAsDrawn();
   }
   return nullptr;
 }

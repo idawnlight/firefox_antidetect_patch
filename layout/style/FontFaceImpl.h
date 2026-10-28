@@ -6,6 +6,7 @@
 #define mozilla_dom_FontFaceImpl_h
 
 #include "gfxUserFontSet.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/RWLock.h"
 #include "mozilla/dom/FontFaceBinding.h"
 #include "nsTHashSet.h"
@@ -26,6 +27,8 @@ class UTF8StringOrArrayBufferOrArrayBufferView;
 }  // namespace mozilla
 
 namespace mozilla::dom {
+
+mozilla::Maybe<bool> StealthFontAllowed(const nsACString& aFamily);
 
 class FontFaceImpl final {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FontFaceImpl)

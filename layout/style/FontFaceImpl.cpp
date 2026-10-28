@@ -9,10 +9,12 @@
 #include "gfxFontUtils.h"
 #include "gfxPlatformFontList.h"
 #include "mozilla/ServoCSSParser.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/FontFaceBinding.h"
 #include "mozilla/dom/FontFaceSetImpl.h"
 #include "nsStyleUtil.h"
+#include "nsUnicharUtils.h"
 
 namespace mozilla::dom {
 
@@ -351,8 +353,37 @@ void FontFaceImpl::DoLoad() {
   mUserFontEntry->Load();
 }
 
+Maybe<bool> StealthFontAllowed(const nsACString& aFamily) {
+  (void)aFamily;
+  return Nothing();
+}
+
 void FontFaceImpl::SetStatus(FontFaceLoadStatus aStatus) {
   gfxFontUtils::AssertSafeThreadOrServoFontMetricsLocked();
+
+  // Stealth: when a per-profile fontlist is active, force the Font Loading API
+  // status to match it (listed -> Loaded, else Error) so document.fonts.* and
+  // @font-face verdicts agree with the enumerated set. No fontlist -> vanilla.
+  {
+    nsAutoCString stealthFamily;
+    GetFamily(stealthFamily);
+    if (Maybe<bool> allowed = StealthFontAllowed(stealthFamily)) {
+      FontFaceLoadStatus forced =
+          *allowed ? FontFaceLoadStatus::Loaded : FontFaceLoadStatus::Error;
+      if (mStatus == forced) {
+        return;
+      }
+      mStatus = forced;
+      if (mInFontFaceSet) {
+        mFontFaceSet->OnFontFaceStatusChanged(this);
+      }
+      for (FontFaceSetImpl* otherSet : mOtherFontFaceSets) {
+        otherSet->OnFontFaceStatusChanged(this);
+      }
+      UpdateOwnerPromise();
+      return;
+    }
+  }
 
   if (mStatus == aStatus) {
     return;

@@ -428,6 +428,15 @@ static const char kFontNotoSansSymbols2[] = "Noto Sans Symbols2";
 void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
                                             FontPresentation aPresentation,
                                             nsTArray<const char*>& aFontList) {
+  // Search declared bundle fallback families before platform fallback.
+  if (PrefersColor(aPresentation)) {
+    aFontList.AppendElement("Segoe UI Emoji");
+  }
+  aFontList.AppendElement("Arial");
+  aFontList.AppendElement("Segoe UI");
+  aFontList.AppendElement("Segoe UI Symbol");
+  aFontList.AppendElement("Cambria Math");
+
   if (PrefersColor(aPresentation)) {
     aFontList.AppendElement(kFontTwemojiMozilla);
   }

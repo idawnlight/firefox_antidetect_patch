@@ -7,6 +7,7 @@
 #include "COLRFonts.h"
 #include "FontPaletteCache.h"
 #include "GreekCasing.h"
+#include "StealthBundleFontList.h"
 #include "TextDrawTarget.h"
 #include "ThebesRLBox.h"
 #include "cairo.h"
@@ -18,6 +19,7 @@
 #include "gfxHarfBuzzShaper.h"
 #include "gfxMathTable.h"
 #include "gfxPlatform.h"
+#include "gfxPlatformFontList.h"
 #include "gfxSVGGlyphs.h"
 #include "gfxTextRun.h"
 #include "gfxTypes.h"
@@ -4224,6 +4226,41 @@ void gfxFont::SetupGlyphExtents(DrawTarget* aDrawTarget, uint32_t aGlyphID,
 // Return FALSE if the gfxFontEntry subclass does not
 // implement GetFontTable(), or for non-sfnt fonts where tables are
 // not available.
+// Read OS/2 vertical metrics in font units and scale by the adjusted size.
+bool gfxFont::GetStealthHostIndepVMetrics(gfxFloat& aEmAscent,
+                                          gfxFloat& aEmDescent,
+                                          gfxFloat& aMaxAscent,
+                                          gfxFloat& aMaxDescent) {
+  if (mFUnitsConvFactor < 0.0) {
+    uint16_t unitsPerEm = GetFontEntry() ? GetFontEntry()->UnitsPerEm()
+                                         : gfxFontEntry::kInvalidUPEM;
+    if (unitsPerEm == gfxFontEntry::kInvalidUPEM || unitsPerEm == 0) {
+      return false;
+    }
+    mFUnitsConvFactor = GetAdjustedSize() / unitsPerEm;
+  }
+  if (mFUnitsConvFactor <= 0.0) {
+    return false;
+  }
+  gfxFontEntry::AutoTable os2Table(mFontEntry,
+                                   TRUETYPE_TAG('O', 'S', '/', '2'));
+  if (!os2Table) {
+    return false;
+  }
+  uint32_t len;
+  const OS2Table* os2 =
+      reinterpret_cast<const OS2Table*>(hb_blob_get_data(os2Table, &len));
+  if (len < offsetof(OS2Table, usWinDescent) + sizeof(uint16_t)) {
+    return false;
+  }
+  aEmAscent = int16_t(os2->sTypoAscender) * mFUnitsConvFactor;
+  aEmDescent =
+      -int16_t(os2->sTypoDescender) * mFUnitsConvFactor;  // sTypoDescender < 0
+  aMaxAscent = uint16_t(os2->usWinAscent) * mFUnitsConvFactor;
+  aMaxDescent = uint16_t(os2->usWinDescent) * mFUnitsConvFactor;
+  return true;
+}
+
 // If this returns TRUE without setting the mIsValid flag, then we -did-
 // apparently find an sfnt, but it was too broken to be used.
 bool gfxFont::InitMetricsFromSfntTables() {
@@ -4448,6 +4485,31 @@ void gfxFont::CalculateDerivedMetrics() {
   }
 }
 
+static bool GetStealthBundleVMetrics(gfxFontEntry* aFontEntry,
+                                     StealthBundleVMetrics& aOut) {
+  // Identify bundled faces by shared-list descriptor and collection index.
+  if (!aFontEntry) {
+    return false;
+  }
+  if (!aFontEntry->mShmemFace) {
+    return false;
+  }
+  auto* pfl = gfxPlatformFontList::PlatformFontList(false);
+  if (!pfl) {
+    return false;
+  }
+  mozilla::fontlist::FontList* sharedList = pfl->SharedFontList();
+  if (!sharedList) {
+    return false;
+  }
+  auto* bundle = StealthBundleFontList::Get();  // never null; it crashes first
+  // A Face's mDescriptor is the bundle file name and mIndex the face within
+  // it - the same pair every backend's CreateFontEntry uses to load the file.
+  const nsCString file =
+      aFontEntry->mShmemFace->mDescriptor.AsString(sharedList);
+  return bundle->GetVMetrics(file, aFontEntry->mShmemFace->mIndex, aOut);
+}
+
 void gfxFont::SanitizeMetrics(bool aIsBadUnderlineFont) {
   // Even if this font size is zero, this font is created with non-zero size.
   // However, for layout and others, we should return the metrics of zero size
@@ -4455,6 +4517,49 @@ void gfxFont::SanitizeMetrics(bool aIsBadUnderlineFont) {
   if (mStyle.AdjustedSizeMustBeZero()) {
     memset(&mMetrics, 0, sizeof(mMetrics));
     return;
+  }
+
+  // Apply manifest vertical metrics before CSS overrides and normal clamps.
+  StealthBundleVMetrics vm;
+  if (GetStealthBundleVMetrics(mFontEntry, vm)) {
+    const gfxFloat size = GetAdjustedSize();
+    const gfxFloat conv = size / gfxFloat(vm.mUpem);
+
+    mMetrics.maxAscent = NS_round(vm.mAscent * conv);
+    mMetrics.maxDescent = NS_round(vm.mDescent * conv);
+    mMetrics.maxHeight = mMetrics.maxAscent + mMetrics.maxDescent;
+    mMetrics.emHeight = size;
+    // Keep emAscent + emDescent == emHeight: gfxHarfBuzzShaper reads both to
+    // place the vertical VOrg and the glyph y_bearing, so breaking that
+    // invariant would move glyph bounding boxes, not just line boxes.
+    mMetrics.emAscent =
+        mMetrics.maxHeight > 0.0
+            ? mMetrics.emHeight * mMetrics.maxAscent / mMetrics.maxHeight
+            : mMetrics.emHeight;
+    mMetrics.emDescent = mMetrics.emHeight - mMetrics.emAscent;
+    mMetrics.internalLeading =
+        std::max(mMetrics.maxHeight - mMetrics.emHeight, 0.0);
+    mMetrics.externalLeading = std::ceil(vm.mLineGap * conv);
+
+    // xHeight / capHeight are absent from a pre-v2 OS/2 table; when the
+    // manifest carries 0 keep whatever the backend derived, rather than
+    // zeroing a real value.
+    if (vm.mXHeight) {
+      mMetrics.xHeight = vm.mXHeight * conv;
+    }
+    if (vm.mCapHeight) {
+      mMetrics.capHeight = vm.mCapHeight * conv;
+    }
+    if (vm.mUnderlineSize) {
+      mMetrics.underlineOffset = vm.mUnderlineOffset * conv;
+      mMetrics.underlineSize = vm.mUnderlineSize * conv;
+    }
+    if (vm.mStrikeoutSize) {
+      mMetrics.strikeoutOffset = vm.mStrikeoutOffset * conv;
+      mMetrics.strikeoutSize = vm.mStrikeoutSize * conv;
+    }
+    // The clamps below (underlineSize >= 1, underlineOffset <= -1,
+    // maxAscent >= 1, ...) still run, exactly as they do for backend values.
   }
 
   // If the font entry has ascent/descent/lineGap-override values,

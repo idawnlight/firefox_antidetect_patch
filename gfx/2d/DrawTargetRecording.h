@@ -7,6 +7,7 @@
 
 #include "2D.h"
 #include "DrawEventRecorder.h"
+#include "StealthCanvasProjection.h"
 
 class nsICanvasRenderingContextInternal;
 
@@ -427,6 +428,12 @@ class DrawTargetRecording final : public DrawTarget {
   already_AddRefed<SourceSurface> CreateExternalSourceSurface(
       const IntSize& aSize, SurfaceFormat aFormat);
 
+ public:
+  already_AddRefed<SourceSurface> StealthProjectedSurface(
+      SourceSurface* aSurface, bool aPremultiplied,
+      const StealthCanvasNoise& aNoise);
+
+ private:
   friend class ::nsICanvasRenderingContextInternal;
 
   already_AddRefed<SourceSurface> SnapshotExternalCanvas(

@@ -5,6 +5,7 @@
 #include "CanvasRenderingContext2D.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numbers>
 
 #include "CanvasImageCache.h"
@@ -14,6 +15,8 @@
 #include "ImageRegion.h"
 #include "LayerUserData.h"
 #include "PseudoStyleType.h"
+#include "StealthBundleFontList.h"
+#include "StealthDeclarationGate.h"
 #include "Units.h"
 #include "WindowRenderer.h"
 #include "gfxBlur.h"
@@ -51,6 +54,7 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/CanvasGradient.h"
@@ -2281,6 +2285,8 @@ CanvasRenderingContext2D::SetContextOptions(JSContext* aCx,
   return NS_OK;
 }
 
+// Pure 2D readback remains unchanged; GPU sources use StealthProjectPixels.
+
 UniquePtr<uint8_t[]> CanvasRenderingContext2D::GetImageBuffer(
     mozilla::CanvasUtils::ImageExtraction aExtractionBehavior,
     int32_t* out_format, gfx::IntSize* out_imageSize) {
@@ -2670,8 +2676,9 @@ already_AddRefed<CanvasPattern> CanvasRenderingContext2D::CreatePattern(
     // Special case for Canvas, which could be an Azure canvas!
     nsICanvasRenderingContextInternal* srcCanvas = canvas->GetCurrentContext();
     if (srcCanvas) {
-      // This might not be an Azure canvas!
-      RefPtr<SourceSurface> srcSurf = srcCanvas->GetSurfaceSnapshot();
+      // This might not be an Azure canvas! Read through the element, as a
+      // page reads it (the canvas noise, for a WebGL/WebGPU source only).
+      RefPtr<SourceSurface> srcSurf = canvas->GetSurfaceSnapshot();
       if (!srcSurf) {
         aError.ThrowInvalidStateError(
             "CanvasRenderingContext2D.createPattern() failed to snapshot source"
@@ -2713,7 +2720,7 @@ already_AddRefed<CanvasPattern> CanvasRenderingContext2D::CreatePattern(
     nsICanvasRenderingContextInternal* srcCanvas =
         offscreenCanvas->GetContext();
     if (srcCanvas) {
-      RefPtr<SourceSurface> srcSurf = srcCanvas->GetSurfaceSnapshot();
+      RefPtr<SourceSurface> srcSurf = offscreenCanvas->GetSurfaceSnapshot();
       if (!srcSurf) {
         aError.ThrowInvalidStateError(
             "Passed-in canvas failed to create snapshot");
@@ -4712,15 +4719,15 @@ void CanvasRenderingContext2D::FillText(const nsAString& aText, double aX,
            "\"%s\"\n",
            mFillTextCalls, NS_ConvertUTF16toUTF8(aText).get()));
   if (mFillTextCalls <= 5) {
-    if (aText == u"Cwm fjordbank glyphs vext quiz, 😃"_ns) {
+    if (aText == u"Cwm fjordbank glyphs vext quiz, \U0001f603"_ns) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_1;
     } else if (StringBeginsWith(aText, u"Hel$&?6%"_ns)) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_2;  // Imperva
     } else if (StringBeginsWith(aText, u"<@nv45. "_ns)) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_3;
-    } else if (aText == u"Cañvas FP 😎 12345"_ns) {
+    } else if (aText == u"Ca\u00f1vas FP \U0001f60e 12345"_ns) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_4;
-    } else if (StringBeginsWith(aText, u"❤️🤪🎉👋"_ns)) {
+    } else if (StringBeginsWith(aText, u"\u2764\ufe0f\U0001f92a\U0001f389\U0001f44b"_ns)) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_5;  // hCaptcha
     } else if (aText == u"SomeCanvasFingerPrint.65@345876"_ns) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_6;
@@ -4760,11 +4767,11 @@ void CanvasRenderingContext2D::FillText(const nsAString& aText, double aX,
       mFeatureUsage |= CanvasFeatureUsage::KnownText_23;
     } else if (aText == u"<@nv45. F1n63r,Pr1n71n6!"_ns) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_24;
-    } else if (aText == u"Cwm fjordbank gly 😃"_ns) {
+    } else if (aText == u"Cwm fjordbank gly \U0001f603"_ns) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_25;
     } else if (aText == u"clientgear.com <canvas> 1.0") {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_26;
-    } else if (aText == u"iO0A🤣💩") {
+    } else if (aText == u"iO0A\U0001f923\U0001f4a9") {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_27;
     } else if (aText == u"Ry"_ns) {
       mFeatureUsage |= CanvasFeatureUsage::KnownText_28;
@@ -5405,6 +5412,68 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
         -processor.mBoundingBox.Y() - baselineAnchor;
     double actualBoundingBoxDescent =
         processor.mBoundingBox.YMost() + baselineAnchor;
+    // Use OS/2 vertical metrics for horizontal TextMetrics.
+    gfxFloat emA, emD, maxA, maxD;
+    if (mozilla::gfx::StealthEngineActive() &&
+        font->GetStealthHostIndepVMetrics(emA, emD, maxA, maxD)) {
+      // Round the Windows ascent/descent pair before deriving the em box.
+      maxA = std::round(maxA);
+      maxD = std::round(maxD);
+      const gfxFloat maxH = maxA + maxD;
+      if (maxH > 0.0) {
+        // Split the em box using the rounded Windows ascent/descent ratio.
+        const gfxFloat emH = font->GetAdjustedSize();
+        emA = emH * maxA / maxH;
+        emD = emH - emA;
+      }
+      // Mirror every baseline case, using HarfBuzz for hanging and ideographic values.
+      gfxFloat hiAnchor;
+      switch (state.textBaseline) {
+        case CanvasTextBaseline::Hanging:
+          hiAnchor = font->GetBaseline(gfxFont::kHanging, fontOrientation);
+          break;
+        case CanvasTextBaseline::Top:
+          hiAnchor = emA;
+          break;
+        case CanvasTextBaseline::Middle:
+          hiAnchor = (emA - emD) * 0.5;
+          break;
+        case CanvasTextBaseline::Alphabetic:
+          hiAnchor = font->GetBaseline(gfxFont::kAlphabetic, fontOrientation);
+          break;
+        case CanvasTextBaseline::Ideographic:
+          hiAnchor =
+              font->GetBaseline(gfxFont::kIdeographicUnder, fontOrientation);
+          break;
+        case CanvasTextBaseline::Bottom:
+          hiAnchor = -emD;
+          break;
+        default:
+          hiAnchor = 0.0;
+          break;
+      }
+      if (fontOrientation == nsFontMetrics::eVertical) {
+        // Mirrors the same adjustment on baselineAnchor above: a vertical run
+        // is shaped against the centre baseline rather than the alphabetic one.
+        hiAnchor -= (emA - emD) * 0.5;
+      }
+      // For empty ink boxes, preserve the baseline-anchor offsets.
+      // Use the same rounded ascent/descent ratio as the normal metrics path.
+      return MakeUnique<TextMetrics>(
+          totalWidth,
+          actualBoundingBoxLeft,  // the real ink box, not the advance
+          actualBoundingBoxRight,
+          maxA - hiAnchor,  // fontBoundingBoxAscent
+          maxD + hiAnchor,  // fontBoundingBoxDescent
+          actualBoundingBoxAscent, actualBoundingBoxDescent,
+          emA - hiAnchor,  // emHeightAscent
+          emD + hiAnchor,  // emHeightDescent
+          // Use the normal HarfBuzz baseline synthesis, including its fixed-point precision.
+          font->GetBaseline(gfxFont::kHanging, fontOrientation) - hiAnchor,
+          font->GetBaseline(gfxFont::kAlphabetic, fontOrientation) - hiAnchor,
+          font->GetBaseline(gfxFont::kIdeographicUnder, fontOrientation) -
+              hiAnchor);
+    }
     return MakeUnique<TextMetrics>(
         totalWidth, actualBoundingBoxLeft, actualBoundingBoxRight,
         fontMetrics.maxAscent - baselineAnchor,   // fontBBAscent

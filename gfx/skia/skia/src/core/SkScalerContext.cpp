@@ -42,6 +42,9 @@
 #include "src/core/SkWriteBuffer.h"
 #include "src/utils/SkFloatUtils.h"
 #include "src/utils/SkMatrix22.h"
+// STEALTH: Gecko-owned, and deliberately the only Mozilla header here - it
+// declares one free function and includes nothing itself. See getImage().
+#include "mozilla/gfx/StealthGlyphCoverage.h"
 
 #include <algorithm>
 #include <cstring>
@@ -651,6 +654,13 @@ void SkScalerContext::getImage(const SkGlyph& origGlyph) {
             const bool hairline = origGlyph.pathIsHairline();
             GenerateImageFromPath(mask, *devPath, fPreBlend, doBGR, doVert, a8LCD, hairline);
         }
+    }
+
+    if (unfilteredGlyph->maskFormat() == SkMask::kA8_Format) {
+        mozilla::gfx::StealthQuantiseGlyphCoverage(
+                static_cast<uint8_t*>(unfilteredGlyph->fImage),
+                unfilteredGlyph->width(), unfilteredGlyph->height(),
+                unfilteredGlyph->rowBytes());
     }
 
     if (fMaskFilter) {

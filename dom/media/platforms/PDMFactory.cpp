@@ -17,6 +17,7 @@
 #include "MediaChangeMonitor.h"
 #include "MediaInfo.h"
 #include "PDMFactorySupport.h"
+#include "StealthMediaDeclaration.h"
 #include "VPXDecoder.h"
 #include "VideoUtils.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -470,6 +471,20 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
 DecodeSupportSet PDMFactory::Supports(
     const SupportDecoderParams& aParams,
     DecoderDoctorDiagnostics* aDiagnostics) const {
+  {
+    bool sw = false, hw = false;
+    if (StealthDeclaredDecodeSupport(aParams.MimeType(), sw, hw)) {
+      DecodeSupportSet declared{};
+      if (sw) {
+        declared += DecodeSupport::SoftwareDecode;
+      }
+      if (hw) {
+        declared += DecodeSupport::HardwareDecode;
+      }
+      return declared;
+    }
+  }
+
   if (mEMEPDM) {
     return mEMEPDM->Supports(aParams, aDiagnostics);
   }
@@ -487,6 +502,18 @@ DecodeSupportSet PDMFactory::Supports(
 
 RefPtr<PDMSupportsDecoderPromise> PDMFactory::SupportsAsync(
     const SupportDecoderParams& aParams) const {
+  bool sw = false, hw = false;
+  if (StealthDeclaredDecodeSupport(aParams.MimeType(), sw, hw)) {
+    DecodeSupportSet declared{};
+    if (sw) {
+      declared += DecodeSupport::SoftwareDecode;
+    }
+    if (hw) {
+      declared += DecodeSupport::HardwareDecode;
+    }
+    return PDMSupportsDecoderPromise::CreateAndResolve(declared, __func__);
+  }
+
   if (mEMEPDM) {
     return mEMEPDM->SupportsAsync(aParams);
   }
