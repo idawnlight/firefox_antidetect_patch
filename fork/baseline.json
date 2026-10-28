@@ -1,0 +1,10 @@
+{
+  "mozilla_tag": "FIREFOX_159_0_RELEASE",
+  "mozilla_commit": "9a2dc53c369c7ae5172018b35988e1d2ffeff402",
+  "reference_tag": "firefox-53",
+  "reference_commit": "57a89f0152b8ada6613bf5d008db923873c955a5",
+  "reference_mozilla_version": "151.0",
+  "core_version": "159.49.0",
+  "wrapper_version": "0.43.1.dev0",
+  "client_version": "1.61.0"
+}

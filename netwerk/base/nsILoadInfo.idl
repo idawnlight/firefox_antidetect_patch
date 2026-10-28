@@ -1756,4 +1756,6 @@ interface nsILoadInfo : nsISupports
       return static_cast<mozilla::dom::UserNavigationInvolvement>(userNavigationInvolvement);
     }
 %}
+
+  [infallible] attribute unsigned long long jugglerLoadIdentifier;
 };

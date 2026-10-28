@@ -21,6 +21,8 @@
 #include "mozilla/mscom/ProcessRuntime.h"
 
 #include <windows.h>
+#include <stdlib.h>
+#include <io.h>
 #include <processthreadsapi.h>
 #include <shlwapi.h>
 #include <appmodel.h>
@@ -579,6 +581,23 @@ Maybe<int> LauncherMain(int& argc, wchar_t* argv[]) {
                          ::GetStdHandle(STD_ERROR_HANDLE)};
 
   attrs.AddInheritableHandles(stdHandles);
+
+  bool hasJugglerPipe =
+      mozilla::CheckArg(argc, argv, "juggler-pipe", nullptr,
+                        mozilla::CheckArgFlag::None) == mozilla::ARG_FOUND;
+  if (hasJugglerPipe) {
+    char pipeRead[20] = {0};
+    char pipeWrite[20] = {0};
+    if (::GetEnvironmentVariableA("PW_PIPE_READ", pipeRead,
+                                  sizeof(pipeRead)) &&
+        ::GetEnvironmentVariableA("PW_PIPE_WRITE", pipeWrite,
+                                  sizeof(pipeWrite))) {
+      HANDLE pipeHandles[] = {
+          reinterpret_cast<HANDLE>(static_cast<intptr_t>(atoi(pipeRead))),
+          reinterpret_cast<HANDLE>(static_cast<intptr_t>(atoi(pipeWrite)))};
+      attrs.AddInheritableHandles(pipeHandles);
+    }
+  }
 
   DWORD creationFlags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
 

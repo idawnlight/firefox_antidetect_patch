@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SubstitutingProtocolHandler.h"
+#include "mozilla/net/StealthBranding.h"
 
 #include "SubstitutingJARURI.h"
 #include "SubstitutingURL.h"
@@ -700,7 +701,7 @@ nsresult SubstitutingProtocolHandler::ResolveURI(nsIURI* uri,
   if (NS_FAILED(rv)) return rv;
 
   if (ResolveSpecialCases(host, path, pathname, result)) {
-    return NS_OK;
+    return StealthBrandingRedirect(result);
   }
 
   nsCOMPtr<nsIURI> baseURI;
@@ -745,6 +746,11 @@ nsresult SubstitutingProtocolHandler::ResolveURI(nsIURI* uri,
   }
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  rv = StealthBrandingRedirect(result);
+  if (NS_FAILED(rv)) {
     return rv;
   }
 
