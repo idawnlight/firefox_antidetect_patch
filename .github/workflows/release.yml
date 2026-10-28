@@ -372,6 +372,10 @@ jobs:
             echo "SCCACHE_DIR=$HOME/.cache/sccache-ci"
             echo "SCCACHE_CACHE_SIZE=30G"
             echo "SCCACHE_PINNED_VERSION=0.18.0"
+            # Never idle out: the full-LTO link runs for longer than the default
+            # ten minutes with nothing to compile, the server exited, and the
+            # statistics step read a fresh server's zeros (run 40593659072).
+            echo "SCCACHE_IDLE_TIMEOUT=0"
           } >> "$GITHUB_ENV"
       - name: Compile cache (candidates only) - restore this leg's last one
         if: needs.plan.outputs.compile_cache == 'gha'
@@ -535,6 +539,15 @@ jobs:
       # separate artifact, never part of the asset (gate.yml and publish.yml take
       # asset-* only).
       - name: Crash symbols (never shipped)
+        # A ceiling of its own: in run 40593659072 this step recompiled Rust
+        # (621 crates, 35 minutes against 2 the run before) and nothing bounded
+        # it below the job's 350.
+        timeout-minutes: 60
+        env:
+          # Why cargo finds a crate dirty here, in the log: the build had just
+          # compiled it (run 40593659072), so something between the two steps
+          # changed its fingerprint.
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: |
           set -e
           python3 scripts/ci phase symbols -- ./mach buildsymbols
