@@ -1082,6 +1082,35 @@ JS_PUBLIC_API bool BuildStackString(JSContext* cx, JSPrincipals* principals,
                                             SavedFrameSelfHosted::Exclude,
                                             skippedNextAsync);
 
+      // Stealth: skip Juggler's frames from stack traces visible to web
+      // content. FingerprintJS Pro detects automation by checking Error.stack
+      // for juggler/debugger-specific frame sources. Juggler loads from
+      // resource://gre/modules/juggler/ (juggler/moz.build says why it is not
+      // a chrome package).
+      {
+        static constexpr char kJuggler[] = "resource://gre/modules/juggler/";
+        static constexpr size_t kJugglerLength = sizeof(kJuggler) - 1;
+        JSAtom* source = frame->getSource();
+        if (source && source->length() >= kJugglerLength) {
+          JS::AutoCheckCannotGC nogc;
+          bool skip = true;
+          if (source->hasLatin1Chars()) {
+            const JS::Latin1Char* chars = source->latin1Chars(nogc);
+            skip = memcmp(chars, kJuggler, kJugglerLength) == 0;
+          } else {
+            const char16_t* chars = source->twoByteChars(nogc);
+            for (size_t i = 0; i < kJugglerLength && skip; i++) {
+              skip = chars[i] == char16_t(kJuggler[i]);
+            }
+          }
+          if (skip) {
+            frame = nextFrame;
+            skippedAsync = skippedNextAsync;
+            continue;
+          }
+        }
+      }
+
       switch (format) {
         case js::StackFormat::SpiderMonkey:
           if (!FormatSpiderMonkeyStackFrame(cx, sb, frame, indent,

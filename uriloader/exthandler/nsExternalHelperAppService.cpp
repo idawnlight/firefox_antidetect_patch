@@ -392,6 +392,12 @@ NS_IMETHODIMP nsExternalHelperAppService::GetPreferredDownloadsDirectory(
   return NS_OK;
 }
 
+NS_IMETHODIMP nsExternalHelperAppService::SetDownloadInterceptor(
+    nsIDownloadInterceptor* interceptor) {
+  mInterceptor = interceptor;
+  return NS_OK;
+}
+
 /**
  * Obtains the initial directory to save downloads to. (This may differ from the
  * actual download directory if "browser.download.start_downloads_in_tmp_dir" is

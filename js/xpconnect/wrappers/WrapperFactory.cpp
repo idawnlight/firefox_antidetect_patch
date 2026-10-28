@@ -375,6 +375,7 @@ static void DEBUG_CheckUnwrapSafety(HandleObject obj,
           CompartmentPrivate::Get(target);
       if (!originCompartmentPrivate->wantXrays &&
           !targetCompartmentPrivate->wantXrays &&
+          !targetCompartmentPrivate->hybridXrays &&
           CompartmentsMayHaveHadTransparentCCWs(originCompartmentPrivate,
                                                 targetCompartmentPrivate)) {
         // We should have a transparent CCW, unless we have a cross-origin
@@ -445,6 +446,87 @@ static const Wrapper* SelectWrapper(bool securityWrapper, XrayType xrayType,
   return &FilteringWrapper<CrossCompartmentSecurityWrapper, Opaque>::singleton;
 }
 
+static const Wrapper* SelectHybridWrapper(XrayType xrayType) {
+  if (xrayType == XrayForDOMObject) {
+    return &HybridXrayDOM::singleton;
+  }
+  if (xrayType == XrayForJSObject) {
+    return &HybridXrayJS::singleton;
+  }
+  return &CrossCompartmentWrapper::singleton;
+}
+
+class CallerObjectWrapper : public CrossCompartmentWrapper {
+ public:
+  constexpr CallerObjectWrapper()
+      : CrossCompartmentWrapper(0, /* aHasPrototype = */ true) {}
+
+  virtual bool getPrototype(JSContext* cx, HandleObject wrapper,
+                            MutableHandleObject protop) const override;
+  virtual bool getPrototypeIfOrdinary(
+      JSContext* cx, HandleObject wrapper, bool* isOrdinary,
+      MutableHandleObject protop) const override;
+
+  static const CallerObjectWrapper singleton;
+};
+
+const CallerObjectWrapper CallerObjectWrapper::singleton;
+
+// The intrinsic of the caller's realm `proto` is, or JSProto_Null. Called in
+// the caller's realm.
+static bool CallerIntrinsicKey(JSContext* cx, HandleObject proto,
+                               JSProtoKey* key) {
+  *key = JSProto_Null;
+  if (js::IsCrossCompartmentWrapper(proto)) {
+    // the page's own object, set as a prototype: it crosses back as itself
+    return true;
+  }
+  *key = JS::IdentifyStandardPrototype(proto);
+  if (*key != JSProto_Null) {
+    return true;
+  }
+  for (JSProtoKey k : {JSProto_AsyncFunction, JSProto_GeneratorFunction,
+                       JSProto_AsyncGeneratorFunction}) {
+    RootedObject intrinsic(cx);
+    if (!JS_GetClassPrototype(cx, k, &intrinsic)) {
+      return false;
+    }
+    if (intrinsic == proto) {
+      *key = k;
+      return true;
+    }
+  }
+  return true;
+}
+
+bool CallerObjectWrapper::getPrototype(JSContext* cx, HandleObject wrapper,
+                                       MutableHandleObject protop) const {
+  RootedObject target(cx, wrappedObject(wrapper));
+  JSProtoKey key = JSProto_Null;
+  {
+    JSAutoRealm ar(cx, target);
+    if (!JS_GetPrototype(cx, target, protop)) {
+      return false;
+    }
+    if (protop && !CallerIntrinsicKey(cx, protop, &key)) {
+      return false;
+    }
+  }
+  if (key != JSProto_Null) {
+    // the intrinsic of the realm asking, which is one of the page's
+    return JS_GetClassPrototype(cx, key, protop);
+  }
+  return JS_WrapObject(cx, protop);
+}
+
+bool CallerObjectWrapper::getPrototypeIfOrdinary(
+    JSContext* cx, HandleObject wrapper, bool* isOrdinary,
+    MutableHandleObject protop) const {
+  // Computed for the realm asking, so never the target's own [[Prototype]].
+  *isOrdinary = false;
+  return true;
+}
+
 JSObject* WrapperFactory::Rewrap(JSContext* cx, HandleObject existing,
                                  HandleObject obj) {
   MOZ_ASSERT(!IsWrapper(obj) || GetProxyHandler(obj) == &XrayWaiver ||
@@ -475,6 +557,10 @@ JSObject* WrapperFactory::Rewrap(JSContext* cx, HandleObject existing,
       CompartmentPrivate::Get(origin);
   CompartmentPrivate* targetCompartmentPrivate =
       CompartmentPrivate::Get(target);
+
+  bool targetHybrid = targetCompartmentPrivate->hybridXrays;
+  bool originForcesXrays = originCompartmentPrivate->wantXrays;
+  bool targetForcesXrays = targetCompartmentPrivate->wantXrays || targetHybrid;
 
   // Track whether we decided to use a transparent wrapper because of
   // document.domain usage, so we don't override that decision.
@@ -515,18 +601,22 @@ JSObject* WrapperFactory::Rewrap(JSContext* cx, HandleObject existing,
            // Check for the more rare case of cross-origin objects before doing
            // the more-likely-to-pass checks for wantXrays.
            IsCrossOriginAccessibleObject(obj) &&
-           (!targetSubsumesOrigin || (!originCompartmentPrivate->wantXrays &&
-                                      !targetCompartmentPrivate->wantXrays))) {
+           (!targetSubsumesOrigin ||
+            (!originForcesXrays && !targetForcesXrays))) {
     wrapper = &CrossOriginObjectWrapper::singleton;
+  }
+
+  else if (originCompartmentPrivate->hybridXrays && !targetHybrid &&
+           !targetIsChrome && targetSubsumesOrigin && !targetForcesXrays) {
+    wrapper = &CallerObjectWrapper::singleton;
   }
 
   // Special handling for other web objects.  Again, we only want this in
   // web-like contexts (symmetric security relationships, no forced Xrays).  In
   // this situation, if the two compartments may ever have had transparent CCWs
   // between them, we want to keep using transparent CCWs.
-  else if (originSubsumesTarget == targetSubsumesOrigin &&
-           !originCompartmentPrivate->wantXrays &&
-           !targetCompartmentPrivate->wantXrays &&
+  else if (originSubsumesTarget == targetSubsumesOrigin && !originForcesXrays &&
+           !targetForcesXrays &&
            CompartmentsMayHaveHadTransparentCCWs(originCompartmentPrivate,
                                                  targetCompartmentPrivate)) {
     isTransparentWrapperDueToDocumentDomain = true;
@@ -550,8 +640,7 @@ JSObject* WrapperFactory::Rewrap(JSContext* cx, HandleObject existing,
     //
     // Xrays are a bidirectional protection, since it affords clarity to the
     // caller and privacy to the callee.
-    bool sameOriginXrays = originCompartmentPrivate->wantXrays ||
-                           targetCompartmentPrivate->wantXrays;
+    bool sameOriginXrays = originForcesXrays || targetForcesXrays;
     bool wantXrays = !sameOrigin || sameOriginXrays;
 
     XrayType xrayType = wantXrays ? GetXrayType(obj) : NotXray;
@@ -562,7 +651,11 @@ JSObject* WrapperFactory::Rewrap(JSContext* cx, HandleObject existing,
                       targetCompartmentPrivate->allowWaivers &&
                       HasWaiveXrayFlag(obj);
 
-    wrapper = SelectWrapper(securityWrapper, xrayType, waiveXrays, obj);
+    if (targetHybrid && !securityWrapper && !waiveXrays) {
+      wrapper = SelectHybridWrapper(xrayType);
+    } else {
+      wrapper = SelectWrapper(securityWrapper, xrayType, waiveXrays, obj);
+    }
   }
 
   if (!targetSubsumesOrigin && !isTransparentWrapperDueToDocumentDomain) {

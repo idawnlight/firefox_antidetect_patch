@@ -685,6 +685,10 @@ interface nsIDocShell : nsIDocShellTreeItem
    */
   void synchronizeLayoutHistoryState();
 
+  attribute boolean fileInputInterceptionEnabled;
+  attribute boolean bypassCSPEnabled;
+
+
   /**
    * This attempts to save any applicable layout history state (like
    * scroll position) in the nsISHEntry. This is normally done

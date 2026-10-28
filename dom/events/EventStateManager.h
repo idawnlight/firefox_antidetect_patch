@@ -1469,6 +1469,7 @@ class EventStateManager : public nsSupportsWeakReference, public nsIObserver {
   Modifiers mGestureModifiers;
   uint16_t mGestureDownButtons;
   int16_t mGestureDownButton;
+  bool mGestureDownFromJuggler = false;
 
   LastMouseButtonPressInfo mLastPrimaryButtonPressInfo;
   LastMouseButtonPressInfo mLastMiddleButtonPressInfo;

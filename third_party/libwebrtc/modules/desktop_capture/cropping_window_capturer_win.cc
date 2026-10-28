@@ -220,6 +220,10 @@ bool CroppingWindowCapturerWin::ShouldUseScreenCapturer() {
     return false;
   }
 
+  if (!window_capture_helper_.IsWindowOnInputDesktop(selected)) {
+    return false;
+  }
+
   // Check if the window is a translucent layered window.
   const LONG window_ex_style = GetWindowLong(selected, GWL_EXSTYLE);
   if (window_ex_style & WS_EX_LAYERED) {

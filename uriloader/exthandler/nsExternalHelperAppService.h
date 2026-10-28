@@ -302,6 +302,8 @@ class nsExternalHelperAppService : public nsIExternalHelperAppService,
       mozilla::dom::BrowsingContext* aContentContext, bool aForceSave,
       nsIInterfaceRequestor* aWindowContext,
       nsIStreamListener** aStreamListener);
+
+  nsCOMPtr<nsIDownloadInterceptor> mInterceptor;
 };
 
 /**

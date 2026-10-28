@@ -383,6 +383,12 @@ class XrayWrapper : public Base {
       : Base(flags | WrapperFactory::IS_XRAY_WRAPPER_FLAG,
              /* aHasPrototype = */ true) {};
 
+ protected:
+  constexpr XrayWrapper(unsigned flags, bool aHasPrototype)
+      : Base(flags | WrapperFactory::IS_XRAY_WRAPPER_FLAG, aHasPrototype) {};
+
+ public:
+
   /* Standard internal methods. */
   virtual bool getOwnPropertyDescriptor(
       JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<jsid> id,
@@ -456,6 +462,83 @@ class XrayWrapper : public Base {
 extern template class PermissiveXrayDOM;
 extern template class PermissiveXrayJS;
 extern template class PermissiveXrayOpaque;
+
+template <typename Traits>
+class HybridXrayWrapper
+    : public XrayWrapper<js::CrossCompartmentWrapper, Traits> {
+  using Base = XrayWrapper<js::CrossCompartmentWrapper, Traits>;
+
+ public:
+  constexpr explicit HybridXrayWrapper(unsigned flags)
+      : Base(flags, /* aHasPrototype = */ false) {};
+
+  virtual bool getOwnPropertyDescriptor(
+      JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<jsid> id,
+      JS::MutableHandle<mozilla::Maybe<JS::PropertyDescriptor>> desc)
+      const override;
+  virtual bool defineProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                              JS::Handle<jsid> id,
+                              JS::Handle<JS::PropertyDescriptor> desc,
+                              JS::ObjectOpResult& result) const override;
+  virtual bool ownPropertyKeys(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                               JS::MutableHandleIdVector props) const override;
+  virtual bool delete_(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                       JS::Handle<jsid> id,
+                       JS::ObjectOpResult& result) const override;
+  virtual bool enumerate(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                         JS::MutableHandleIdVector props) const override;
+  virtual bool getPrototype(JSContext* cx, JS::HandleObject wrapper,
+                            JS::MutableHandleObject protop) const override;
+  virtual bool setPrototype(JSContext* cx, JS::HandleObject wrapper,
+                            JS::HandleObject proto,
+                            JS::ObjectOpResult& result) const override;
+  virtual bool setImmutablePrototype(JSContext* cx, JS::HandleObject wrapper,
+                                     bool* succeeded) const override;
+  virtual bool preventExtensions(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                                 JS::ObjectOpResult& result) const override;
+  virtual bool isExtensible(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                            bool* extensible) const override;
+  virtual bool has(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                   JS::Handle<jsid> id, bool* bp) const override;
+  virtual bool get(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                   JS::HandleValue receiver, JS::Handle<jsid> id,
+                   JS::MutableHandle<JS::Value> vp) const override;
+  virtual bool set(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                   JS::Handle<jsid> id, JS::Handle<JS::Value> v,
+                   JS::Handle<JS::Value> receiver,
+                   JS::ObjectOpResult& result) const override;
+  virtual bool hasOwn(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                      JS::Handle<jsid> id, bool* bp) const override;
+  virtual bool getOwnEnumerablePropertyKeys(
+      JSContext* cx, JS::Handle<JSObject*> wrapper,
+      JS::MutableHandleIdVector props) const override;
+
+  // The native view of this one object: the Xray's own resolution of it,
+  // which ChainLookup asks of every standard level.
+  bool nativeOwnPropertyDescriptor(
+      JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<jsid> id,
+      JS::MutableHandle<mozilla::Maybe<JS::PropertyDescriptor>> desc) const;
+
+  static const HybridXrayWrapper singleton;
+};
+
+#define HybridXrayDOM xpc::HybridXrayWrapper<xpc::DOMXrayTraits>
+#define HybridXrayJS xpc::HybridXrayWrapper<xpc::JSXrayTraits>
+
+extern template class HybridXrayDOM;
+extern template class HybridXrayJS;
+
+bool IsHybridXrayWrapper(JSObject* obj);
+
+// A BARE name of the caller's code, which reaches the page's window through
+// the sandbox's prototype proxy. Resolved in the order the page's own realm
+// resolves it, inside the same rule: the standard definition first, then a
+// binding the page declared at its top level with let, const or class (its
+// global lexical environment: not a property of the window, so `window.name`
+// does not find it, in the page or here), then the window's properties.
+bool HybridXrayGetBareName(
+    JSContext* cx, JS::HandleObject wrapper, JS::HandleId id,
+    JS::MutableHandle<mozilla::Maybe<JS::PropertyDescriptor>> desc);
 
 /*
  * Slots for Xray expando objects.  See comments in XrayWrapper.cpp for details

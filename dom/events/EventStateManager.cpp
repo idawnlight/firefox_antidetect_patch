@@ -2672,6 +2672,7 @@ void EventStateManager::BeginTrackingDragGesture(
   mGestureModifiers = aMouseDownOrTouchDragEvent.mModifiers;
   mGestureDownButtons = aMouseDownOrTouchDragEvent.mButtons;
   mGestureDownButton = aMouseDownOrTouchDragEvent.mButton;
+  mGestureDownFromJuggler = aMouseDownOrTouchDragEvent.mJugglerEventId != 0;
 
   if (aMouseDownOrTouchDragEvent.mMessage != eMouseTouchDrag &&
       StaticPrefs::ui_click_hold_context_menus()) {
@@ -2824,6 +2825,13 @@ void EventStateManager::GenerateDragGesture(
              aMouseOrTouchOrPointerEvent.mMessage == ePointerDown);
   if (!IsTrackingDragGesture()) {
     return;
+  }
+
+  if (const WidgetMouseEvent* mouseEvent =
+          aMouseOrTouchOrPointerEvent.AsMouseEvent()) {
+    if ((mouseEvent->mJugglerEventId != 0) != mGestureDownFromJuggler) {
+      return;
+    }
   }
 
   AutoWeakFrame targetFrameBefore = mCurrentTarget;

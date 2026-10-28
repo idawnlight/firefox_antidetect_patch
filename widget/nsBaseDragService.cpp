@@ -1143,7 +1143,8 @@ nsresult nsBaseDragSession::DrawDragForImage(
     }
     *aSurface = dt->Snapshot();
   } else {
-    *aSurface = aCanvas->GetSurfaceSnapshot();
+    // The drag image shows the canvas; a page never reads it back.
+    *aSurface = aCanvas->GetSurfaceSnapshotAsDrawn();
   }
 
   return result;

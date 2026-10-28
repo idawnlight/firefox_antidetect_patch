@@ -114,6 +114,7 @@ class WindowCaptureHelperWin {
   bool IsWindowOnCurrentDesktop(HWND hwnd);
   bool IsWindowVisibleOnCurrentDesktop(HWND hwnd);
   bool IsWindowCloaked(HWND hwnd);
+  bool IsWindowOnInputDesktop(HWND hwnd);
 
   // The optional `ex_style_filters` parameter allows callers to provide
   // extended window styles (e.g. WS_EX_TOOLWINDOW) and prevent windows that
