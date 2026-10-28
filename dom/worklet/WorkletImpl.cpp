@@ -18,6 +18,7 @@
 #include "mozilla/dom/WorkletGlobalScope.h"
 #include "mozilla/dom/worklet/WorkletModuleLoader.h"
 #include "nsGlobalWindowInner.h"
+#include "nsPIDOMWindowInlines.h"
 
 using mozilla::dom::loader::WorkletModuleLoader;
 using mozilla::dom::loader::WorkletScriptLoader;

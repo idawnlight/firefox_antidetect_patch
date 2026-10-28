@@ -730,36 +730,8 @@ static int ShouldDrop(size_t len) {
 }
 
 // This should be called on the STS thread.
-/* Un pacchetto UDP di ICE puo' uscire DIRETTAMENTE anche dietro un proxy, e
- * chi riceve vede l'indirizzo VERO della macchina.
- *
- * MISURATO il 2026-08-26 su tre fornitori e due schemi. Con uno STUN scritto
- * come INDIRIZZO NUMERICO nella configurazione della pagina, il log del motore
- * riporta:
- *
- *   STUN-CLIENT(srflx(IP4:192.168.1.172:55440/UDP|IP4:162.159.207.0:3478/UDP)):
- *       Received mapped address: IP4:81.56.22.74:4318/UDP
- *
- * cioe' il nostro indirizzo di casa, restituito da un server che qualcun altro
- * gestisce, mentre la PAGINA vedeva l'uscita del proxy perche' il candidato
- * reale viene riscritto. Una fuga invisibile a qualunque controllo lato pagina.
- *
- * Con un NOME invece del numero non succede, ma per un motivo che non e' una
- * difesa: il cancello DNS rifiuta la risoluzione, quindi il pacchetto non parte.
- * Ci proteggeva il formato dell'URL scelto dal rilevatore.
- *
- * ⛔ NON si puo' usare la leva che c'era gia'. `GetForceProxy()`
- * (`media.peerconnection.ice.proxy_only`) rifiuta la CREAZIONE del socket UDP,
- * quindi cancella anche i candidati host: misurato su tre fornitori, zero
- * candidati e il rilevatore che scrive "Javascript is manipulated", cioe' il
- * peggiore dei suoi messaggi.
- *
- * Qui si lascia creare il socket e si rifiuta l'INVIO verso destinazioni
- * pubbliche. Restano il multicast (l'mDNS che offusca gli host), il loopback e
- * le reti private, che non escono dalla macchina. Il risultato e' che un server
- * scritto come numero si comporta ESATTAMENTE come uno scritto come nome:
- * irraggiungibile. Che e' cio' che vede chiunque stia dietro un proxy.
- */
+
+
 static bool StealthUscitaUdpDirettaVietata(const nr_transport_addr* to) {
   if (!mozilla::StaticPrefs::zoom_stealth_webrtc_no_direct_udp()) {
     return false;

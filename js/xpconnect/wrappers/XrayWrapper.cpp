@@ -2394,8 +2394,11 @@ static bool ChainLookup(JSContext* cx, HandleObject wrapper, HandleId id,
     } else if (pageFirst.isNothing()) {
       {
         JSAutoRealm ar(cx, content);
-        JS_MarkCrossZoneId(cx, id);
-        if (!JS_GetOwnPropertyDescriptorById(cx, content, id, &levelDesc)) {
+        RootedId wrappedId(cx, id);
+        if (!JS_WrapId(cx, &wrappedId)) {
+          return false;
+        }
+        if (!JS_GetOwnPropertyDescriptorById(cx, content, wrappedId, &levelDesc)) {
           return false;
         }
       }
@@ -2427,9 +2430,12 @@ static bool ContentLookup(JSContext* cx, HandleObject wrapper, HandleId id,
   RootedObject target(cx, HybridTarget(wrapper));
   {
     JSAutoRealm ar(cx, target);
-    JS_MarkCrossZoneId(cx, id);
+    RootedId wrappedId(cx, id);
+    if (!JS_WrapId(cx, &wrappedId)) {
+      return false;
+    }
     RootedObject contentHolder(cx);
-    if (!JS_GetPropertyDescriptorById(cx, target, id, desc, &contentHolder)) {
+    if (!JS_GetPropertyDescriptorById(cx, target, wrappedId, desc, &contentHolder)) {
       return false;
     }
   }
@@ -2456,9 +2462,12 @@ bool HybridXrayGetBareName(JSContext* cx, HandleObject wrapper, HandleId id,
   if (JS_IsGlobalObject(global)) {
     {
       JSAutoRealm ar(cx, global);
-      JS_MarkCrossZoneId(cx, id);
+      RootedId wrappedId(cx, id);
+      if (!JS_WrapId(cx, &wrappedId)) {
+        return false;
+      }
       RootedObject lexical(cx, JS_GlobalLexicalEnvironment(global));
-      if (!JS_GetOwnPropertyDescriptorById(cx, lexical, id, desc)) {
+      if (!JS_GetOwnPropertyDescriptorById(cx, lexical, wrappedId, desc)) {
         return false;
       }
       // A binding still in its temporal dead zone has no value to hand out:
@@ -2483,10 +2492,13 @@ static bool ContentGet(JSContext* cx, HandleObject wrapper,
   RootedObject target(cx, HybridTarget(wrapper));
   {
     JSAutoRealm ar(cx, target);
-    JS_MarkCrossZoneId(cx, id);
+    RootedId wrappedId(cx, id);
+    if (!JS_WrapId(cx, &wrappedId)) {
+      return false;
+    }
     RootedValue contentReceiver(cx, receiver);
     if (!JS_WrapValue(cx, &contentReceiver) ||
-        !JS_ForwardGetPropertyTo(cx, target, id, contentReceiver, vp)) {
+        !JS_ForwardGetPropertyTo(cx, target, wrappedId, contentReceiver, vp)) {
       return false;
     }
   }
@@ -2506,8 +2518,11 @@ bool HybridXrayWrapper<Traits>::getOwnPropertyDescriptor(
   RootedObject target(cx, HybridTarget(wrapper));
   {
     JSAutoRealm ar(cx, target);
-    JS_MarkCrossZoneId(cx, id);
-    if (!JS_GetOwnPropertyDescriptorById(cx, target, id, desc)) {
+    RootedId wrappedId(cx, id);
+    if (!JS_WrapId(cx, &wrappedId)) {
+      return false;
+    }
+    if (!JS_GetOwnPropertyDescriptorById(cx, target, wrappedId, desc)) {
       return false;
     }
   }
@@ -2527,8 +2542,11 @@ bool HybridXrayWrapper<Traits>::hasOwn(JSContext* cx, HandleObject wrapper,
   }
   RootedObject target(cx, HybridTarget(wrapper));
   JSAutoRealm ar(cx, target);
-  JS_MarkCrossZoneId(cx, id);
-  return JS_HasOwnPropertyById(cx, target, id, bp);
+  RootedId wrappedId(cx, id);
+  if (!JS_WrapId(cx, &wrappedId)) {
+    return false;
+  }
+  return JS_HasOwnPropertyById(cx, target, wrappedId, bp);
 }
 
 template <typename Traits>
@@ -2544,8 +2562,11 @@ bool HybridXrayWrapper<Traits>::has(JSContext* cx, HandleObject wrapper,
   }
   RootedObject target(cx, HybridTarget(wrapper));
   JSAutoRealm ar(cx, target);
-  JS_MarkCrossZoneId(cx, id);
-  return JS_HasPropertyById(cx, target, id, bp);
+  RootedId wrappedId(cx, id);
+  if (!JS_WrapId(cx, &wrappedId)) {
+    return false;
+  }
+  return JS_HasPropertyById(cx, target, wrappedId, bp);
 }
 
 template <typename Traits>
@@ -2603,13 +2624,16 @@ bool HybridXrayWrapper<Traits>::set(JSContext* cx, HandleObject wrapper,
   // on a node, an element of the page's array.
   RootedObject target(cx, HybridTarget(wrapper));
   JSAutoRealm ar(cx, target);
-  JS_MarkCrossZoneId(cx, id);
+  RootedId wrappedId(cx, id);
+  if (!JS_WrapId(cx, &wrappedId)) {
+    return false;
+  }
   RootedValue value(cx, v);
   RootedValue contentReceiver(cx, receiver);
   if (!JS_WrapValue(cx, &value) || !JS_WrapValue(cx, &contentReceiver)) {
     return false;
   }
-  return JS_ForwardSetPropertyTo(cx, target, id, value, contentReceiver,
+  return JS_ForwardSetPropertyTo(cx, target, wrappedId, value, contentReceiver,
                                  result);
 }
 
@@ -2619,12 +2643,15 @@ bool HybridXrayWrapper<Traits>::defineProperty(
     Handle<PropertyDescriptor> desc, ObjectOpResult& result) const {
   RootedObject target(cx, HybridTarget(wrapper));
   JSAutoRealm ar(cx, target);
-  JS_MarkCrossZoneId(cx, id);
+  RootedId wrappedId(cx, id);
+  if (!JS_WrapId(cx, &wrappedId)) {
+    return false;
+  }
   Rooted<PropertyDescriptor> wrappedDesc(cx, desc);
   if (!JS_WrapPropertyDescriptor(cx, &wrappedDesc)) {
     return false;
   }
-  return JS_DefinePropertyById(cx, target, id, wrappedDesc, result);
+  return JS_DefinePropertyById(cx, target, wrappedId, wrappedDesc, result);
 }
 
 template <typename Traits>
@@ -2633,8 +2660,11 @@ bool HybridXrayWrapper<Traits>::delete_(JSContext* cx, HandleObject wrapper,
                                         ObjectOpResult& result) const {
   RootedObject target(cx, HybridTarget(wrapper));
   JSAutoRealm ar(cx, target);
-  JS_MarkCrossZoneId(cx, id);
-  return JS_DeletePropertyById(cx, target, id, result);
+  RootedId wrappedId(cx, id);
+  if (!JS_WrapId(cx, &wrappedId)) {
+    return false;
+  }
+  return JS_DeletePropertyById(cx, target, wrappedId, result);
 }
 
 template <typename Traits>
@@ -2652,7 +2682,9 @@ bool HybridXrayWrapper<Traits>::ownPropertyKeys(
     }
   }
   for (size_t i = 0; i < props.length(); ++i) {
-    JS_MarkCrossZoneId(cx, props[i]);
+    if (!JS_WrapId(cx, props[i])) {
+      return false;
+    }
   }
 
   RootedIdVector native(cx);

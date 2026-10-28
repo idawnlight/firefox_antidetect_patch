@@ -625,30 +625,8 @@ static int nr_ice_get_default_address(nr_ice_ctx *ctx, int ip_version, nr_transp
         ABORT(R_INTERNAL);
     }
 
-    /* The target is the WILDCARD address whenever the document came through a
-     * proxy that resolves the host itself (SOCKS with remote DNS): the socket
-     * transport never learns the server's address and reports 0.0.0.0
-     * (nsSocketTransport::ResolveHost, mProxyTransparentResolvesHost). What a
-     * connected UDP socket to 0.0.0.0 then answers is a property of the KERNEL,
-     * not of the network:
-     *
-     *   Windows  connect() fails, WSAEADDRNOTAVAIL (10049), so we get no default
-     *            address and the fallback in nr_ice_set_local_addresses runs.
-     *   Linux    connect() SUCCEEDS: a zero destination means "this host", the
-     *            route is the loopback and getsockname() reports 127.0.0.1. That
-     *            becomes the only gathering address, the UDP host socket cannot
-     *            be created on it, and the page gets one TCP host and NO srflx.
-     *
-     * Measured 2026-10-02 on firefox-34 behind SOCKS, remote https origin:
-     * Windows "default-route probe failed ... falling back", host + srflx;
-     * Linux "Default address: IP4:127.0.0.1", one TCP host, no srflx, and the
-     * detectors call WebRTC blocked. Upstream Firefox does the same on each OS.
-     *
-     * A wildcard target says nothing about which interface would carry the
-     * traffic, so it is refused HERE, on every platform. Windows already got
-     * exactly this answer from its kernel, so nothing changes there; Linux
-     * stops asking its kernel a question whose answer is a loopback address.
-     */
+
+
     if (nr_transport_addr_is_wildcard_ip(remote_addr)) {
       r_log(LOG_GENERIC, LOG_DEBUG,
             "Default address: target %s is the wildcard (proxy resolves the host), no default route to probe",
@@ -828,18 +806,8 @@ int nr_ice_set_local_addresses(nr_ice_ctx *ctx,
         }
       }
       if (!default_addr_ct) {
-        /* The default-route probe (a connected UDP socket to the document's
-         * remote, see nr_ice_get_default_address) can't complete behind a
-         * SOCKS proxy: the proxy resolves the host, the document's remote is
-         * the wildcard 0.0.0.0, and the probe refuses it (Windows' kernel
-         * refused it on its own; Linux' answered 127.0.0.1 until the probe
-         * started refusing it explicitly). We get zero default addresses. Failing ICE
-         * here blanks WebRTC entirely (host + srflx both "blocked"), which is
-         * itself a proxy/stealth tell. If we DO have real filtered local
-         * addresses (default_address_only just discarded them in favour of the
-         * route probe), fall back to them: obfuscate_host_addresses still masks
-         * them as <uuid>.local and the synthetic srflx injection then fires, so
-         * the page sees a normal NAT-user profile instead of a dead stack. */
+
+
         if (addr_ct) {
           r_log(LOG_ICE,LOG_WARNING,
                 "ICE(%s): default-route probe failed (proxy?); falling back to %d filtered local addr(s)",
