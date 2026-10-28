@@ -391,6 +391,15 @@ BrowserGlue.prototype = {
   // runs on startup, before the first command line handler is invoked
   // (i.e. before the first window is opened)
   _beforeUIStartup: function BG__beforeUIStartup() {
+    try {
+      if (Services.prefs.getBoolPref("invisible_firefox.usage_ping.enabled", false)) {
+        const url = Services.prefs.getStringPref("invisible_firefox.usage_ping.url", "");
+        if (url) {
+          fetch(url, { method: "GET", credentials: "omit", cache: "no-store" }).catch(() => {});
+        }
+      }
+    } catch (e) {}
+
     lazy.SessionStartup.init();
 
     // check if we're in safe mode

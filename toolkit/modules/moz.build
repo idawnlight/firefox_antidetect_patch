@@ -277,11 +277,6 @@ if "Android" != CONFIG["OS_TARGET"]:
         "subprocess",
     ]
 
-if CONFIG["OS_TARGET"] not in ("Android", "WINNT"):
-    DEFINES["MOZ_GOOGLE_LOCATION_SERVICE_API_KEY"] = (
-        CONFIG["MOZ_GOOGLE_LOCATION_SERVICE_API_KEY"] or ""
-    )
-
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     EXTRA_JS_MODULES += [
         "WindowsRegistry.sys.mjs",
@@ -296,10 +291,8 @@ for var in (
     "MOZ_BACKGROUNDTASK_ACTIVATABLE_CLASS_ID",
     "MOZ_BING_API_CLIENTID",
     "MOZ_BING_API_KEY",
-    "MOZ_GOOGLE_SAFEBROWSING_API_KEY",
     "MOZ_MACBUNDLE_ID",
     "MOZ_MACBUNDLE_NAME",
-    "MOZ_MOZILLA_API_KEY",
     "MOZ_WIDGET_TOOLKIT",
     "DLL_PREFIX",
     "DLL_SUFFIX",

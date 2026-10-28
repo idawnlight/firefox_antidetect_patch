@@ -89,6 +89,9 @@ class InterceptedHttpChannel final
   Atomic<bool> mCallingStatusAndProgress;
   bool mInterceptionReset{false};
 
+  bool mInterceptAfterServiceWorkerResets{false};
+  bool mServiceWorkerResetBypass{true};
+
   /**
    *  InterceptionTimeStamps is used to record the time stamps of the
    *  interception.

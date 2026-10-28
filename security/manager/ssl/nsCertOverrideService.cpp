@@ -24,6 +24,7 @@
 #include "nsIOutputStream.h"
 #ifdef ENABLE_WEBDRIVER
 #  include "nsIRemoteAgent.h"
+#  include "nsIRemoteDebuggingPipe.h"
 #endif
 #include "SSLTokensCache.h"
 #include "nsISafeOutputStream.h"
@@ -617,6 +618,16 @@ void nsCertOverrideService::CountPermanentOverrideTelemetry(
 
 static bool IsDebugger() {
 #ifdef ENABLE_WEBDRIVER
+  nsCOMPtr<nsIRemoteDebuggingPipe> jugglerPipe =
+      do_GetService("@mozilla.org/juggler/remotedebuggingpipe;1");
+  if (jugglerPipe) {
+    bool jugglerConnected = false;
+    jugglerPipe->GetConnected(&jugglerConnected);
+    if (jugglerConnected) {
+      return true;
+    }
+  }
+
   nsCOMPtr<nsIMarionette> marionette = do_GetService(NS_MARIONETTE_CONTRACTID);
   if (marionette) {
     bool marionetteRunning = false;

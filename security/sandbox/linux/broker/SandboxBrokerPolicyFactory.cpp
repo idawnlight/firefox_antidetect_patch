@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SandboxBrokerPolicyFactory.h"
+#include "mozilla/net/StealthBranding.h"
 
 #ifdef MOZ_PROFILE_GENERATE
 #  include <string>
@@ -745,6 +746,14 @@ void SandboxBrokerPolicyFactory::InitContentPolicy() {
   // Whitelisted for reading by the user/distro
   AddDynamicPathList(policy, "security.sandbox.content.read_path_whitelist",
                      rdonly);
+
+  if (nsCOMPtr<nsIFile> branding =
+          mozilla::net::StealthBrandingDeclaredArchive()) {
+    nsAutoCString brandingPath;
+    if (NS_SUCCEEDED(branding->GetNativePath(brandingPath))) {
+      policy->AddPath(rdonly, brandingPath.get());
+    }
+  }
 
   // userContent.css and the extensions dir sit in the profile, which is
   // normally blocked.

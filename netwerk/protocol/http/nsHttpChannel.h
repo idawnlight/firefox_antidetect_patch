@@ -316,6 +316,7 @@ class nsHttpChannel final : public HttpBaseChannel,
   // (including DNS prefetch and speculative connection.)
   void MaybeResolveProxyAndBeginConnect();
   void MaybeStartDNSPrefetch();
+  bool IsForcedOffline();
 
   // Based on the proxy configuration determine the strategy for resolving the
   // end server host name.

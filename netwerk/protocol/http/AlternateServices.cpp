@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AlternateServices.h"
+#include "mozilla/Preferences.h"
 
 #include <algorithm>
 
@@ -905,7 +906,12 @@ void AltSvcCache::UpdateAltServiceMapping(
   }
 
   if (map->IsHttp3()) {
-    bool isProxyAllowed = pi ? (pi->IsDirect() || pi->IsHttp3Proxy()) : true;
+    bool socksUdpEnabled = mozilla::Preferences::GetBool(
+        "network.proxy.socks_remote_udp", false);
+    bool isProxyAllowed = pi
+        ? (pi->IsDirect() || pi->IsHttp3Proxy() ||
+           (socksUdpEnabled && pi->IsSOCKS()))
+        : true;
     if (!isProxyAllowed) {
       LOG(
           ("AltSvcCache::UpdateAltServiceMapping %p map %p ignored h3 because "

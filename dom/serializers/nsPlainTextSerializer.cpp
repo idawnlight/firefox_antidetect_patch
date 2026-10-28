@@ -99,8 +99,7 @@ static void DetermineLineBreak(const int32_t aFlags, nsAString& aLineBreak) {
     // Unix/DOM
     aLineBreak.AssignLiteral(u"\n");
   } else {
-    // Platform/default
-    aLineBreak.AssignLiteral(NS_ULINEBREAK);
+    aLineBreak.AssignLiteral(u"\r\n");
   }
 }
 

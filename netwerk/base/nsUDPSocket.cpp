@@ -3,6 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsUDPSocket.h"
+#include "mozilla/Preferences.h"
+#include "nsSOCKSUDPIOLayer.h"
 
 #include "HttpConnectionUDP.h"
 #include "MockNetworkLayer.h"
@@ -616,6 +618,33 @@ nsUDPSocket::InitWithAddress(const NetAddr* aAddr, nsIPrincipal* aPrincipal,
   if (!mFD) {
     NS_WARNING("unable to create UDP socket");
     return NS_ERROR_FAILURE;
+  }
+
+  if (mozilla::Preferences::GetBool("network.proxy.socks_remote_udp", false)) {
+    int32_t proxyType = mozilla::Preferences::GetInt("network.proxy.type", 0);
+    int32_t socksVer = mozilla::Preferences::GetInt(
+        "network.proxy.socks_version", 5);
+    if (proxyType == 1 && socksVer == 5) {
+      nsAutoCString host;
+      mozilla::Preferences::GetCString("network.proxy.socks", host);
+      int32_t port = mozilla::Preferences::GetInt(
+          "network.proxy.socks_port", 0);
+      if (!host.IsEmpty() && port > 0) {
+        nsAutoCString user, pass;
+        mozilla::Preferences::GetCString("network.proxy.socks_username", user);
+        mozilla::Preferences::GetCString("network.proxy.socks_password", pass);
+        nsresult sr = mozilla::net::nsSOCKSUDPIOLayerAddToSocket(
+            mFD, host.get(), port, user.get(), pass.get());
+        if (NS_FAILED(sr)) {
+          UDPSOCKET_LOG(("SOCKS UDP layer push failed (%" PRIx32
+                         "); falling back to direct UDP",
+                         static_cast<uint32_t>(sr)));
+        } else {
+          UDPSOCKET_LOG(("SOCKS UDP layer attached (proxy %s:%d)",
+                         host.get(), port));
+        }
+      }
+    }
   }
 
 #ifdef FUZZING

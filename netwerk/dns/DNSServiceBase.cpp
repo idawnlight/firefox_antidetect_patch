@@ -8,6 +8,7 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_network.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "nsIDNSService.h"
 #include "nsIPrefBranch.h"
 #include "nsIProtocolProxyService2.h"
@@ -76,15 +77,19 @@ bool DNSServiceBase::DNSForbiddenByActiveProxy(const nsACString& aHostname,
     return false;
   }
 
+  const bool proxyDeclaredByLauncher =
+      StaticPrefs::zoom_stealth_dns_no_local_resolution();
+
   // TODO(Bug 1890542): use nsIProxyInfo object whether sending DNS request to
   //     local network is fine.
   // We should avoid doing DNS when a proxy is in use.
-  if (StaticPrefs::network_proxy_type() ==
-          nsIProtocolProxyService::PROXYCONFIG_MANUAL &&
-      ((mSocksProxyVersion == nsIProxyInfo::SOCKS_V4 &&
-        StaticPrefs::network_proxy_socks_remote_dns()) ||
-       (mSocksProxyVersion == nsIProxyInfo::SOCKS_V5 &&
-        StaticPrefs::network_proxy_socks5_remote_dns()))) {
+  if (proxyDeclaredByLauncher ||
+      (StaticPrefs::network_proxy_type() ==
+           nsIProtocolProxyService::PROXYCONFIG_MANUAL &&
+       ((mSocksProxyVersion == nsIProxyInfo::SOCKS_V4 &&
+         StaticPrefs::network_proxy_socks_remote_dns()) ||
+        (mSocksProxyVersion == nsIProxyInfo::SOCKS_V5 &&
+         StaticPrefs::network_proxy_socks5_remote_dns())))) {
     // Allow IP lookups through, but nothing else.
     if (!HostIsIPLiteral(aHostname)) {
       return true;
