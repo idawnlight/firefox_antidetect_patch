@@ -20,6 +20,7 @@ const Ci = Components.interfaces;
 // Register JSWindowActors that will be instantiated for each frame.
 ActorManagerParent.addJSWindowActors({
   JugglerFrame: {
+    safeForUntrustedWebProcess: true,
     parent: {
       esModuleURI: 'resource://gre/modules/juggler/JugglerFrameParent.sys.mjs',
     },

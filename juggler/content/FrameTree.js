@@ -50,7 +50,7 @@ export class FrameTree {
       Ci.nsISupportsWeakReference,
     ]);
 
-    this._wdm = Cc["@mozilla.org/dom/workers/workerdebuggermanager;1"].createInstance(Ci.nsIWorkerDebuggerManager);
+    this._wdm = Cc["@mozilla.org/dom/workers/workerdebuggermanager;1"].getService(Ci.nsIWorkerDebuggerManager);
     this._wdmListener = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIWorkerDebuggerManagerListener]),
       onRegister: this._onWorkerCreated.bind(this),
@@ -346,10 +346,10 @@ export class FrameTree {
   }
 
   onWindowEvent(event) {
-    if (event.type !== 'DOMDocElementInserted' || !event.target.ownerGlobal)
+    if (event.type !== 'DOMDocElementInserted' || !event.target.defaultView)
       return;
 
-    const docShell = event.target.ownerGlobal.docShell;
+    const docShell = event.target.defaultView.docShell;
     const frame = this.frameForDocShell(docShell);
     if (!frame) {
       dump(`WARNING: ${event.type} for unknown frame ${helper.browsingContextToFrameId(docShell.browsingContext)}\n`);

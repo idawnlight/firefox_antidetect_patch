@@ -89,7 +89,7 @@ function stop(t, shell, status) {
 }
 
 function docElementInserted(t, shell) {
-  FrameTree.prototype.onWindowEvent.call(t, { type: 'DOMDocElementInserted', target: { ownerGlobal: { docShell: shell } } });
+  FrameTree.prototype.onWindowEvent.call(t, { type: 'DOMDocElementInserted', target: { defaultView: { docShell: shell } } });
 }
 
 const ABORTED = FrameTree.Events.NavigationAborted;
