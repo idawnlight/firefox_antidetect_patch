@@ -403,12 +403,43 @@ jobs:
             echo "SCCACHE_IDLE_TIMEOUT=0"
           } >> "$GITHUB_ENV"
       - name: Compile cache (candidates only) - restore this leg's last one
+        id: cache-restore
         if: needs.plan.outputs.compile_cache == 'gha'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/sccache-ci
           key: sccache-${{ matrix.leg }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: sccache-${{ matrix.leg }}-
+      # Once more when the first restore brought nothing. In run 40647970370
+      # the download was cut off two minutes in on linux-arm64 and
+      # win-x86_64 ("Failed to restore: The operation was aborted"), the step
+      # only warned, and both legs built cold without a word: 0.06% and 1.6%
+      # hits, the Windows build 2h39 against 1h50. A leg that has no cache
+      # yet misses twice, which costs seconds.
+      - name: Compile cache (candidates only) - restore again if the first brought nothing
+        id: cache-restore-again
+        if: needs.plan.outputs.compile_cache == 'gha' && steps.cache-restore.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache-ci
+          key: sccache-${{ matrix.leg }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: sccache-${{ matrix.leg }}-
+      # What this build starts from, said where it is read: a cold candidate is
+      # a fact of the run, not something to infer from its length.
+      - name: Compile cache (candidates only) - what this build starts from
+        if: needs.plan.outputs.compile_cache == 'gha'
+        shell: bash
+        env:
+          FIRST: ${{ steps.cache-restore.outputs.cache-matched-key }}
+          AGAIN: ${{ steps.cache-restore-again.outputs.cache-matched-key }}
+        run: |
+          FROM="${FIRST:-$AGAIN}"
+          if [ -n "$FROM" ]; then
+            echo "compile cache: ${{ matrix.leg }} starts from $FROM" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::compile cache: ${{ matrix.leg }} restored nothing and builds cold"
+            echo "compile cache: ${{ matrix.leg }} restored NOTHING, this build is cold" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # The .mozconfig in layers (scripts/ci/mozconfig.py): compile cache,
       # symbols, the retail's PGO and LTO, platform, machine. Each layer writes

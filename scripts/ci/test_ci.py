@@ -384,6 +384,13 @@ def main() -> int:
         doc = yaml.safe_load(rel)
         gt_input = doc[True]["workflow_dispatch"]["inputs"]["gtests"]
         gt_step = [s for s in doc["jobs"]["build"]["steps"] if s.get("name", "").startswith("Engine gtests")]
+        steps = {s.get("name", ""): s for s in doc["jobs"]["build"]["steps"]}
+        again = steps.get("Compile cache (candidates only) - restore again if the first brought nothing", {})
+        said = steps.get("Compile cache (candidates only) - what this build starts from", {})
+        cases.append(("compile cache: a restore that brought nothing is tried again, and a cold build says so (run 40647970370)",
+                      "steps.cache-restore.outputs.cache-matched-key == ''" in again.get("if", "")
+                      and again.get("with", {}).get("restore-keys") == "sccache-${{ matrix.leg }}-"
+                      and "builds cold" in said.get("run", "") and "GITHUB_STEP_SUMMARY" in said.get("run", "")))
         cases.append(("gtests: an input, off by default, on every leg, as a phase",
                       gt_input["type"] == "boolean" and gt_input["default"] is False and len(gt_step) == 1
                       and gt_step[0]["if"] == "github.event.inputs.gtests == 'true'"
