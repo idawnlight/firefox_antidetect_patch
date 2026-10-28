@@ -2763,7 +2763,9 @@ webgl::CompileResult WebGLContext::GetCompileResult(
       return;
     }
     // TODO: These could be large and should be made fallible.
-    ret.translatedSource = ToCString(info->mObjectCode);
+    const auto& perLaPagina = shader.ObjectCodePerLaPagina();
+    ret.translatedSource =
+        ToCString(perLaPagina.empty() ? info->mObjectCode : perLaPagina);
     ret.log = ToCString(shader.CompileLog());
     if (!shader.IsCompiled()) return;
     ret.success = true;

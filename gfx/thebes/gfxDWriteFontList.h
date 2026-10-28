@@ -6,6 +6,7 @@
 #define GFX_DWRITEFONTLIST_H
 
 #include <algorithm>
+#include <string>
 
 #include "cairo-win32.h"
 #include "dwrite_3.h"
@@ -240,6 +241,13 @@ class gfxDWriteFontEntry final : public gfxFontEntry {
   RefPtr<IDWriteFontFace5> mFontFace5 MOZ_GUARDED_BY(mLock);
 
   DWRITE_FONT_FACE_TYPE mFaceType;
+
+  // Face index within a custom (bundle) font file; 0 for single-face files and
+  // for system fonts. Lets a .ttc face be addressed by index in CreateFontFace.
+  uint16_t mBundleFaceIndex = 0;
+
+  // Carry the bundle path into the unscaled font for WebRender descriptors.
+  std::wstring mBundleFilePath;
 
   mozilla::Atomic<FontTableCache*> mFontTableCache;
 

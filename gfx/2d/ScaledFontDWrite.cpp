@@ -272,6 +272,12 @@ bool UnscaledFontDWrite::GetFontDescriptor(FontDescriptorOutput aCb,
                                            void* aBaton) {
   MOZ_ASSERT(NS_IsMainThread());
 
+  if (!mPercorsoDichiarato.empty()) {
+    aCb(reinterpret_cast<const uint8_t*>(mPercorsoDichiarato.c_str()),
+        (mPercorsoDichiarato.size() + 1) * sizeof(WCHAR), mFontFace->GetIndex(),
+        aBaton);
+    return true;
+  }
   // We cache the font file name as it involves multiple DirectWrite calls.
   if (mFontFileName.empty()) {
     if (!mFont) {

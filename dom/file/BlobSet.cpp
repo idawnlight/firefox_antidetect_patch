@@ -50,12 +50,10 @@ nsresult BlobSet::AppendUTF8String(const nsACString& aUTF8String,
         return NS_ERROR_OUT_OF_MEMORY;
       }
     }
-#ifdef XP_WIN
     if (NS_WARN_IF(
             !utf8Str.ReplaceSubstring("\n", "\r\n", mozilla::fallible))) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
-#endif
   }
 
   RefPtr<StringBlobImpl> blobImpl = StringBlobImpl::Create(utf8Str, u""_ns);

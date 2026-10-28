@@ -44,6 +44,10 @@ class WebGLShader final : public WebGLContextBoundObject {
   const auto& CompileLog() const { return mCompilationLog; }
   bool IsCompiled() const { return mCompilationSuccessful; }
 
+  const std::string& ObjectCodePerLaPagina() const {
+    return mObjectCodePerLaPagina;
+  }
+
  private:
   void BindAttribLocation(GLuint prog, const std::string& userName,
                           GLuint index) const;
@@ -66,6 +70,7 @@ class WebGLShader final : public WebGLContextBoundObject {
       mCompileResults;  // Never null.
   bool mCompilationSuccessful = false;
   std::string mCompilationLog;
+  std::string mObjectCodePerLaPagina;
 };
 
 }  // namespace mozilla

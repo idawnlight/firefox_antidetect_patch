@@ -9,12 +9,18 @@
 #include "js/Array.h"               // JS::GetArrayLength
 #include "js/PropertyAndElement.h"  // JS_GetElement
 #include "jsapi.h"
+#include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "mozilla/gfx/StealthCanvasProjection.h"
 
 class nsIPrincipal;
 
 namespace mozilla {
+
+namespace gfx {
+class SourceSurface;
+}  // namespace gfx
 
 namespace dom {
 class Document;
@@ -208,6 +214,18 @@ void DashArrayToJSVal(nsTArray<T>& dashes, JSContext* cx,
 // the incumbent global.
 bool CheckWriteOnlySecurity(bool aCORSUsed, nsIPrincipal* aPrincipal,
                             bool aHadCrossOriginRedirects);
+
+gfx::StealthCanvasNoise StealthNoise(nsIPrincipal* aCanvasPrincipal);
+
+inline bool StealthProjectsContextType(dom::CanvasContextType aType) {
+  return aType == dom::CanvasContextType::WebGL1 ||
+         aType == dom::CanvasContextType::WebGL2 ||
+         aType == dom::CanvasContextType::WebGPU;
+}
+
+already_AddRefed<gfx::SourceSurface> StealthProjectSnapshot(
+    gfx::SourceSurface* aSnapshot, bool aPremultiplied,
+    nsIPrincipal* aCanvasPrincipal);
 
 }  // namespace CanvasUtils
 }  // namespace mozilla

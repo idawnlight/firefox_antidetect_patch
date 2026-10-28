@@ -475,6 +475,13 @@ SharedFTFace::SharedFTFace(FT_Face aFace, UniquePtr<char[]>&& aFilename,
 SharedFTFace::SharedFTFace(FT_Face aFace, FontData* aFontData, int aFaceIndex)
     : mFace(aFace), mFontData(aFontData), mFaceIndex(aFaceIndex) {}
 
+SharedFTFace::SharedFTFace(FT_Face aFace, const uint8_t* aData,
+                           uint32_t aLength, int aFaceIndex)
+    : mFace(aFace),
+      mBorrowedData(aData),
+      mBorrowedLength(aLength),
+      mFaceIndex(aFaceIndex) {}
+
 SharedFTFace::~SharedFTFace() { Factory::ReleaseFTFace(mFace); }
 
 void Factory::SetFTLibrary(FT_Library aFTLibrary) { mFTLibrary = aFTLibrary; }
@@ -562,9 +569,25 @@ already_AddRefed<SharedFTFace> Factory::NewSharedFTFaceFromData(
   return MakeAndAddRef<SharedFTFace>(face, aFontData, aFaceIndex);
 }
 
+already_AddRefed<SharedFTFace> Factory::NewSharedFTFaceFromBorrowedData(
+    const uint8_t* aData, uint32_t aLength, int aFaceIndex) {
+  FT_Face face = NewFTFaceFromData(nullptr, aData, aLength, aFaceIndex);
+  if (!face) return nullptr;
+  if (FT_Select_Charmap(face, FT_ENCODING_UNICODE) != FT_Err_Ok &&
+      FT_Select_Charmap(face, FT_ENCODING_MS_SYMBOL) != FT_Err_Ok) {
+    ReleaseFTFace(face);
+    return nullptr;
+  }
+  return MakeAndAddRef<SharedFTFace>(face, aData, aLength, aFaceIndex);
+}
+
 already_AddRefed<SharedFTFace> SharedFTFace::CloneFace() {
   if (mFontData) {
     return Factory::NewSharedFTFaceFromData(mFontData, mFaceIndex);
+  }
+  if (mBorrowedData) {
+    return Factory::NewSharedFTFaceFromBorrowedData(
+        mBorrowedData, mBorrowedLength, mFaceIndex);
   }
   if (mFilename) {
     return Factory::NewSharedFTFace(mFilename.get(), mFaceIndex);
