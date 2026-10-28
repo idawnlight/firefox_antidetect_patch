@@ -158,6 +158,23 @@ class StartupCache : public nsIMemoryReporter {
   // Returns a buffer that was previously stored, caller does not take ownership
   nsresult GetBuffer(const char* id, const char** outbuf, uint32_t* length);
 
+  // Whether a write may run with lowered I/O priority (nsAutoLowPriorityIO).
+  //
+  // It may not. The write holds mTableLock from its first entry to its last,
+  // and the main thread takes the same lock in GetBuffer() for every module it
+  // loads, so a starved writer is a starved main thread. On Windows the lowered
+  // priority is THREAD_MODE_BACKGROUND_BEGIN, which lowers the thread's CPU
+  // priority as well as its I/O, and the write compresses every entry with
+  // LZ4 HC. Upstream saw it at shutdown (bug 2037923) and exempted only that
+  // write; the first regular write, about 30 s after a launch, is the same
+  // inversion. Measured on 2026-10-28 with eleven browsers at once on Windows:
+  // the parent's main thread stood in GetBuffer() for 7-27 s with its CPU idle,
+  // behind a pool thread in WriteToDisk(), in 10 runs of 11, and nothing it
+  // owed the pages or the automation pipe went out meanwhile. With background
+  // mode refused from outside, the same runs never waited more than 4.5 s and
+  // the writes took 0.7-2 s. 151 had no lowered priority here.
+  static bool WritesMayLowerIOPriority() { return false; }
+
   // Stores a buffer. Caller yields ownership.
   nsresult PutBuffer(const char* id, UniqueFreePtr<char[]>&& inbuf,
                      uint32_t length);

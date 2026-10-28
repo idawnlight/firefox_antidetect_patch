@@ -184,3 +184,11 @@ TEST_F(TestStartupCache, WriteObject) {
   EXPECT_NS_SUCCEEDED(rv);
   ASSERT_TRUE(outSpec.Equals(spec));
 }
+
+// A write holds mTableLock throughout and the main thread's GetBuffer() waits
+// on it, so no write may lower its own priority: see
+// StartupCache::WritesMayLowerIOPriority for what that cost under load.
+TEST(StartupCache, WritesNeverLowerIOPriority)
+{
+  EXPECT_FALSE(StartupCache::WritesMayLowerIOPriority());
+}

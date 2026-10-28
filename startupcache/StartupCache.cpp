@@ -794,7 +794,7 @@ void StartupCache::MaybeWriteOffMainThread(WriteType aWriteType,
   nsCOMPtr<nsIRunnable> runnable = NS_NewRunnableFunction(
       "StartupCache::Write", [self, aWriteType, aUseLowPriorityIO]() mutable {
         Maybe<nsAutoLowPriorityIO> lowPriority;
-        if (aUseLowPriorityIO) {
+        if (aUseLowPriorityIO && StartupCache::WritesMayLowerIOPriority()) {
           lowPriority.emplace();
         }
         MutexAutoLock lock(self->mTableLock);
