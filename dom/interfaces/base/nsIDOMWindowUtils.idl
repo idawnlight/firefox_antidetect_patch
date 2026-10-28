@@ -381,7 +381,8 @@ interface nsIDOMWindowUtils : nsISupports {
                       in long aLineOrPageDeltaX,
                       in long aLineOrPageDeltaY,
                       in unsigned long aOptions,
-                      [optional] in nsISynthesizedEventCallback aCallback);
+                      [optional] in nsISynthesizedEventCallback aCallback,
+                      [optional] in double aLatency);
 
   /**
    * Native modifiers for sendNativeKeyEvent and sendNativeMouseEvent.
@@ -454,6 +455,51 @@ interface nsIDOMWindowUtils : nsISupports {
                             in unsigned long aModifierFlags,
                             in Element aElementOnWidget,
                             [optional] in nsISynthesizedEventCallback aCallback);
+
+  /**
+   * Playwright: dispatch a synthetic mouse event and return a monotonically
+   * incrementing event identifier. Restored from the FF146 Juggler patch;
+   * dropped during the FF150 port and now re-added for issue #9.
+   */
+  [can_run_script]
+  unsigned long jugglerSendMouseEvent(in AString aType,
+                         in float aX,
+                         in float aY,
+                         in long aButton,
+                         in long aClickCount,
+                         in long aModifiers,
+                         in boolean aIgnoreRootScrollFrame,
+                         in float aPressure,
+                         in unsigned short aInputSourceArg,
+                         in boolean aIsDOMEventSynthesized,
+                         in boolean aIsWidgetEventSynthesized,
+                         in long aButtons,
+                         in unsigned long aIdentifier,
+                         in double aLatency);
+
+  /**
+   * Stealthfox: dispatch a synthetic DRAG event the way the platform's own
+   * drop target does.
+   *
+   * This is deliberately NOT a mode of jugglerSendMouseEvent. A drag event is
+   * a WidgetDragEvent, not a WidgetMouseEvent, and routing it through the
+   * mouse synthesizer is what made it impossible: nsContentUtils::
+   * SynthesizeMouseEvent maps ten mouse type strings and returns
+   * NS_ERROR_FAILURE for everything else, so "dragover" could never be
+   * dispatched at all - that is [B212], where the drop never reached the
+   * target and drag_and_drop raised instead.
+   *
+   * The implementation mirrors nsNativeDragTarget::DispatchDragDropEvent,
+   * which is the path a real OS drag takes, rather than the
+   * mIsSynthesizedForTests path EventStateManager also offers: we want the
+   * engine on the same code path a retail Firefox runs, for the same reason
+   * inputSource moved from 0 to MOZ_SOURCE_MOUSE.
+   */
+  [can_run_script]
+  void jugglerSendDragEvent(in AString aType,
+                            in float aX,
+                            in float aY,
+                            in long aModifiers);
 
   /**
    * Suppress animations that are applied to a window by OS when

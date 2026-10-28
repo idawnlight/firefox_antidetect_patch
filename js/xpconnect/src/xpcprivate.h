@@ -2253,6 +2253,7 @@ class MOZ_STACK_CLASS SandboxOptions : public OptionsBase {
                           JSObject* options = nullptr)
       : OptionsBase(cx, options),
         wantXrays(true),
+        hybridXrays(false),
         allowWaivers(true),
         wantComponents(true),
         wantExportHelpers(false),
@@ -2274,6 +2275,7 @@ class MOZ_STACK_CLASS SandboxOptions : public OptionsBase {
   virtual bool Parse() override;
 
   bool wantXrays;
+  bool hybridXrays;
   bool allowWaivers;
   bool wantComponents;
   bool wantExportHelpers;
@@ -2563,7 +2565,7 @@ class CompartmentPrivate {
     }
 
     // Don't share if we have any weird state set.
-    return !wantXrays && !isWebExtensionContentScript &&
+    return !wantXrays && !hybridXrays && !isWebExtensionContentScript &&
            !isUAWidgetCompartment && mScope->XBLScopeStateMatches(principal);
   }
 
@@ -2573,6 +2575,8 @@ class CompartmentPrivate {
   // is deprecated, but is still the default for sandboxes for compatibity
   // reasons.
   bool wantXrays;
+
+  bool hybridXrays;
 
   // Controls whether this compartment is allowed to waive Xrays to content
   // that it subsumes. This should generally be true, except in cases where we

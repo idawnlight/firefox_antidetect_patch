@@ -62,6 +62,8 @@
 #include "nsGlobalWindowInner.h"
 #include "nsGlobalWindowOuter.h"
 #include "nsIDocShell.h"
+#include "nsIDragService.h"
+#include "nsIDragSession.h"
 #include "nsIFrame.h"
 #include "nsIObjectLoadingContent.h"
 #include "nsIWidget.h"
@@ -717,13 +719,129 @@ nsDOMWindowUtils::IsCORSSafelistedRequestHeader(const nsACString& aName,
   return NS_OK;
 }
 
+static uint32_t sJugglerEventId = 0;
+
+NS_IMETHODIMP
+nsDOMWindowUtils::JugglerSendMouseEvent(
+    const nsAString& aType, float aX, float aY, int32_t aButton,
+    int32_t aClickCount, int32_t aModifiers, bool aIgnoreRootScrollFrame,
+    float aPressure, unsigned short aInputSourceArg,
+    bool aIsDOMEventSynthesized, bool aIsWidgetEventSynthesized,
+    int32_t aButtons, uint32_t aIdentifier, double aLatency,
+    uint32_t* aJugglerEventId) {
+  *aJugglerEventId = ++sJugglerEventId;
+
+
+  RefPtr<PresShell> presShell = GetPresShell();
+  if (!presShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsPoint offset;
+  nsCOMPtr<nsIWidget> widget = GetWidget(&offset);
+  if (!widget) {
+    return NS_ERROR_FAILURE;
+  }
+
+  LayoutDeviceIntPoint refPoint = nsContentUtils::ToWidgetPoint(
+      CSSPoint(aX, aY), offset, presShell->GetPresContext());
+
+  dom::SynthesizeMouseEventData mouseEventData;
+  mouseEventData.mIdentifier = aIdentifier;
+  mouseEventData.mButton = aButton;
+  mouseEventData.mButtons.Construct(aButtons);
+  mouseEventData.mClickCount.Construct(aClickCount);
+  mouseEventData.mPressure.Construct(aPressure);
+  mouseEventData.mInputSource = aInputSourceArg;
+  mouseEventData.mModifiers = aModifiers;
+  mouseEventData.mJugglerEventId = *aJugglerEventId;
+  mouseEventData.mLatency = aLatency;
+
+  dom::SynthesizeMouseEventOptions options;
+  options.mIgnoreRootScrollFrame = aIgnoreRootScrollFrame;
+  options.mIsDOMEventSynthesized = aIsDOMEventSynthesized;
+  options.mIsWidgetEventSynthesized = aIsWidgetEventSynthesized;
+  options.mIsAsyncEnabled = false;
+
+  auto result = nsContentUtils::SynthesizeMouseEvent(
+      presShell, widget, aType, refPoint, mouseEventData, options,
+      dom::Optional<OwningNonNull<dom::VoidFunction>>{});
+  return result.isOk() ? NS_OK : result.unwrapErr();
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::JugglerSendDragEvent(const nsAString& aType, float aX,
+                                       float aY, int32_t aModifiers) {
+  EventMessage msg;
+  if (aType.EqualsLiteral("dragover")) {
+    msg = eDragOver;
+  } else if (aType.EqualsLiteral("drop")) {
+    msg = eDrop;
+  } else if (aType.EqualsLiteral("dragenter")) {
+    msg = eDragEnter;
+  } else if (aType.EqualsLiteral("dragexit")) {
+    msg = eDragExit;
+  } else {
+    // Named refusal: the caller asked for something this door does not open.
+    // Returning NS_ERROR_FAILURE here would reproduce the very defect above,
+    // where a wrong type was indistinguishable from a broken engine.
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  RefPtr<PresShell> presShell = GetPresShell();
+  if (!presShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsPoint offset;
+  nsCOMPtr<nsIWidget> widget = GetWidget(&offset);
+  if (!widget) {
+    return NS_ERROR_FAILURE;
+  }
+
+  WidgetDragEvent event(true, msg, widget);
+  event.mRefPoint = nsContentUtils::ToWidgetPoint(CSSPoint(aX, aY), offset,
+                                                  presShell->GetPresContext());
+  event.mModifiers = nsContentUtils::GetWidgetModifiers(aModifiers);
+  // A real drag carries the input source of the session that started it; ours
+  // is always a mouse. Leaving this at the default would reintroduce the tell
+  // that P2.4b removed from the mouse path.
+  event.mInputSource = dom::MouseEvent_Binding::MOZ_SOURCE_MOUSE;
+
+  // The real drop target sets the session's action from the modifier state
+  // before dispatching (nsNativeDragTarget::ProcessDrag ->
+  // GetGeckoDragAction): Ctrl+Shift LINK, Shift MOVE, Ctrl COPY. Without this
+  // the session keeps whatever action it was left with, and the dropEffect the
+  // page reads stops following the keys the user is holding.
+  if (nsCOMPtr<nsIDragService> dragService =
+          do_GetService("@mozilla.org/widget/dragservice;1")) {
+    if (nsCOMPtr<nsIDragSession> session =
+            dragService->GetCurrentSession(widget)) {
+      uint32_t action = nsIDragService::DRAGDROP_ACTION_MOVE;
+      if (event.IsControl()) {
+        action = event.IsShift() ? nsIDragService::DRAGDROP_ACTION_LINK
+                                 : nsIDragService::DRAGDROP_ACTION_COPY;
+      }
+      session->SetDragAction(action);
+    }
+  }
+
+  // Whether the page called preventDefault is NOT reported back: the drop
+  // decision is the page's, and the caller learns it by watching for the
+  // event, which is what PageHandler already does. Returning it here would be
+  // a second source for the same fact.
+  widget->DispatchEvent(&event);
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 nsDOMWindowUtils::SendWheelEvent(float aX, float aY, double aDeltaX,
                                  double aDeltaY, double aDeltaZ,
                                  uint32_t aDeltaMode, int32_t aModifiers,
                                  int32_t aLineOrPageDeltaX,
                                  int32_t aLineOrPageDeltaY, uint32_t aOptions,
-                                 nsISynthesizedEventCallback* aCallback) {
+                                 nsISynthesizedEventCallback* aCallback,
+                                 double aLatency) {
   if (XRE_IsContentProcess() && aCallback &&
       ((aOptions & WHEEL_EVENT_ASYNC_ENABLED) ||
        StaticPrefs::test_events_async_enabled())) {
@@ -756,6 +874,9 @@ nsDOMWindowUtils::SendWheelEvent(float aX, float aY, double aDeltaX,
   wheelEvent.mLineOrPageDeltaX = aLineOrPageDeltaX;
   wheelEvent.mLineOrPageDeltaY = aLineOrPageDeltaY;
   wheelEvent.mCallbackId = notifier.SaveCallback();
+  if (aLatency > 0) {
+    wheelEvent.mTimeStamp = nsContentUtils::InputEventBirth(aLatency);
+  }
   wheelEvent.mFlags.mIsSynthesizedForTests = true;
 
   nsPresContext* presContext = GetPresContext();
@@ -1403,7 +1524,9 @@ nsDOMWindowUtils::NodesFromRect(float aX, float aY, float aTopSize,
 static already_AddRefed<DataSourceSurface> CanvasToDataSourceSurface(
     HTMLCanvasElement* aCanvas) {
   MOZ_ASSERT(aCanvas);
-  SurfaceFromElementResult result = nsLayoutUtils::SurfaceFromElement(aCanvas);
+  // Chrome-only test hook (compareCanvases): the canvases as drawn.
+  SurfaceFromElementResult result =
+      nsLayoutUtils::SurfaceFromElement(aCanvas, nsLayoutUtils::SFE_AS_DRAWN);
   const RefPtr<SourceSurface> surf = result.GetSourceSurface();
   if (!surf) {
     return nullptr;

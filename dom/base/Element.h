@@ -1801,7 +1801,7 @@ class Element : public FragmentOrElement {
   void SetSlot(const nsAString& aName, ErrorResult& aError);
   void GetSlot(nsAString& aName);
 
-  ShadowRoot* GetShadowRootForBindings() const;
+  ShadowRoot* GetShadowRootForBindings(nsIPrincipal& aSubject) const;
   ShadowRoot* GetOpenOrClosedShadowRoot(nsIPrincipal& aSubject) const;
   [[nodiscard]] ShadowRoot* GetShadowRoot() const {
     const nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();

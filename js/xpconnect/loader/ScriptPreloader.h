@@ -241,6 +241,14 @@ class ScriptPreloader : public nsIObserver,
       }
     }
 
+    void AdoptMappedRange(const JS::TranscodeRange& aRange) {
+      mXDRRange.reset();
+      if (!mXDRData.empty()) {
+        mXDRData.destroy();
+      }
+      mXDRRange.emplace(aRange);
+    }
+
     void UpdateLoadTime(const TimeStamp& loadTime) {
       if (mLoadTime.IsNull() || loadTime < mLoadTime) {
         mLoadTime = loadTime;
@@ -434,6 +442,11 @@ class ScriptPreloader : public nsIObserver,
   // current profile.
   Result<nsCOMPtr<nsIFile>, nsresult> GetCacheFile(const nsAString& suffix);
 
+  template <typename F>
+  Result<Ok, nsresult> WalkCacheHeader(AutoMemMap& aMap, F&& aOnScript);
+
+  Result<Ok, nsresult> AdoptWrittenCache(nsIFile* aCacheFile);
+
   // Waits for the given cached script to finish compiling off-thread, or
   // decodes it synchronously on the main thread, as appropriate.
   already_AddRefed<JS::Stencil> WaitForCachedStencil(
@@ -555,6 +568,8 @@ class ScriptPreloader : public nsIObserver,
   // fields, and its lifetime is guaranteed to be longer than ScriptPreloader
   // instance.
   AutoMemMap* mCacheData;
+
+  AutoMemMap mWrittenCacheData;
 
   Monitor mMonitor MOZ_ACQUIRED_AFTER(mSaveMonitor.Lock());
   MainThreadAndLockCapability<Monitor> mSaveMonitor;

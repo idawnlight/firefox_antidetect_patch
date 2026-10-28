@@ -239,6 +239,9 @@ class WidgetMouseEventBase : public WidgetInputEvent {
   // Possible values a in MouseEvent
   uint16_t mInputSource;
 
+  // Correlates input dispatch with the content-process acknowledgement.
+  uint32_t mJugglerEventId = 0;
+
   bool IsLeftButtonPressed() const {
     return !!(mButtons & MouseButtonsFlag::ePrimaryFlag);
   }
@@ -263,6 +266,7 @@ class WidgetMouseEventBase : public WidgetInputEvent {
     mButtons = aEvent.mButtons;
     mPressure = aEvent.mPressure;
     mInputSource = aEvent.mInputSource;
+    mJugglerEventId = aEvent.mJugglerEventId;
   }
 
   /**

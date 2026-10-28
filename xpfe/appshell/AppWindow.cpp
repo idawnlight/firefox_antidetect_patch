@@ -59,6 +59,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_browser.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BarProps.h"
 #include "mozilla/dom/DOMRect.h"
 #include "mozilla/dom/Element.h"
@@ -2756,6 +2757,12 @@ void AppWindow::WindowActivated() {
   if (mDocShell) {
     if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
       if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+        if (StaticPrefs::zoom_stealth_focus_ignore_os_deactivation()) {
+          nsCOMPtr<nsPIDOMWindowOuter> active = fm->GetActiveWindow();
+          if (active && active != window) {
+            fm->WindowLowered(active, nsFocusManager::GenerateFocusActionId());
+          }
+        }
         fm->WindowRaised(window, nsFocusManager::GenerateFocusActionId());
       }
     }
@@ -2767,6 +2774,9 @@ void AppWindow::WindowActivated() {
 }
 
 void AppWindow::WindowDeactivated() {
+  if (StaticPrefs::zoom_stealth_focus_ignore_os_deactivation()) {
+    return;
+  }
   if (mDocShell) {
     if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
       if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {

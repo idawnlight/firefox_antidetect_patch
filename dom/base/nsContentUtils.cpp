@@ -10401,6 +10401,17 @@ NS_IMPL_ISUPPORTS(SynthesizedEventCallback, nsISynthesizedEventCallback)
 
 }  // namespace
 
+/* static */
+TimeStamp nsContentUtils::InputEventBirth(double aLatencyMs) {
+  static TimeStamp sLastBorn;
+  TimeStamp born = TimeStamp::Now() - TimeDuration::FromMilliseconds(aLatencyMs);
+  if (!sLastBorn.IsNull() && born < sLastBorn) {
+    born = sLastBorn;
+  }
+  sLastBorn = born;
+  return born;
+}
+
 Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
     mozilla::PresShell* aPresShell, nsIWidget* aWidget, const nsAString& aType,
     LayoutDeviceIntPoint& aRefPoint,
@@ -10508,6 +10519,7 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
   mouseOrPointerEvent.mModifiers =
       GetWidgetModifiers(aMouseEventData.mModifiers);
   mouseOrPointerEvent.mButton = aMouseEventData.mButton;
+  mouseOrPointerEvent.mJugglerEventId = aMouseEventData.mJugglerEventId;
   mouseOrPointerEvent.mButtons =
       aMouseEventData.mButtons.WasPassed()
           ? aMouseEventData.mButtons.Value()
@@ -10536,6 +10548,9 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
 
   mouseOrPointerEvent.mRefPoint = aRefPoint;
   mouseOrPointerEvent.mIgnoreRootScrollFrame = aOptions.mIgnoreRootScrollFrame;
+  if (aMouseEventData.mLatency > 0) {
+    mouseOrPointerEvent.mTimeStamp = InputEventBirth(aMouseEventData.mLatency);
+  }
   if (aMouseEventData.mMovementX.WasPassed()) {
     MOZ_ASSERT(aMouseEventData.mMovementY.WasPassed());
     mouseOrPointerEvent.mMovement.emplace(aMouseEventData.mMovementX.Value(),

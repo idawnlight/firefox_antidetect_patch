@@ -97,6 +97,7 @@
 #include "mozilla/dom/FileSystemEntry.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsIContentPrefService2.h"
+#include "nsIDocShell.h"
 #include "nsIFile.h"
 #include "nsIMIMEService.h"
 #include "nsIObserverService.h"
@@ -995,6 +996,14 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
     // type=file opens a file picker.
     obs->NotifyObservers(ToSupports(this), "file-input-picker-opening",
                          nullptr);
+  }
+
+  if (nsIDocShell* ds = doc->GetDocShell()) {
+    bool interceptFileChooser = false;
+    ds->GetFileInputInterceptionEnabled(&interceptFileChooser);
+    if (interceptFileChooser) {
+      return NS_OK;
+    }
   }
 
   if (!oldFiles.IsEmpty() && aType != FILE_PICKER_DIRECTORY) {

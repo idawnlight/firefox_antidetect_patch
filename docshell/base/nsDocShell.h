@@ -1359,6 +1359,9 @@ class nsDocShell final : public nsDocLoader,
 
   bool mIsExecutingOnLoadHandler : 1;
 
+  bool mFileInputInterceptionEnabled : 1;
+  bool mBypassCSPEnabled : 1;
+
   bool mInvisible : 1;
 
   // There has been an OnStartRequest for a non-about:blank URI

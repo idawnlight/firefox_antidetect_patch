@@ -49,6 +49,7 @@
 #include "mozilla/StaticPrefs_mozilla.h"
 #include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/StaticPrefs_widget.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/SwipeTracker.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
@@ -3545,7 +3546,8 @@ void nsWindow::DispatchPanGesture(PanGestureInput& aPanInput) {
 
 void nsWindow::OnVisibilityNotifyEvent(GdkVisibilityState aState) {
   LOG("nsWindow::OnVisibilityNotifyEvent [%p] state 0x%x\n", this, aState);
-  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED
+  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED &&
+                       StaticPrefs::zoom_stealth_widget_occlusion_tracking_enabled()
                    ? OcclusionState::OCCLUDED
                    : OcclusionState::UNKNOWN;
   NotifyOcclusionState(state);

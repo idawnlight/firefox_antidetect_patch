@@ -697,6 +697,8 @@ mozilla::ipc::IPCResult ContentChild::RecvSetXPCOMProcessAttributes(
     dnsServiceChild->SetTRRModeInChild(aXPCOMInit.trrMode(),
                                        aXPCOMInit.trrModeFromPref());
   }
+
+
   return IPC_OK();
 }
 
@@ -2489,6 +2491,7 @@ mozilla::ipc::IPCResult ContentChild::RecvUpdateRequestedLocales(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvSystemTimezoneChanged() {
+  // Stealth: SetTimeZoneOverride was removed in 150. Just reset like vanilla.
   nsJSUtils::ResetTimeZone();
   return IPC_OK();
 }

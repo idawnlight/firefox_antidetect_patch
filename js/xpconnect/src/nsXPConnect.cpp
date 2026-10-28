@@ -9,6 +9,7 @@
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMException.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
 #include "mozilla/dom/Exceptions.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/WorkerCommon.h"
@@ -33,7 +34,6 @@
 #include "nsIOService.h"
 #include "nsJSEnvironment.h"
 #include "nsJSUtils.h"
-#include "nsRFPService.h"
 #include "nsScriptError.h"
 #include "nsScriptSecurityManager.h"
 #include "nsThreadUtils.h"
@@ -537,21 +537,9 @@ void InitGlobalObjectOptions(JS::RealmOptions& aOptions,
     aOptions.creationOptions().setSecureContext(aSecureContext);
   }
 
-  if (aForceUTC) {
-    nsCString timeZone = nsRFPService::GetSpoofedJSTimeZone();
-    aOptions.behaviors().setTimeZoneOverride(timeZone.get());
-  } else if (!aTimezoneOverride.IsEmpty()) {
-    aOptions.behaviors().setTimeZoneOverride(
-        NS_ConvertUTF16toUTF8(aTimezoneOverride).get());
-  }
   aOptions.creationOptions().setAlwaysUseFdlibm(aAlwaysUseFdlibm);
-  if (aLocaleEnUS) {
-    nsCString locale = nsRFPService::GetSpoofedJSLocale();
-    aOptions.behaviors().setLocaleOverride(locale.get());
-  } else if (!aLanguageOverride.IsEmpty()) {
-    aOptions.behaviors().setLocaleOverride(
-        PromiseFlatCString(aLanguageOverride).get());
-  }
+  mozilla::dom::SetRealmTimeAndLanguage(aOptions, aForceUTC, aLocaleEnUS,
+                                        aLanguageOverride, aTimezoneOverride);
 }
 
 bool InitGlobalObject(JSContext* aJSContext, JS::Handle<JSObject*> aGlobal,

@@ -7373,6 +7373,44 @@ nsresult PresShell::HandleEvent(nsIFrame* aFrameForPresShell,
 
   RecordModifiers(aGUIEvent);
 
+  // Acknowledge only after dispatch and only once across nested shells.
+  const uint32_t jugglerEventId =
+      aGUIEvent->AsMouseEvent() ? aGUIEvent->AsMouseEvent()->mJugglerEventId
+                                : 0;
+  auto ackJugglerEvent = MakeScopeExit([&] {
+    if (!jugglerEventId || !aGUIEvent->AsMouseEvent() ||
+        aGUIEvent->AsMouseEvent()->mJugglerEventId != jugglerEventId) {
+      return;
+    }
+    const char* type = nullptr;
+    switch (aGUIEvent->mMessage) {
+      case eMouseMove:
+        type = "mousemove";
+        break;
+      case eMouseDown:
+        type = "mousedown";
+        break;
+      case eMouseUp:
+        type = "mouseup";
+        break;
+      case eContextMenu:
+        type = "contextmenu";
+        break;
+      default:
+        return;
+    }
+    aGUIEvent->AsMouseEvent()->mJugglerEventId = 0;
+    if (nsCOMPtr<nsIObserverService> os =
+            mozilla::services::GetObserverService()) {
+      nsAutoString info;
+      info.AppendASCII(type);
+      info.Append(' ');
+      info.AppendInt(jugglerEventId);
+      os->NotifyObservers(nullptr, "juggler-mouse-event-hit-renderer",
+                          info.get());
+    }
+  });
+
   AutoWeakFrame weakFrameForPresShell(aFrameForPresShell);
 
   // Running tests must not expect that some mouse boundary events are fired

@@ -64,6 +64,7 @@
 #include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_full_screen_api.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StaticPrefs_mathml.h"
 #include "mozilla/StaticString.h"
 #include "mozilla/TextControlElement.h"
@@ -210,6 +211,7 @@
 #include "nsThreadUtils.h"
 #include "nsWindowSizes.h"
 #include "nsXULElement.h"
+#include "StealthDeclarationGate.h"
 
 #ifdef DEBUG
 #  include "mozilla/dom/Range.h"
@@ -1385,19 +1387,34 @@ void Element::SetSlot(const nsAString& aName, ErrorResult& aError) {
 void Element::GetSlot(nsAString& aName) { GetAttr(nsGkAtoms::slot, aName); }
 
 // https://dom.spec.whatwg.org/#dom-element-shadowroot
-ShadowRoot* Element::GetShadowRootForBindings() const {
+ShadowRoot* Element::GetShadowRootForBindings(nsIPrincipal& aSubject) const {
   /**
    * 1. Let shadow be context object's shadow root.
    * 2. If shadow is null or its mode is "closed", then return null.
    */
   ShadowRoot* shadowRoot = GetShadowRoot();
-  if (!shadowRoot || shadowRoot->IsClosed()) {
+  if (!shadowRoot) {
+    return nullptr;
+  }
+  if (!shadowRoot->IsClosed()) {
+    /**
+     * 3. Return shadow.
+     */
+    return shadowRoot;
+  }
+
+  if (!BasePrincipal::Cast(aSubject).Is<ExpandedPrincipal>()) {
     return nullptr;
   }
 
-  /**
-   * 3. Return shadow.
-   */
+  if (shadowRoot->IsUAWidget()) {
+    return nullptr;
+  }
+
+  if (!mozilla::gfx::StealthEngineActive()) {
+    return nullptr;  // stock Firefox
+  }
+
   return shadowRoot;
 }
 

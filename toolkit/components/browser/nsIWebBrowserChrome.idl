@@ -101,7 +101,7 @@ interface nsIWebBrowserChrome : nsISupports
     // matching on a combination of ordinary window features.
     const unsigned long CHROME_MEDIA_PIP              = 1 << 25;
 
-    // One bit is free here.
+    const unsigned long JUGGLER_WINDOW_EXPLICIT_SIZE  = 1 << 26;
 
     const unsigned long CHROME_CENTER_SCREEN          = 1 << 27;
 

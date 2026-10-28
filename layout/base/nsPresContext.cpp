@@ -7,6 +7,8 @@
 #include "nsPresContext.h"
 
 #include "nsPresContextInlines.h"
+
+#include "StealthDeclarationGate.h"
 #if defined(MOZ_WIDGET_ANDROID)
 #  include "mozilla/AsyncEventDispatcher.h"
 #endif
@@ -1461,7 +1463,8 @@ void nsPresContext::SetOverrideDPPX(float aDPPX) {
 }
 
 void nsPresContext::UpdateInnerSizeSpoofedForRFP() {
-  if (!mDocument->ShouldResistFingerprinting(RFPTarget::WindowOuterSize) ||
+  if ((!mDocument->ShouldResistFingerprinting(RFPTarget::WindowOuterSize) &&
+       !mozilla::gfx::StealthEngineActive()) ||
       !mDocument->GetBrowsingContext() ||
       !mDocument->GetBrowsingContext()->IsTop()) {
     return;
