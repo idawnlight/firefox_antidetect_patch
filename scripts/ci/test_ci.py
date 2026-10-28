@@ -18,7 +18,13 @@
     8. a passing one records its time;
   report
     9. one row per phase; a leg that never started and a phase that never
-       ended (cancelled, runner lost) are rows, not gaps.
+       ended (cancelled, runner lost) are rows, not gaps;
+  symbols_match
+   10. a xul whose symbols describe another binary is refused (run
+       40593659072), and a package with no xul to check never passes empty;
+  input_watch
+   11. a build input that moves is logged with who was running, and one whose
+       content changed is refused.
 
     python3 scripts/ci/test_ci.py
 """
@@ -28,6 +34,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -215,6 +222,95 @@ def main() -> int:
                   "DIFFERENT" in guard(with_seal, published=b"OTHER")))
     cases.append(("payload guard: a seal that cannot be downloaded is refused",
                   guard(with_seal, download=(1, "", "HTTP 500")).startswith("REFUSED")))
+
+    import struct
+    import symbols_match as sm
+
+    def pe(guid_hex, age):
+        # MZ -> PE32+ with one section holding the debug directory and its RSDS.
+        g = bytes.fromhex(guid_hex)
+        raw16 = struct.pack("<IHH", *struct.unpack(">IHH", g[:8])) + g[8:]
+        data = bytearray(0x600)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3C, 0x40)
+        data[0x40:0x44] = b"PE\0\0"
+        struct.pack_into("<HH", data, 0x44, 0x8664, 1)
+        struct.pack_into("<H", data, 0x54, 240)
+        struct.pack_into("<H", data, 0x58, 0x20B)
+        struct.pack_into("<II", data, 0x58 + 112 + 6 * 8, 0x1000, 28)
+        struct.pack_into("<IIII", data, 0x58 + 240 + 8, 0x200, 0x1000, 0x200, 0x400)
+        struct.pack_into("<IIII", data, 0x400 + 12, 2, 24, 0, 0x500)
+        data[0x500:0x504] = b"RSDS"
+        data[0x504:0x514] = raw16
+        struct.pack_into("<I", data, 0x514, age)
+        return bytes(data)
+
+    def elf(build_id):
+        data = bytearray(0x200)
+        data[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<Q", data, 0x28, 0x100)
+        struct.pack_into("<HH", data, 0x3A, 64, 2)
+        note = struct.pack("<III", 4, len(build_id), 3) + b"GNU\0" + build_id
+        struct.pack_into("<IIQQQQ", data, 0x100 + 64, 0, 7, 0, 0, 0x180, len(note))
+        data[0x180:0x180 + len(note)] = note
+        return bytes(data)
+
+    shipped, described = "030D79D80656024F4C4C44205044422E", "3E2BB50004249B654C4C44205044422E"
+    cases.append(("symbols: a PE's id is its CodeView GUID and age",
+                  sm.pe_debug_id(pe(shipped, 1)) == shipped + "1"))
+    cases.append(("symbols: an ELF's id is its build id in breakpad's byte order",
+                  sm.elf_debug_id(elf(bytes(range(1, 21)))) == "040302010605080709" + "0A0B0C0D0E0F10" + "0"))
+
+    def symbols(binaries, ids):
+        try:
+            return sm.check(binaries, ids)
+        except sm.MismatchError as exc:
+            return "REFUSED " + str(exc)
+    # Run 40593659072: the package's xul.dll and the archive's xul.pdb.
+    got = symbols({"xul.dll": pe(shipped, 1)}, {"xul.pdb": {described + "1"}})
+    cases.append(("symbols: run 40593659072's xul (shipped 030D79D8, described 3E2BB500) is refused",
+                  got.startswith("REFUSED") and shipped in got and described in got))
+    cases.append(("symbols: a xul the archive describes passes",
+                  symbols({"xul.dll": pe(shipped, 1), "firefox.exe": pe(described, 2)},
+                          {"xul.pdb": {shipped + "1"}}) == ["xul.dll %s1" % shipped]))
+    cases.append(("symbols: a package with no xul to check is refused, never passed empty",
+                  symbols({"firefox.exe": pe(shipped, 1)}, {"firefox.pdb": {shipped + "1"}}).startswith("REFUSED")))
+    cases.append(("symbols: an ELF xul is checked by its own name",
+                  symbols({"libxul.so": elf(bytes(range(1, 21)))},
+                          {"libxul.so": {"0403020106050807090A0B0C0D0E0F100"}})[0].startswith("libxul.so")))
+
+    import threading
+    import input_watch as iw
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        prof, log = tmp / "merged.profdata", tmp / "inputwatch.log"
+        prof.write_bytes(b"PROFILE")
+        th = threading.Thread(target=iw.watch, args=(prof, log, 0.05))
+        th.start()
+        while not log.with_suffix(".start.json").exists():
+            time.sleep(0.01)
+        cases.append(("input watch: an untouched profile verifies", "unchanged" in iw.verify(prof, log)
+                      and "mtime moved" not in iw.verify(prof, log)))
+        st = prof.stat()
+        os.utime(prof, ns=(st.st_atime_ns, st.st_mtime_ns + 10 ** 9))
+        th.join(60)
+        cases.append(("input watch: the first touch is logged with the processes then running",
+                      not th.is_alive() and "changed: mtime" in log.read_text(encoding="utf-8")))
+        cases.append(("input watch: a touched but identical profile verifies, saying so",
+                      "mtime moved" in iw.verify(prof, log)))
+        prof.write_bytes(b"ANOTHER")
+        try:
+            iw.verify(prof, log)
+            refused = False
+        except ValueError as exc:
+            refused = "CONTENT" in str(exc)
+        cases.append(("input watch: a profile whose content changed is refused", refused))
+        try:
+            iw.verify(prof, tmp / "never.log")
+            refused = False
+        except ValueError:
+            refused = True
+        cases.append(("input watch: a watch that never started is refused, not passed", refused))
 
     failures = 0
     for name, ok in cases:

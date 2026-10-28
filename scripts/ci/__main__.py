@@ -9,6 +9,10 @@
   assets | version                every leg's asset name | the version the tree builds
   payload-guard --tag T --repo R --seal F
                                   refuse a seal that differs from T's published one
+  symbols-match --package P --symbols Z
+                                  refuse crash symbols that describe other binaries than P's
+  input-watch --file F --log L [--verify]
+                                  log who moves build input F; after the build, refuse a changed F
 """
 from __future__ import annotations
 
@@ -52,6 +56,13 @@ def main(argv) -> int:
     g.add_argument("--tag", required=True)
     g.add_argument("--repo", required=True)
     g.add_argument("--seal", type=Path, required=True)
+    s = sub.add_parser("symbols-match")
+    s.add_argument("--package", type=Path, required=True)
+    s.add_argument("--symbols", type=Path, required=True)
+    w = sub.add_parser("input-watch")
+    w.add_argument("--file", type=Path, required=True)
+    w.add_argument("--log", type=Path, required=True)
+    w.add_argument("--verify", action="store_true")
     args = ap.parse_args(argv)
 
     if args.cmd == "matrix":
@@ -65,6 +76,23 @@ def main(argv) -> int:
         try:
             print(payload_guard.check(args.tag, args.repo, args.seal))
         except payload_guard.GuardError as exc:
+            print("ERROR: %s" % exc, file=sys.stderr)
+            return 1
+    elif args.cmd == "symbols-match":
+        import symbols_match
+        try:
+            print("\n".join(symbols_match.run(args.package, args.symbols)))
+        except symbols_match.MismatchError as exc:
+            print("ERROR: %s" % exc, file=sys.stderr)
+            return 1
+    elif args.cmd == "input-watch":
+        import input_watch
+        if not args.verify:
+            input_watch.watch(args.file, args.log)
+            return 0
+        try:
+            print(input_watch.verify(args.file, args.log))
+        except ValueError as exc:
             print("ERROR: %s" % exc, file=sys.stderr)
             return 1
     elif args.cmd == "asset":

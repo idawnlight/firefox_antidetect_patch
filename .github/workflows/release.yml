@@ -442,7 +442,13 @@ jobs:
           # lines and the watch's kills in the step summary (scripts/ci/phase.py);
           # its whole output goes to logs/build.log.
           python3 -u scripts/memory_watch.py --log memwatch.log &
+          # The PGO profile is an input and nothing may move it (scripts/ci/input_watch.py):
+          # run 40619608072 found its mtime 18 minutes into this step, and cargo
+          # rebuilt gkrust for it in the symbols step.
+          PROFILE="$HOME/pgo/merged.profdata"
+          if [ -f "$PROFILE" ]; then python3 scripts/ci input-watch --file "$PROFILE" --log inputwatch.log & fi
           python3 scripts/ci phase build -- ./mach build --keep-going
+          if [ -f "$PROFILE" ]; then python3 scripts/ci input-watch --file "$PROFILE" --log inputwatch.log --verify; fi
       - name: Upload the logs of a failed build
         if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -554,6 +560,13 @@ jobs:
           mkdir -p symbols
           mv obj-rel/dist/*.crashreporter-symbols.zip symbols/
           ls -la symbols/
+      - name: The crash symbols describe the shipped binaries
+        # Run 40593659072 uploaded symbols for a xul.dll it did not ship: its
+        # symbols step relinked xul after the package was made, and the archive
+        # named 3E2BB500 for a binary that shipped as 030D79D8. Nothing said so;
+        # a crash report from that build could never have been read.
+        shell: bash
+        run: python3 scripts/ci symbols-match --package "out/${{ matrix.asset }}" --symbols symbols/*.zip
       - name: Upload crash symbols
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -573,6 +586,7 @@ jobs:
             events.jsonl
             memwatch.log
             sccache-stats.txt
+            inputwatch*
           if-no-files-found: ignore
           retention-days: 14
 
