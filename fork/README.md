@@ -11,12 +11,12 @@ The Python pair is `invisible_core 159.49.0` and
 Build on Linux:
 
 ```sh
-MOZBUILD_STATE_PATH="$PWD/../build-state" \
-MOZCONFIG="$PWD/fork/mozconfig.linux" ./mach build
+./fork/build.sh
 ```
 
 The build configuration enables Mozilla's release settings, bundled fonts and
 native tests. Engine updates are supplied through the fork's releases.
+The build entry records the current Git commit in the application metadata.
 `scripts/make_seal.py` generates the matching core seal from the built tree or
 release archives. Record the engine commit with `--source-commit-file` and use
 `browser/config/stealth_playwright_range.txt` for the supported client range.
