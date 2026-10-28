@@ -429,6 +429,11 @@ nsresult nsXULPrototypeCache::BeginCaching(nsIURI* aURI) {
       }
     }
 
+    // Cache unavailability leaves existing entries intact.
+    if (rv == NS_ERROR_NOT_AVAILABLE) {
+      return rv;
+    }
+
     // Failed again, just bail.
     if (NS_FAILED(rv)) {
       startupCache->InvalidateCache();

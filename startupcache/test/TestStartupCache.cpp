@@ -4,11 +4,13 @@
 
 #include "gtest/gtest.h"
 
+#include "mozilla/Monitor.h"
 #include "mozilla/scache/StartupCache.h"
 #include "mozilla/scache/StartupCacheUtils.h"
 
 #include "nsDirectoryServiceDefs.h"
 #include "nsIOutputStream.h"
+#include "nsIThread.h"
 #include "nsISupports.h"
 #include "nsIStorageStream.h"
 #include "nsIObjectInputStream.h"
@@ -29,6 +31,28 @@ using namespace JS;
 
 using namespace mozilla::scache;
 using mozilla::UniquePtr;
+
+namespace mozilla::scache {
+
+class StartupCacheTestAccess {
+ public:
+  static void HoldTableLock(StartupCache* aCache, Monitor& aState,
+                            bool& aLocked, bool& aRelease) {
+    MOZ_ASSERT(!NS_IsMainThread());
+    MutexAutoLock tableLock(aCache->mTableLock);
+    MonitorAutoLock stateLock(aState);
+    aLocked = true;
+    stateLock.NotifyAll();
+    while (!aRelease) {
+      // Break a blocking-read regression without asserting elapsed time.
+      if (stateLock.Wait(TimeDuration::FromSeconds(10)) == CVStatus::Timeout) {
+        break;
+      }
+    }
+  }
+};
+
+}  // namespace mozilla::scache
 
 void WaitForStartupTimer() {
   StartupCache* sc = StartupCache::GetSingleton();
@@ -116,6 +140,50 @@ TEST_F(TestStartupCache, WriteInvalidateRead) {
 
   rv = sc->GetBuffer(id, &outbuf, &len);
   EXPECT_EQ(rv, NS_ERROR_NOT_AVAILABLE);
+}
+
+TEST_F(TestStartupCache, BusyReadIsCacheMiss) {
+  StartupCache* sc = StartupCache::GetSingleton();
+  const char* id = "busy-read";
+  const char* data = "cached value survives a busy read";
+  ASSERT_NS_SUCCEEDED(sc->PutBuffer(
+      id, mozilla::UniqueFreePtr<char[]>(strdup(data)), strlen(data) + 1));
+
+  mozilla::Monitor state("StartupCacheBusyRead");
+  bool locked = false;
+  bool release = false;
+  nsCOMPtr<nsIThread> writer;
+  ASSERT_NS_SUCCEEDED(NS_NewNamedThread(
+      "SCBusyRead", getter_AddRefs(writer),
+      NS_NewRunnableFunction("StartupCacheTestAccess::HoldTableLock", [&] {
+        StartupCacheTestAccess::HoldTableLock(sc, state, locked, release);
+      })));
+  {
+    mozilla::MonitorAutoLock lock(state);
+    while (!locked) {
+      lock.Wait();
+    }
+  }
+
+  const char* outbuf = nullptr;
+  uint32_t len = 0;
+  nsresult rv = sc->GetBuffer(id, &outbuf, &len);
+
+  // Release the writer after GetBuffer returns. A blocking read reaches the
+  // watchdog, returns NS_OK, and fails the cache-miss assertion below.
+  {
+    mozilla::MonitorAutoLock lock(state);
+    release = true;
+    lock.NotifyAll();
+  }
+  EXPECT_NS_SUCCEEDED(writer->Shutdown());
+  EXPECT_EQ(rv, NS_ERROR_NOT_AVAILABLE);
+  EXPECT_EQ(outbuf, nullptr);
+  EXPECT_EQ(len, 0u);
+
+  ASSERT_NS_SUCCEEDED(sc->GetBuffer(id, &outbuf, &len));
+  EXPECT_STREQ(data, outbuf);
+  EXPECT_EQ(len, strlen(data) + 1);
 }
 
 TEST_F(TestStartupCache, WriteObject) {

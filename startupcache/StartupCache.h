@@ -145,6 +145,7 @@ class StartupCacheListener final : public nsIObserver {
 
 class StartupCache : public nsIMemoryReporter {
   friend class StartupCacheListener;
+  friend class StartupCacheTestAccess;
 
  public:
   NS_DECL_THREADSAFE_ISUPPORTS

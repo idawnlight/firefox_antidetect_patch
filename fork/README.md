@@ -12,10 +12,14 @@ Build on Linux:
 
 ```sh
 ./fork/build.sh
+XZ_OPT=-T0 ./fork/build.sh package
 ```
 
 The build configuration enables Mozilla's release settings, bundled fonts and
-native tests. Engine updates are supplied through the fork's releases.
+native tests. The packaged binary is
+`../build/obj-firefox-stable-159/dist/firefox/firefox`, and the distributable
+archive is in the same `dist` directory. Engine updates are supplied through
+the fork's releases.
 The build entry records the current Git commit in the application metadata.
 `scripts/make_seal.py` generates the matching core seal from the built tree or
 release archives. Record the engine commit with `--source-commit-file` and use
@@ -30,4 +34,4 @@ Keep the stable implementation on `reproduce/firefox-159` while verifying it.
 For each new Mozilla release, start from its release tag, retain the functional
 commit groups and adapt their native entry points. Run the original author
 tests against the paired core, wrapper and engine, including the native
-`StealthCanvasProjection` tests and Juggler's Node tests.
+`StealthCanvasProjection` and `TestStartupCache` tests and Juggler's Node tests.
