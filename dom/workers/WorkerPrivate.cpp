@@ -94,6 +94,7 @@
 #include "mozilla/extensions/ExtensionBrowser.h"  // extensions::Create{AndDispatchInitWorkerContext,WorkerLoaded,WorkerDestroyed}Runnable
 #include "mozilla/extensions/WebExtensionPolicy.h"
 #include "mozilla/glean/DomUseCounterMetrics.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/net/CookieJarSettings.h"
@@ -2981,6 +2982,16 @@ WorkerPrivate::WorkerPrivate(
     mIsPrivilegedAddonGlobal = aParent->mIsPrivilegedAddonGlobal;
   } else {
     AssertIsOnMainThread();
+
+    nsAutoCString language(mLoadInfo.mLanguageOverrideLocale);
+    intl::OrSessionLanguage(language);
+    intl::OrSessionTimezone(mLoadInfo.mTimezoneOverride);
+    if (!language.IsEmpty()) {
+      if (mLoadInfo.mLanguageOverride.IsEmpty()) {
+        Navigator::GetAcceptLanguages(mLoadInfo.mLanguageOverride, &language);
+      }
+      intl::PrimaryLanguageTag(language, mLoadInfo.mLanguageOverrideLocale);
+    }
 
     RuntimeService::GetDefaultJSSettings(mJSSettings);
 
@@ -6341,7 +6352,9 @@ void WorkerPrivate::UpdateContextOptionsInternal(
 void WorkerPrivate::UpdateLanguageOverrideInternal(
     const nsCString& aLanguageOverride,
     const nsTArray<nsString>& aResolvedLanguages) {
-  mLoadInfo.mLanguageOverrideLocale = aLanguageOverride;
+  nsAutoCString primaryLocale;
+  intl::PrimaryLanguageTag(aLanguageOverride, primaryLocale);
+  mLoadInfo.mLanguageOverrideLocale = primaryLocale;
   if (aLanguageOverride.IsEmpty()) {
     mLoadInfo.mLanguageOverride.Clear();
   } else {
@@ -6357,7 +6370,7 @@ void WorkerPrivate::UpdateLanguageOverrideInternal(
         if (aLanguageOverride.IsEmpty()) {
           JS::SetRealmLocaleOverride(realm, nullptr);
         } else {
-          JS::SetRealmLocaleOverride(realm, aLanguageOverride.get());
+          JS::SetRealmLocaleOverride(realm, primaryLocale.get());
         }
       }
     }
@@ -6403,6 +6416,9 @@ void WorkerPrivate::UpdateTimezoneOverrideInternal(JSContext* aCx,
 
 void WorkerPrivate::UpdateLanguagesInternal(
     const nsTArray<nsString>& aLanguages) {
+  if (!mLoadInfo.mLanguageOverride.IsEmpty()) {
+    return;
+  }
   WorkerGlobalScope* globalScope = GlobalScope();
   RefPtr<WorkerNavigator> nav = globalScope->GetExistingNavigator();
   if (nav) {

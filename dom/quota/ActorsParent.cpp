@@ -79,6 +79,7 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StorageOriginAttributes.h"
 #include "mozilla/SystemPrincipal.h"
@@ -8454,8 +8455,12 @@ std::pair<uint64_t, uint64_t> QuotaManager::GetUsageAndLimitForEstimate(
   // group-limit eviction and is bound by the global temporary storage limit
   // instead. Both values are exposed to content via
   // navigator.storage.estimate() so the usage is clamped to 0.
-  return std::pair(QM_CLAMP_TO_ZERO(originUsage),
-                   persisted ? mTemporaryStorageLimit : GetGroupLimit());
+  const int32_t declared = StaticPrefs::zoom_stealth_storage_quota_mb();
+  const uint64_t limit =
+      declared > 0
+          ? uint64_t(declared) * 1024 * 1024
+          : uint64_t(persisted ? mTemporaryStorageLimit : GetGroupLimit());
+  return std::pair(QM_CLAMP_TO_ZERO(originUsage), limit);
 }
 
 std::pair<uint64_t, uint64_t> QuotaManager::GetGroupUsageAndLimitForEstimate(

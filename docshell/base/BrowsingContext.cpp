@@ -44,6 +44,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/SessionStoreChild.h"
 #include "mozilla/dom/SessionStorageManager.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/UserActivationIPCUtils.h"
 #include "mozilla/dom/WindowBinding.h"
@@ -55,6 +56,7 @@
 #include "mozilla/dom/SyncedContextInlines.h"
 #include "mozilla/dom/XULFrameElement.h"
 #include "mozilla/ipc/ProtocolUtils.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 #include "mozilla/net/DocumentLoadListener.h"
 #include "mozilla/net/RequestContextService.h"
 #include "mozilla/Assertions.h"
@@ -1088,6 +1090,22 @@ void BrowsingContext::Attach(bool aFromIPC, ContentParent* aOriginProcess) {
 
   if (XRE_IsParentProcess()) {
     Canonical()->CanonicalAttach();
+  }
+  if (IsTop() && XRE_IsParentProcess()) {
+    if (GetTimezoneOverride().IsEmpty()) {
+      nsAutoString zone;
+      intl::OrSessionTimezone(zone);
+      if (!zone.IsEmpty()) {
+        MOZ_ALWAYS_SUCCEEDS(SetTimezoneOverride(zone));
+      }
+    }
+    if (GetLanguageOverride().IsEmpty()) {
+      nsAutoCString language;
+      intl::OrSessionLanguage(language);
+      if (!language.IsEmpty()) {
+        MOZ_ALWAYS_SUCCEEDS(SetLanguageOverride(language));
+      }
+    }
   }
 }
 
@@ -3579,7 +3597,10 @@ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
                              nsCString&& aOldValue) {
   MOZ_ASSERT(IsTop());
 
-  const nsCString& languageOverride = GetLanguageOverride();
+  nsAutoCString languageOverride;
+  GetDeclaredLanguage(this, languageOverride);
+  nsAutoCString primaryLocale;
+  intl::PrimaryLanguageTag(languageOverride, primaryLocale);
 
   workerinternals::RuntimeService* rts =
       workerinternals::RuntimeService::GetService();
@@ -3596,8 +3617,7 @@ void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
         if (languageOverride.IsEmpty()) {
           JS::SetRealmLocaleOverride(realm, nullptr);
         } else {
-          JS::SetRealmLocaleOverride(
-              realm, PromiseFlatCString(languageOverride).get());
+          JS::SetRealmLocaleOverride(realm, primaryLocale.get());
         }
 
         if (Navigator* navigator = window->Navigator()) {
@@ -3889,7 +3909,8 @@ void BrowsingContext::DidSet(FieldIndex<IDX_TimezoneOverride>,
                              nsString&& aOldValue) {
   MOZ_ASSERT(IsTop());
 
-  const nsString& timezoneOverride = GetTimezoneOverride();
+  nsAutoString timezoneOverride;
+  GetDeclaredTimezone(this, timezoneOverride);
 
   PreOrderWalk([&](BrowsingContext* aBrowsingContext) {
     if (RefPtr<WindowContext> windowContext =

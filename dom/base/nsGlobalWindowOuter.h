@@ -797,6 +797,9 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   mozilla::CSSIntSize GetOuterSize(mozilla::dom::CallerType aCallerType,
                                    mozilla::ErrorResult& aError);
   nsRect GetInnerScreenRect();
+  static mozilla::Maybe<nsPoint> StealthContentOriginShift(
+      nsPresContext* aPresContext);
+  bool IsInStealthPopup() const;
   static mozilla::Maybe<mozilla::CSSIntSize> GetRDMDeviceSize(
       const Document& aDocument);
 

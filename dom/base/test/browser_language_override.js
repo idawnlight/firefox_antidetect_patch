@@ -8,6 +8,67 @@
 const PAGE_URL = "https://example.com/chrome/dom/base/test/file_empty.html";
 const languages = ["en-US", "es-ES", "fr-FR"];
 
+add_task(async function test_session_language_and_context_language_list() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["juggler.locale.override", "en-GB, en"],
+      ["intl.accept_languages", "en-GB, en"],
+    ],
+  });
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, PAGE_URL);
+  const browser = tab.linkedBrowser;
+  try {
+    is(await getIntlLanguage(browser), "en-GB", "Session initializes Intl");
+    Assert.deepEqual(
+      Array.from(await getNavigatorLanguages(browser)),
+      ["en-GB", "en"],
+      "Session initializes the complete language list"
+    );
+    browser.browsingContext.languageOverride = "de-DE, de, en-US, en";
+    is(await getIntlLanguage(browser), "de-DE", "Intl uses the primary tag");
+    Assert.deepEqual(
+      Array.from(await getNavigatorLanguages(browser)),
+      ["de-DE", "de", "en-US", "en"],
+      "Navigator retains all language tags"
+    );
+    browser.browsingContext.languageOverride = "";
+    is(await getIntlLanguage(browser), "en-GB", "Clearing returns to the session");
+  } finally {
+    BrowserTestUtils.removeTab(tab);
+    await SpecialPowers.popPrefEnv();
+  }
+});
+
+add_task(async function test_declared_cpu_precedes_native_cap_in_window_and_worker() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["zoom.stealth.hw_concurrency", 64],
+      ["dom.maxHardwareConcurrency", 1],
+    ],
+  });
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, PAGE_URL);
+  try {
+    const values = await SpecialPowers.spawn(tab.linkedBrowser, [], async () => {
+      return content.eval(`(async () => {
+        const url = URL.createObjectURL(new Blob([
+          "postMessage(navigator.hardwareConcurrency)"
+        ], { type: "text/javascript" }));
+        const worker = new Worker(url);
+        const workerValue = await new Promise(resolve => {
+          worker.onmessage = event => resolve(event.data);
+        });
+        worker.terminate();
+        URL.revokeObjectURL(url);
+        return [navigator.hardwareConcurrency, workerValue];
+      })()`);
+    });
+    Assert.deepEqual(values, [64, 64], "Window and worker return the declaration");
+  } finally {
+    BrowserTestUtils.removeTab(tab);
+    await SpecialPowers.popPrefEnv();
+  }
+});
+
 add_task(async function test_set_language_override() {
   const tab = BrowserTestUtils.addTab(gBrowser, PAGE_URL);
   const browser = gBrowser.getBrowserForTab(tab);

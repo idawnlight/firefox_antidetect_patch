@@ -10,6 +10,20 @@ const SCRIPT_URL =
   "https://example.com/browser/netwerk/test/browser/request_accept_language.sjs";
 const languages = ["en-US", "es-ES", "fr-FR"];
 
+add_task(async function test_language_list_gets_standard_quality_values() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, PAGE_URL);
+  try {
+    tab.linkedBrowser.browsingContext.languageOverride = "de-DE, de, en-US, en";
+    is(
+      await getAcceptLanguageHeader(tab.linkedBrowser),
+      "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+      "A context language list uses Firefox's standard quality values"
+    );
+  } finally {
+    BrowserTestUtils.removeTab(tab);
+  }
+});
+
 add_task(async function test_set_language_override() {
   const tab = BrowserTestUtils.addTab(gBrowser, PAGE_URL);
   const browser = gBrowser.getBrowserForTab(tab);

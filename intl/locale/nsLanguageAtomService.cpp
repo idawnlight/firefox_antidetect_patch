@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsLanguageAtomService.h"
+#include "mozilla/intl/StealthSessionPrefs.h"
 
 #include "mozilla/Encoding.h"
 #include "mozilla/intl/Locale.h"
@@ -114,6 +115,13 @@ nsAtom* nsLanguageAtomService::GetLocaleLanguage() {
 
   AutoWriteLock lock(mLock);
   if (!mLocaleLanguage) {
+    nsAutoCString language;
+    mozilla::intl::SessionLanguageTag(language);
+    if (!language.IsEmpty()) {
+      ToLowerCase(language);
+      mLocaleLanguage = NS_Atomize(language);
+      return mLocaleLanguage;
+    }
     AutoTArray<nsCString, 10> regionalPrefsLocales;
     // XXX Are the OSPreferences calls here safe to call from any thread?
     // In practice GetLocaleLanguage will be called early on the main thread

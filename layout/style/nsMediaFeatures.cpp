@@ -5,11 +5,13 @@
 /* the features that media queries can test */
 
 #include "PreferenceSheet.h"
+#include "StealthDeclarationGate.h"
 #include "mozilla/GeckoBindings.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/RelativeLuminanceUtils.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/dom/BrowsingContextBinding.h"
@@ -58,6 +60,12 @@ static nsSize GetSize(const Document& aDocument) {
 
 // A helper for three features below.
 static nsSize GetDeviceSize(const Document& aDocument) {
+  const int32_t width = StaticPrefs::zoom_stealth_screen_width();
+  const int32_t height = StaticPrefs::zoom_stealth_screen_height();
+  if (width > 0 && height > 0) {
+    return CSSPixel::ToAppUnits(CSSIntSize(width, height));
+  }
+
   if (aDocument.ShouldResistFingerprinting(RFPTarget::CSSDeviceSize)) {
     return GetSize(aDocument);
   }
@@ -408,6 +416,17 @@ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
     // that we don't need to care about ResistFingerprinting.
     if (bc->TouchEventsOverride() == dom::TouchEventsOverride::Enabled) {
       return PointerCapabilities::Coarse;
+    }
+  }
+
+  if (mozilla::gfx::StealthEngineActive()) {
+    const int32_t declared =
+        aID == LookAndFeel::IntID::PrimaryPointerCapabilities
+            ? StaticPrefs::zoom_stealth_pointer_primary()
+            : StaticPrefs::zoom_stealth_pointer_all();
+    if (declared >= 0) {
+      mozilla::gfx::StealthAssertDeclarationsComplete();
+      return static_cast<PointerCapabilities>(declared);
     }
   }
 

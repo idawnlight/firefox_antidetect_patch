@@ -6,6 +6,7 @@
 #include "Navigator.h"
 
 #include "Geolocation.h"
+#include "StealthDeclarationGate.h"
 #include "base/basictypes.h"
 #include "mozilla/Components.h"
 #include "mozilla/ContentBlockingNotifier.h"
@@ -13,6 +14,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_beacon.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BodyExtractor.h"
 #include "mozilla/dom/FetchBinding.h"
 #include "mozilla/dom/File.h"
@@ -687,6 +689,11 @@ bool Navigator::GlobalPrivacyControl() {
 }
 
 uint64_t Navigator::HardwareConcurrency() {
+  const int32_t declared = StaticPrefs::zoom_stealth_hw_concurrency();
+  if (declared > 0) {
+    return uint64_t(declared);
+  }
+
   workerinternals::RuntimeService* rts =
       workerinternals::RuntimeService::GetOrCreateService();
   if (!rts) {
@@ -894,6 +901,12 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
   // touch simulation is enabled.
   if (bc && bc->Top()->InRDMPane()) {
     return bc->Top()->GetMaxTouchPointsOverride();
+  }
+
+  if (aCallerType != CallerType::System &&
+      mozilla::gfx::StealthEngineActive()) {
+    mozilla::gfx::StealthAssertDeclarationsComplete();
+    return uint32_t(StaticPrefs::zoom_stealth_max_touch_points());
   }
 
   // The maxTouchPoints is going to reveal the detail of users' hardware. So,

@@ -746,6 +746,9 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
   return rv;
 }
 
+static nsresult PrepareAcceptLanguages(const char* aLanguages,
+                                       nsACString& aResult);
+
 nsresult nsHttpHandler::AddStandardRequestHeaders(
     nsHttpRequestHead* request, nsIURI* aURI, bool aIsHTTPS,
     ExtContentPolicyType aContentPolicyType, bool aShouldResistFingerprinting,
@@ -785,7 +788,10 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
 
   if (!aLanguageOverride.IsEmpty()) {
     nsAutoCString acceptLanguage;
-    acceptLanguage.Assign(aLanguageOverride.get());
+    rv = PrepareAcceptLanguages(aLanguageOverride.get(), acceptLanguage);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
     rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
                             nsHttpHeaderArray::eVarietyRequestOverride);
     if (NS_FAILED(rv)) return rv;

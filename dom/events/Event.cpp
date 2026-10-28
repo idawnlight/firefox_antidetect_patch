@@ -39,6 +39,7 @@
 #include "nsDeviceContext.h"
 #include "nsError.h"
 #include "nsGlobalWindowInner.h"
+#include "nsGlobalWindowOuter.h"
 #include "nsIContent.h"
 #include "nsIContentInlines.h"
 #include "nsIFrame.h"
@@ -669,12 +670,18 @@ Maybe<CSSDoublePoint> Event::GetScreenCoords(
   const LayoutDeviceIntPoint topLevelPoint = LayoutDeviceIntPoint::Round(
       guiEvent->mWidget->WidgetToTopLevelWidgetTransform().TransformPoint(
           aWidgetOrScreenRelativePoint));
+  const int32_t auPerDevPx =
+      aPresContext->DeviceContext()->AppUnitsPerDevPixel();
+  nsPoint originShift;
+  if (const auto shift =
+          nsGlobalWindowOuter::StealthContentOriginShift(aPresContext)) {
+    originShift = *shift;
+  }
   const CSSPoint pt = CSSPixel::FromAppUnits(
+      LayoutDevicePixel::ToAppUnits(topLevelPoint, auPerDevPx) +
       LayoutDevicePixel::ToAppUnits(
-          topLevelPoint, aPresContext->DeviceContext()->AppUnitsPerDevPixel()) +
-      LayoutDevicePixel::ToAppUnits(
-          guiEvent->mWidget->TopLevelWidgetToScreenOffset(),
-          aPresContext->DeviceContext()->AppUnitsPerDevPixel()));
+          guiEvent->mWidget->TopLevelWidgetToScreenOffset(), auPerDevPx) +
+      originShift);
   return Some(CSSDoublePoint(pt.x, pt.y));
 }
 

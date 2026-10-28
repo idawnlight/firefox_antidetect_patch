@@ -1427,6 +1427,8 @@ pref("network.proxy.ssl_port",              0);
 pref("network.proxy.socks",                 "");
 pref("network.proxy.socks_port",            0);
 pref("network.proxy.socks_version",         5);
+pref("network.proxy.socks_username",        "");
+pref("network.proxy.socks_password",        "");
 pref("network.proxy.proxy_over_tls",        true);
 pref("network.proxy.no_proxies_on",         "");
 pref("network.proxy.failover_timeout",      1800); // 30 minutes
@@ -2687,19 +2689,19 @@ pref("font.size.monospace.x-math", 13);
   pref("font.name-list.sans-serif.ar", "sans-serif");
   pref("font.name-list.monospace.ar", "monospace");
   pref("font.name-list.cursive.ar", "cursive");
-  pref("font.size.monospace.ar", 12);
+  pref("font.size.monospace.ar", 13);
 
   pref("font.name-list.serif.el", "serif");
   pref("font.name-list.sans-serif.el", "sans-serif");
   pref("font.name-list.monospace.el", "monospace");
   pref("font.name-list.cursive.el", "cursive");
-  pref("font.size.monospace.el", 12);
+  pref("font.size.monospace.el", 13);
 
   pref("font.name-list.serif.he", "serif");
   pref("font.name-list.sans-serif.he", "sans-serif");
   pref("font.name-list.monospace.he", "monospace");
   pref("font.name-list.cursive.he", "cursive");
-  pref("font.size.monospace.he", 12);
+  pref("font.size.monospace.he", 13);
 
   pref("font.name-list.serif.ja", "serif");
   pref("font.name-list.sans-serif.ja", "sans-serif");
@@ -2736,7 +2738,7 @@ pref("font.size.monospace.x-math", 13);
   pref("font.name-list.sans-serif.x-cyrillic", "sans-serif");
   pref("font.name-list.monospace.x-cyrillic", "monospace");
   pref("font.name-list.cursive.x-cyrillic", "cursive");
-  pref("font.size.monospace.x-cyrillic", 12);
+  pref("font.size.monospace.x-cyrillic", 13);
 
   pref("font.name-list.serif.x-devanagari", "serif");
   pref("font.name-list.sans-serif.x-devanagari", "sans-serif");
@@ -2807,13 +2809,13 @@ pref("font.size.monospace.x-math", 13);
   pref("font.name-list.sans-serif.x-unicode", "sans-serif");
   pref("font.name-list.monospace.x-unicode", "monospace");
   pref("font.name-list.cursive.x-unicode", "cursive");
-  pref("font.size.monospace.x-unicode", 12);
+  pref("font.size.monospace.x-unicode", 13);
 
   pref("font.name-list.serif.x-western", "serif");
   pref("font.name-list.sans-serif.x-western", "sans-serif");
   pref("font.name-list.monospace.x-western", "monospace");
   pref("font.name-list.cursive.x-western", "cursive");
-  pref("font.size.monospace.x-western", 12);
+  pref("font.size.monospace.x-western", 13);
 
   pref("font.name-list.serif.zh-CN", "serif");
   pref("font.name-list.sans-serif.zh-CN", "sans-serif");
@@ -3745,7 +3747,7 @@ pref("toolkit.legacyUserProfileCustomizations.stylesheets", false);
   pref("datareporting.policy.minimumPolicyVersion", 1);
   pref("datareporting.policy.minimumPolicyVersion.channel-beta", 2);
   pref("datareporting.policy.firstRunURL", "https://www.mozilla.org/privacy/firefox/");
-  pref("datareporting.policy.dataSubmissionPolicyBypassNotification", false);
+  pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 #endif
 
 #ifdef MOZ_SERVICES_HEALTHREPORT
@@ -4259,3 +4261,24 @@ pref("general.smoothScroll", true, sticky);
 #if defined(MOZ_ARTIFACT_BUILDS) && defined(XP_MACOSX)
   pref("dom.ipc.processLaunch.useMacPlists", true);
 #endif
+
+pref("ui.font.caption", "Segoe UI");
+pref("ui.font.caption.size", "12");
+pref("ui.font.icon", "Segoe UI");
+pref("ui.font.icon.size", "12");
+pref("ui.font.menu", "Segoe UI");
+pref("ui.font.menu.size", "12");
+pref("ui.font.message-box", "Segoe UI");
+pref("ui.font.message-box.size", "12");
+pref("ui.font.small-caption", "Segoe UI");
+pref("ui.font.small-caption.size", "12");
+pref("ui.font.status-bar", "Segoe UI");
+pref("ui.font.status-bar.size", "12");
+pref("ui.font.-moz-pull-down-menu", "Segoe UI");
+pref("ui.font.-moz-pull-down-menu.size", "12");
+pref("ui.font.-moz-button", "Segoe UI");
+pref("ui.font.-moz-button.size", "12");
+pref("ui.font.-moz-list", "Segoe UI");
+pref("ui.font.-moz-list.size", "12");
+pref("ui.font.-moz-field", "Segoe UI");
+pref("ui.font.-moz-field.size", "12");

@@ -254,6 +254,7 @@
 #include "mozilla/dom/SpeculationRuleSet.h"
 #include "mozilla/dom/SpeculationRules.h"
 #include "mozilla/dom/SpeculationRulesManager.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"
 #include "mozilla/dom/StyleSheetApplicableStateChangeEvent.h"
 #include "mozilla/dom/StyleSheetApplicableStateChangeEventBinding.h"
 #include "mozilla/dom/StyleSheetList.h"
@@ -4070,6 +4071,10 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
     }
   }
 
+  if (CSP_IsBypassedFor(*this)) {
+    return NS_OK;
+  }
+
   nsAutoCString tCspHeaderValue, tCspROHeaderValue;
 
   nsCOMPtr<nsIHttpChannel> httpChannel;
@@ -4597,11 +4602,10 @@ void Document::SetDocumentURI(nsIURI* aURI) {
   }
 }
 
-static void GetFormattedTimeString(PRTime aTime, bool aUniversal,
+static void GetFormattedTimeString(PRTime aTime, const Document& aDocument,
                                    nsAString& aFormattedTimeString) {
   PRExplodedTime prtime;
-  PR_ExplodeTime(aTime, aUniversal ? PR_GMTParameters : PR_LocalTimeParameters,
-                 &prtime);
+  ExplodeLocalTime(aTime, &aDocument, &prtime);
   // "MM/DD/YYYY hh:mm:ss"
   char formatedTime[24];
   if (SprintfLiteral(formatedTime, "%02d/%02d/%04d %02d:%02d:%02d",
@@ -4619,9 +4623,7 @@ void Document::GetLastModified(nsAString& aLastModified) const {
   if (!mLastModified.IsEmpty()) {
     aLastModified.Assign(mLastModified);
   } else {
-    GetFormattedTimeString(PR_Now(),
-                           ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
-                           aLastModified);
+    GetFormattedTimeString(PR_Now(), *this, aLastModified);
   }
 }
 
@@ -12233,9 +12235,7 @@ void Document::RetrieveRelevantHeaders(nsIChannel* aChannel) {
 
   mLastModified.Truncate();
   if (modDate != 0) {
-    GetFormattedTimeString(modDate,
-                           ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
-                           mLastModified);
+    GetFormattedTimeString(modDate, *this, mLastModified);
   }
 }
 
