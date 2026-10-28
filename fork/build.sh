@@ -20,7 +20,4 @@ fi
 if [[ $# == 0 ]]; then
   set -- build
 fi
-if [[ "$1" == build ]]; then
-  ./mach configure
-fi
 exec ./mach "$@"

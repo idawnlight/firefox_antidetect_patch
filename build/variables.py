@@ -86,8 +86,12 @@ def source_repo_header(output):
     # environment (see configure)
     import buildconfig
 
-    repo = buildconfig.substs.get("MOZ_SOURCE_REPO")
-    changeset = buildconfig.substs.get("MOZ_SOURCE_CHANGESET")
+    repo = os.environ.get("MOZ_SOURCE_REPO") or buildconfig.substs.get(
+        "MOZ_SOURCE_REPO"
+    )
+    changeset = os.environ.get("MOZ_SOURCE_CHANGESET") or buildconfig.substs.get(
+        "MOZ_SOURCE_CHANGESET"
+    )
     source = ""
 
     if not repo:
