@@ -298,6 +298,12 @@ def main() -> int:
                       not th.is_alive() and "changed: mtime" in log.read_text(encoding="utf-8")))
         cases.append(("input watch: a touched but identical profile verifies, saying so",
                       "mtime moved" in iw.verify(prof, log)))
+        try:
+            iw.verify(prof, log, strict=True)
+            refused = False
+        except ValueError as exc:
+            refused = "new mtime" in str(exc)
+        cases.append(("input watch: strict, a rewritten profile is refused (what sccache 0.18.0 did)", refused))
         prof.write_bytes(b"ANOTHER")
         try:
             iw.verify(prof, log)
@@ -311,6 +317,77 @@ def main() -> int:
         except ValueError:
             refused = True
         cases.append(("input watch: a watch that never started is refused, not passed", refused))
+
+    import subprocess
+    import sccache_build as sb
+
+    def fake_build(tmp, check_fails=False, cached=False, patches=("0002-b.patch", "0001-a.patch")):
+        pdir, out, calls = tmp / "patches", tmp / "bin", []
+        pdir.mkdir()
+        for name in patches:
+            (pdir / name).write_text("diff\n", encoding="utf-8")
+        if cached:
+            out.mkdir()
+            (out / sb.binary_name()).write_bytes(b"BIN")
+
+        def run(cmd, check=True, env=None):
+            calls.append(cmd)
+            if check_fails and "--check" in cmd:
+                raise subprocess.CalledProcessError(1, cmd)
+            if cmd[0] == "cargo":
+                release = Path(cmd[cmd.index("--manifest-path") + 1]).parent / "target" / "release"
+                release.mkdir(parents=True)
+                (release / sb.binary_name()).write_bytes(b"BIN")
+            return subprocess.CompletedProcess(cmd, 0)
+        try:
+            exe = sb.build("v0.18.0", pdir, out, run)
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            exe = exc
+        return exe, calls
+    with tempfile.TemporaryDirectory() as t:
+        exe, calls = fake_build(Path(t), cached=True)
+        cases.append(("sccache: a binary already built for these patches is used as it is",
+                      isinstance(exe, Path) and calls == []))
+    with tempfile.TemporaryDirectory() as t:
+        exe, calls = fake_build(Path(t))
+        applied = [Path(c[-1]).name for c in calls if c[:1] == ["git"] and "apply" in c and "--check" not in c]
+        cases.append(("sccache: cloned at the pinned tag with LF kept, every patch checked then applied in order, built --locked",
+                      isinstance(exe, Path) and exe.is_file()
+                      and calls[0][:3] == ["git", "-c", "core.autocrlf=false"] and "v0.18.0" in calls[0]
+                      and applied == ["0001-a.patch", "0002-b.patch"]
+                      and calls[-1][:2] == ["cargo", "build"] and "--locked" in calls[-1]))
+    with tempfile.TemporaryDirectory() as t:
+        exe, calls = fake_build(Path(t), check_fails=True)
+        cases.append(("sccache: a patch that no longer applies is a refusal, never a binary without it",
+                      isinstance(exe, subprocess.CalledProcessError) and not any(c[0] == "cargo" for c in calls)
+                      and not (Path(t) / "bin" / sb.binary_name()).exists()))
+    with tempfile.TemporaryDirectory() as t:
+        exe, calls = fake_build(Path(t), patches=())
+        cases.append(("sccache: no patches is refused (that is the upstream release)", isinstance(exe, ValueError)))
+    patch = (HERE / "sccache" / "0001-rust-profile-use-is-an-input.patch").read_text(encoding="utf-8")
+    cases.append(("sccache: the patch takes -C profile-use off a Rust compile's outputs",
+                  "-        if let Some(profile) = &self.parsed_args.profile {" in patch
+                  and '-                    ("profile-use", Some(v)) => profile = Some(v.clone()),' in patch))
+    rel = (wf / "release.yml").read_text(encoding="utf-8")
+    pinned = re.search(r'SCCACHE_PINNED_VERSION=(\S+)"', rel).group(1)
+    cases.append(("sccache: built, never downloaded, at the pinned version, keyed by its patches",
+                  "sccache-action" not in rel and "sccache-build --tag v%s " % pinned in rel
+                  and "hashFiles('scripts/ci/sccache/*.patch')" in rel and "-v%s-" % pinned in rel))
+    cases.append(("input watch: the build verifies the profile strictly", "--verify --strict" in rel))
+    try:
+        import yaml
+    except ImportError:
+        yaml = None
+    if yaml is None:
+        cases.append(("gtests: the workflow can be read (PyYAML is missing)", False))
+    else:
+        doc = yaml.safe_load(rel)
+        gt_input = doc[True]["workflow_dispatch"]["inputs"]["gtests"]
+        gt_step = [s for s in doc["jobs"]["build"]["steps"] if s.get("name", "").startswith("Engine gtests")]
+        cases.append(("gtests: an input, off by default, on every leg, as a phase",
+                      gt_input["type"] == "boolean" and gt_input["default"] is False and len(gt_step) == 1
+                      and gt_step[0]["if"] == "github.event.inputs.gtests == 'true'"
+                      and "matrix" not in gt_step[0]["if"] and "phase gtest -- " in gt_step[0]["run"]))
 
     failures = 0
     for name, ok in cases:

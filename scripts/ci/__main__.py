@@ -11,8 +11,10 @@
                                   refuse a seal that differs from T's published one
   symbols-match --package P --symbols Z
                                   refuse crash symbols that describe other binaries than P's
-  input-watch --file F --log L [--verify]
+  input-watch --file F --log L [--verify [--strict]]
                                   log who moves build input F; after the build, refuse a changed F
+  sccache-build --tag T --patches DIR --out DIR
+                                  the sccache the candidates use, built from T and our patches
 """
 from __future__ import annotations
 
@@ -63,6 +65,11 @@ def main(argv) -> int:
     w.add_argument("--file", type=Path, required=True)
     w.add_argument("--log", type=Path, required=True)
     w.add_argument("--verify", action="store_true")
+    w.add_argument("--strict", action="store_true")
+    b = sub.add_parser("sccache-build")
+    b.add_argument("--tag", required=True)
+    b.add_argument("--patches", type=Path, required=True)
+    b.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
     if args.cmd == "matrix":
@@ -91,10 +98,13 @@ def main(argv) -> int:
             input_watch.watch(args.file, args.log)
             return 0
         try:
-            print(input_watch.verify(args.file, args.log))
+            print(input_watch.verify(args.file, args.log, strict=args.strict))
         except ValueError as exc:
             print("ERROR: %s" % exc, file=sys.stderr)
             return 1
+    elif args.cmd == "sccache-build":
+        import sccache_build
+        print(sccache_build.build(args.tag, args.patches, args.out))
     elif args.cmd == "asset":
         print(legs.by_name(args.leg).asset(legs.tree_version()))
     elif args.cmd == "mozconfig":

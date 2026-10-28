@@ -67,7 +67,9 @@ def watch(path: Path, log: Path, interval: float = 1.0, stop=lambda: False) -> N
             return
 
 
-def verify(path: Path, log: Path) -> str:
+def verify(path: Path, log: Path, strict: bool = False) -> str:
+    """`strict` refuses a moved mtime too: with the patched sccache nothing
+    writes the profile, and a write is what made cargo rebuild."""
     record = log.with_suffix(".start.json")
     if not record.is_file():
         raise ValueError("the watch of %s never recorded its start: nothing to verify against" % path)
@@ -76,4 +78,7 @@ def verify(path: Path, log: Path) -> str:
         raise ValueError("%s changed CONTENT during the build: the build did not read the profile "
                          "that was verified" % path)
     moved = state(path)[0] != start["mtime_ns"]
+    if moved and strict:
+        raise ValueError("%s was written during the build (same content, new mtime): cargo will "
+                         "rebuild what read it. Who wrote it is in %s" % (path, log))
     return "%s unchanged%s" % (path, " (its mtime moved: see %s)" % log if moved else "")

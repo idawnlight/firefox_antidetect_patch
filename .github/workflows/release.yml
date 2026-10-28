@@ -75,6 +75,17 @@ on:
           gate refuses every leg built with them (aboutDialog.css differs from
           the retail's; run 40403680432, dispatched with the old default).
         default: 'engine/firefox-157'
+      gtests:
+        description: >
+          Also run the engine's gtests on every leg, after its package and
+          symbols. They link a second libxul with the same LTO and PGO, about an
+          hour more a leg: off by default, for the CANDIDATE before a release. A
+          cold release leg already fills most of the job's 350 minutes on Windows.
+        type: boolean
+        default: false
+      gtest_filter:
+        description: "gtests=true only: which, as mach gtest takes them (e.g. StartupCache.*:Stealth*); * is all"
+        default: '*'
 
 env:
   SOURCE_REPO: feder-cr/firefox_antidetect_patch
@@ -360,11 +371,25 @@ jobs:
       #
       # Versioni fissate, non "latest": una build che cambia strumento da sola
       # tra una corsa e l'altra non e' riproducibile.
-      - name: Compile cache (candidates only) - install the one sccache this build uses
+      #
+      # Built from its tag and our patches (scripts/ci/sccache_build.py), never
+      # downloaded: 0.18.0 counts the file of a Rust -C profile-use among the
+      # compile's outputs and wrote the PGO profile back on every cache hit, and
+      # the new mtime made the symbols step rebuild gkrust and relink xul (run
+      # 40630019710). The binary is cached by tag and patches.
+      - name: Compile cache (candidates only) - the sccache binary, if built before
         if: needs.plan.outputs.compile_cache == 'gha'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          version: 'v0.18.0'
+          path: ~/.cache/sccache-bin
+          key: sccache-bin-${{ runner.os }}-${{ runner.arch }}-v0.18.0-${{ hashFiles('scripts/ci/sccache/*.patch') }}
+      - name: Compile cache (candidates only) - build the one sccache this build uses
+        if: needs.plan.outputs.compile_cache == 'gha'
+        shell: bash
+        run: |
+          SCCACHE_PATH="$(python3 scripts/ci sccache-build --tag v0.18.0 --patches scripts/ci/sccache --out "$HOME/.cache/sccache-bin")"
+          "$SCCACHE_PATH" --version
+          echo "SCCACHE_PATH=$SCCACHE_PATH" >> "$GITHUB_ENV"
       - name: Compile cache (candidates only) - sccache keeps it on the runner's disk
         if: needs.plan.outputs.compile_cache == 'gha'
         run: |
@@ -448,7 +473,7 @@ jobs:
           PROFILE="$HOME/pgo/merged.profdata"
           if [ -f "$PROFILE" ]; then python3 scripts/ci input-watch --file "$PROFILE" --log inputwatch.log & fi
           python3 scripts/ci phase build -- ./mach build --keep-going
-          if [ -f "$PROFILE" ]; then python3 scripts/ci input-watch --file "$PROFILE" --log inputwatch.log --verify; fi
+          if [ -f "$PROFILE" ]; then python3 scripts/ci input-watch --file "$PROFILE" --log inputwatch.log --verify --strict; fi
       - name: Upload the logs of a failed build
         if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -574,6 +599,26 @@ jobs:
           path: symbols/*.zip
           if-no-files-found: error
           retention-days: 14
+
+      # The engine's own tests, on request (input gtests): the stealth hooks each
+      # have one (StartupCache.WritesNeverLowerIOPriority, the bundled-font and
+      # own-binary rules) and nothing else runs them. After the package and the
+      # symbols, so what ships is already built and checked when the second
+      # libxul is linked. A phase, so the report has its row.
+      - name: Engine gtests (gtests=true only)
+        if: github.event.inputs.gtests == 'true'
+        timeout-minutes: 180
+        shell: bash
+        env:
+          GTEST_FILTER_INPUT: ${{ github.event.inputs.gtest_filter || '*' }}
+        run: |
+          # The Linux runners have no display, and some gtests open windows.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y xvfb >/dev/null
+            python3 scripts/ci phase gtest -- xvfb-run -a ./mach gtest "$GTEST_FILTER_INPUT"
+          else
+            python3 scripts/ci phase gtest -- ./mach gtest "$GTEST_FILTER_INPUT"
+          fi
 
       # This leg's events for the run's summary (the report job): always, a
       # failed or cancelled leg's most of all.
