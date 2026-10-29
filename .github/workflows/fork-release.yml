@@ -1,0 +1,71 @@
+name: Publish verified Firefox package
+
+on:
+  push:
+    tags:
+      - 'firefox-*-r*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, such as firefox-159.0-r1
+        required: true
+        type: string
+      archive_url:
+        description: Optional HTTPS input archive; SHA256 stays pinned in the manifest
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firefox-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      ARCHIVE_URL: ${{ inputs.archive_url || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          sparse-checkout: |
+            fork
+            scripts/make_seal.py
+            browser/config/stealth_playwright_range.txt
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve committed release manifest
+        id: plan
+        run: >-
+          python fork/release.py plan --tag "$RELEASE_TAG"
+          --archive-url "$ARCHIVE_URL" --github-output "$GITHUB_OUTPUT"
+      - name: Explain local upload mode
+        if: steps.plan.outputs.ready != 'true'
+        run: |
+          echo 'No HTTPS input is configured. This tag uses the documented local prepare/upload path.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify and repack pinned prebuilt package
+        if: steps.plan.outputs.ready == 'true'
+        run: >-
+          python fork/release.py prepare --tag "$RELEASE_TAG"
+          --archive-url "$ARCHIVE_URL" --out release-assets
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.ready == 'true'
+        with:
+          name: ${{ env.RELEASE_TAG }}-assets
+          path: release-assets/
+          if-no-files-found: error
+      - name: Publish new release
+        if: steps.plan.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$RELEASE_TAG" --verify-tag
+          --title "Firefox $RELEASE_TAG"
+          --notes-file release-assets/RELEASE_NOTES.md
+          release-assets/*
