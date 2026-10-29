@@ -30,8 +30,26 @@ through `InvisiblePlaywright(binary_path=...)`. The core's packaged local seal
 records that build's version and BuildID. Release downloads use the GitHub
 `owner/repository` selected by `INVISIBLE_FIREFOX_RELEASE_REPOSITORY`.
 
-Keep the stable implementation on `reproduce/firefox-159` while verifying it.
-For each new Mozilla release, start from its release tag, retain the functional
-commit groups and adapt their native entry points. Run the original author
-tests against the paired core, wrapper and engine, including the native
-`StealthCanvasProjection` and `TestStartupCache` tests and Juggler's Node tests.
+## Maintenance
+
+Maintain Firefox 159 on `release/159` in
+`idawnlight/firefox_antidetect_patch`. Apply Mozilla 159 point releases and
+fork fixes on this branch. Start `release/160` from its Mozilla release tag,
+then reproduce the functional commit groups against that version's native
+interfaces. Carry shared fixes to each maintained release branch as needed.
+
+`invisible_core` and `invisible_playwright` each use `main`. Their Python API
+versions and release cycles are maintained separately from Gecko branches.
+The pair above is the tested 159 checkpoint; the current core version still
+derives from the bundled seal, and the wrapper still pins that core exactly.
+Independent engine and Python releases require separating these package
+version and engine selection rules.
+
+Run the original author tests against an exact core, wrapper and engine
+combination, including the native `StealthCanvasProjection` and
+`TestStartupCache` tests and Juggler's Node tests. Record the source commit,
+BuildID, archive hash and Python versions for each tested combination.
+
+The Linux checkpoint was built from
+`4e057b20af64c3ae04c96b2e6017f1b2066415d6`, with BuildID `20261028185821`.
+Its original author browser suite completed with 407 passed and 3 skipped.
