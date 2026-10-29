@@ -5871,7 +5871,7 @@ ClientWebGLContext::DoReadPixelsAsync() {
 
   const auto& options = notLost->info.options;
   const auto noise = CanvasUtils::StealthNoise(PrincipalOrNull());
-  const bool premultiplied = options.alpha && options.premultipliedAlpha;
+  const bool needsPremultiply = options.alpha && !options.premultipliedAlpha;
   const auto size = DrawingBufferSize();
   const auto surfaceFormat = options.alpha ? gfx::SurfaceFormat::B8G8R8A8
                                            : gfx::SurfaceFormat::B8G8R8X8;
@@ -5899,7 +5899,7 @@ ClientWebGLContext::DoReadPixelsAsync() {
       GetCurrentSerialEventTarget(), __func__,
       [self = RefPtr{this}, promise, child, desc, size, surfaceFormat,
        expectedSize, noise,
-       premultiplied](webgl::ReadPixelsResultIpc&& aReply) mutable {
+       needsPremultiply](webgl::ReadPixelsResultIpc&& aReply) mutable {
         if (!aReply.byteStride || !aReply.shmem) {
           promise->Reject(NS_ERROR_FAILURE, __func__);
           return;
@@ -5978,18 +5978,25 @@ ClientWebGLContext::DoReadPixelsAsync() {
             Memcpy(&destRow, srcRow);
           }
 
-          if (noise) {
-            gfx::StealthProjectPixels(
-                pixels.data(), stride, gfx::IntSize(size.x, size.y),
-                gfx::SurfaceFormat::R8G8B8A8,
-                gfx::IntRect(0, 0, size.x, size.y), pixels.data(), stride,
-                premultiplied, noise);
-          }
           // RGBA->BGRA and flip-y.
           MOZ_RELEASE_ASSERT(gfx::SwizzleYFlipData(
               pixels.data(), stride, gfx::SurfaceFormat::R8G8B8A8,
               pixels.data(), stride, gfx::SurfaceFormat::B8G8R8A8,
               {size.x, size.y}));
+
+          // Snapshot promises carry premultiplied surfaces, as the synchronous
+          // GetSurfaceSnapshot path does when no alpha type is requested.
+          if (needsPremultiply) {
+            MOZ_RELEASE_ASSERT(gfx::PremultiplyData(
+                pixels.data(), stride, surfaceFormat, pixels.data(), stride,
+                surfaceFormat, {size.x, size.y}));
+          }
+          if (noise) {
+            gfx::StealthProjectPixels(
+                pixels.data(), stride, gfx::IntSize(size.x, size.y),
+                surfaceFormat, gfx::IntRect(0, 0, size.x, size.y),
+                pixels.data(), stride, /* aPremultiplied */ true, noise);
+          }
         }
 
         promise->Resolve(std::move(sourceSurface), __func__);
