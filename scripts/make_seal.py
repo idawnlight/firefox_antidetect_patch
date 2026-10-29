@@ -77,7 +77,8 @@ EXPECTED = {
 NAME_RE = re.compile(r"^firefox-(?P<ver>[0-9.]+)-stealth-(?P<os>win|linux|macos)-(?P<arch>x86_64|arm64)\.(zip|tar\.gz)$")
 # What a release tag looks like. The one place that knows: the seal refuses
 # anything else, and release_plan.py asks this before a release run builds.
-RELEASE_TAG_RE = re.compile(r"firefox-(?P<n>\d+)")
+RELEASE_TAG_RE = re.compile(
+    r"firefox-(?:(?P<n>\d+)|(?P<version>\d+\.\d+(?:\.\d+)?)-r(?P<revision>[1-9]\d*))")
 
 
 class SealBuildError(RuntimeError):
@@ -85,11 +86,12 @@ class SealBuildError(RuntimeError):
 
 
 def check_release_tag(tag: str) -> int:
-    """N of a `firefox-N` release tag, or SealBuildError."""
+    """Legacy release number or explicit fork revision, or SealBuildError."""
     m = RELEASE_TAG_RE.fullmatch(tag)
     if not m:
-        raise SealBuildError(f"tag must look like firefox-N, got {tag!r}")
-    return int(m.group("n"))
+        raise SealBuildError(
+            f"tag must look like firefox-N or firefox-VERSION-rREVISION, got {tag!r}")
+    return int(m.group("n") or m.group("revision"))
 
 
 def sha256_path(p: Path) -> str:
@@ -331,7 +333,7 @@ def build_from_assets(tag: str, assets_dir: Path, source_commit: str,
     version = versions.pop()
 
     for r in rows:
-        if version not in r["name"]:
+        if version != r["declared_version"]:
             raise SealBuildError(
                 f"asset/base mismatch: {r['name']} does not carry the version its own "
                 f"application.ini reports ({version}). Every user download 404s or "
@@ -343,6 +345,9 @@ def build_from_assets(tag: str, assets_dir: Path, source_commit: str,
         raise SealBuildError(f"incomplete release, missing platforms: {sorted(missing)}")
 
     check_release_tag(tag)
+    tagged_version = RELEASE_TAG_RE.fullmatch(tag).group("version")
+    if tagged_version is not None and tagged_version != version:
+        raise SealBuildError(f"tag/base mismatch: {tag} contains Firefox {version}")
 
     # No top-level build_id: there is no single value that is true of all five
     # legs, and a scalar that is true for one platform is a refusal for the other
