@@ -257,7 +257,7 @@ export class PageAgent {
   }
 
   _linkClicked(sync, anchorElement) {
-    if (anchorElement.ownerDocument.defaultView.docShell !== this._docShell)
+    if (Cu.getGlobalForObject(anchorElement).docShell !== this._docShell)
       return;
     this._browserPage.emit('pageLinkClicked', { phase: sync ? 'after' : 'before' });
   }
@@ -419,7 +419,7 @@ export class PageAgent {
    */
   _elementAtom({frameId, objectId, atom}) {
     const element = this._xrayElement(frameId, objectId);
-    const win = element.ownerDocument.defaultView;
+    const win = Cu.getGlobalForObject(element);
     const {ATOM_SOURCES} = ChromeUtils.importESModule(
         'chrome://remote/content/marionette/atom.sys.mjs');
     const sandbox = Cu.Sandbox(win, {sandboxPrototype: win, sameZoneAs: win,
@@ -456,7 +456,8 @@ export class PageAgent {
     const init = { input: { bubbles: true, composed: true }, change: { bubbles: true } }[type];
     if (!init)
       throw new Error('No native shape known for "' + type + '"');
-    element.dispatchEvent(new element.ownerDocument.defaultView.Event(type, init));
+    const win = Cu.getGlobalForObject(element);
+    element.dispatchEvent(new win.Event(type, init));
   }
 
   /**
@@ -493,7 +494,7 @@ export class PageAgent {
    */
   async _setUserInput({frameId, objectId, value}) {
     const element = this._xrayElement(frameId, objectId);
-    const win = element.ownerDocument.defaultView;
+    const win = Cu.getGlobalForObject(element);
     const isInput = win.HTMLInputElement.isInstance(element);
     if (!isInput && !win.HTMLTextAreaElement.isInstance(element))
       throw new Error('Element is not an <input> or <textarea>');
@@ -549,7 +550,7 @@ export class PageAgent {
    */
   async _selectOptions({frameId, objectId, indices}) {
     const select = this._xrayElement(frameId, objectId);
-    const win = select.ownerDocument.defaultView;
+    const win = Cu.getGlobalForObject(select);
     if (!win.HTMLSelectElement.isInstance(select))
       throw new Error('Element is not a <select> element');
     const options = [...select.options];
@@ -594,7 +595,7 @@ export class PageAgent {
    */
   async _setFileInputFiles({objectId, frameId, files}) {
     const input = this._xrayElement(frameId, objectId);
-    const win = input.ownerDocument.defaultView;
+    const win = Cu.getGlobalForObject(input);
     if (!win.HTMLInputElement.isInstance(input) || input.type !== 'file')
       throw new Error('Element is not an <input type=file>');
     let nsFiles;
