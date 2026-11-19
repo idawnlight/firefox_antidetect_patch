@@ -79,7 +79,8 @@ EXPECTED = {
 NAME_RE = re.compile(r"^firefox-(?P<ver>[0-9.]+)-stealth-(?P<os>win|linux|macos)-(?P<arch>x86_64|arm64)\.(zip|tar\.gz)$")
 # What a release tag looks like. The one place that knows: the seal refuses
 # anything else, and release_plan.py asks this before a release run builds.
-RELEASE_TAG_RE = re.compile(r"firefox-(?P<n>\d+)")
+RELEASE_TAG_RE = re.compile(
+    r"firefox-(?:(?P<n>\d+)|(?P<version>\d+\.\d+(?:\.\d+)?)-r(?P<revision>[1-9]\d*))")
 
 
 class SealBuildError(RuntimeError):
@@ -87,11 +88,12 @@ class SealBuildError(RuntimeError):
 
 
 def check_release_tag(tag: str) -> int:
-    """N of a `firefox-N` release tag, or SealBuildError."""
+    """Legacy release number or explicit fork revision, or SealBuildError."""
     m = RELEASE_TAG_RE.fullmatch(tag)
     if not m:
-        raise SealBuildError(f"tag must look like firefox-N, got {tag!r}")
-    return int(m.group("n"))
+        raise SealBuildError(
+            f"tag must look like firefox-N or firefox-VERSION-rREVISION, got {tag!r}")
+    return int(m.group("n") or m.group("revision"))
 
 
 def sha256_path(p: Path) -> str:
