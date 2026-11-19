@@ -76,7 +76,9 @@
 #include "nsIAppWindow.h"
 #include "nsIXULBrowserWindow.h"
 #include "ReferrerInfo.h"
-#include "StealthDeclarationGate.h"
+#include "JugglerWindowSize.h"  // STEALTH-HOOK(automation/window-size)
+// STEALTH-HOOK(fingerprint/screen-window/popup-position)
+#include "StealthWindowPlacement.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -1903,11 +1905,8 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForContent(
     return nsIWebBrowserChrome::CHROME_DOCUMENT_PICTURE_IN_PICTURE_FLAGS;
   }
   *aIsPopupRequested = ShouldOpenPopup(aFeatures);
-  if (*aIsPopupRequested && HaveSpecifiedSize(aFeatures)) {
-    return nsIWebBrowserChrome::CHROME_MINIMAL_POPUP |
-           nsIWebBrowserChrome::JUGGLER_WINDOW_EXPLICIT_SIZE;
-  }
-  return *aIsPopupRequested ? nsIWebBrowserChrome::CHROME_MINIMAL_POPUP
+  // STEALTH-HOOK(automation/window-size)
+  return *aIsPopupRequested ? mozilla::JugglerPopupChromeFlags(aFeatures)
                             : nsIWebBrowserChrome::CHROME_ALL;
 }
 
@@ -2327,21 +2326,10 @@ static void SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
     top = *aSizeSpec.mTop;
   }
 
-  const Maybe<mozilla::gfx::StealthWindowFrame> stealthFrame =
-      aIsCallerChrome ? Nothing() : mozilla::gfx::StealthDeclaredWindowFrame();
-  if (stealthFrame) {
-    const DesktopToLayoutDeviceScale devToDesktop =
-        treeOwnerAsWin->DevicePixelsPerDesktopPixel();
-    const DesktopIntCoord byDefault = DesktopIntCoord(
-        (LayoutDeviceCoord(stealthFrame->mPopupPosition) / devToDesktop)
-            .Rounded());
-    if (!aSizeSpec.mLeft) {
-      left = byDefault;
-    }
-    if (!aSizeSpec.mTop) {
-      top = byDefault;
-    }
-  }
+  // STEALTH-HOOK(fingerprint/screen-window/popup-position)
+  const bool stealthPlaced = mozilla::StealthPlacePopupAtDefault(
+      aIsCallerChrome, treeOwnerAsWin, aSizeSpec.mLeft.isSome(),
+      aSizeSpec.mTop.isSome(), left, top);
 
   // Set up width
   if (aSizeSpec.mOuterWidth) {
@@ -2359,7 +2347,8 @@ static void SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
     height = *aSizeSpec.mInnerHeight;
   }
 
-  bool positionSpecified = aSizeSpec.PositionSpecified() || stealthFrame;
+  // STEALTH-HOOK(fingerprint/screen-window/popup-position)
+  bool positionSpecified = aSizeSpec.PositionSpecified() || stealthPlaced;
 
   // Check security state for use in determining window dimensions
   bool enabled = false;

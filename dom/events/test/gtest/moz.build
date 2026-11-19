@@ -8,6 +8,7 @@ with Files("**"):
 UNIFIED_SOURCES += [
     "TestShortcutKeyDefinitions.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthWindowGeometry.cpp"]  # STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 LOCAL_INCLUDES += ["/dom/events"]
 

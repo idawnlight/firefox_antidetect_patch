@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GLContextProvider.h"
+#include "StealthOwnGL.h"  // STEALTH-HOOK(fingerprint/webgl/own-gl)
 #include "mozilla/gfx/gfxVars.h"
 #include "prenv.h"
 
@@ -33,6 +34,7 @@ already_AddRefed<GLContext> GLContextProviderLinux::CreateForCompositorWidget(
 /*static*/
 already_AddRefed<GLContext> GLContextProviderLinux::CreateHeadless(
     const GLContextCreateDesc& desc, nsACString* const out_failureId) {
+  if (StealthOwnGLRequired()) return sGLContextProviderEGL.CreateHeadless(desc, out_failureId);  // STEALTH-HOOK(fingerprint/webgl/own-gl): never GLX
   if (gfxVars::UseEGL() ||
       bool(desc.flags & CreateContextFlags::FORBID_HARDWARE)) {
     // We request EGL if software is required, because we don't know

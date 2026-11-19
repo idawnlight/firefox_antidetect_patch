@@ -21,16 +21,16 @@ include("/ipc/chromium/chromium-config.mozbuild")
 
 EXPORTS += [
     "nsSocketProviderService.h",
-    "nsSOCKSUDPIOLayer.h",
 ]
+EXPORTS += ["nsSOCKSUDPIOLayer.h", "StealthPcUdpProxy.h"]  # STEALTH-HOOK(network/proxy-udp)
 
 UNIFIED_SOURCES += [
     "nsSocketProviderService.cpp",
     "nsSOCKSIOLayer.cpp",
     "nsSOCKSSocketProvider.cpp",
-    "nsSOCKSUDPIOLayer.cpp",
     "nsUDPSocketProvider.cpp",
 ]
+UNIFIED_SOURCES += ["nsSOCKSUDPIOLayer.cpp", "StealthPcUdpProxy.cpp"]  # STEALTH-HOOK(network/proxy-udp)
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     XPIDL_SOURCES += [

@@ -4,6 +4,7 @@
 
 #include "DefaultCodecPreferences.h"
 
+#include "StealthMediaDeclaration.h"  // STEALTH-HOOK(fingerprint/media/decode-declaration)
 #include "gmp/GMPUtils.h"
 #include "libwebrtcglue/VideoConduit.h"
 #include "mozilla/StaticPrefs_media.h"
@@ -25,6 +26,7 @@ bool DefaultCodecPreferences::H264EnabledStatic() {
 }
 
 bool DefaultCodecPreferences::SoftwareH264EnabledStatic() {
+  if (auto d = StealthDeclaredSoftwareH264()) return *d;  // STEALTH-HOOK(fingerprint/media/decode-declaration)
 #ifdef MOZ_WIDGET_ANDROID
   // Although Play Store policy doesn't allow GMP plugin, Android has H.264 SW
   // codec.
@@ -44,6 +46,7 @@ bool DefaultCodecPreferences::HardwareH264EnabledStatic() {
 
 bool DefaultCodecPreferences::
     SendingH264PacketizationModeZeroSupportedStatic() {
+  if (auto d = StealthDeclaredSoftwareH264()) return *d;  // STEALTH-HOOK(fingerprint/media/decode-declaration)
   // Packetization mode 0 is unsupported by MediaDataEncoder.
   return HaveGMPFor("encode-video"_ns, {"h264"_ns});
 }

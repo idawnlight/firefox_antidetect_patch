@@ -59,6 +59,8 @@ tags = "remote-settings"
 
 ["test_shouldclassify.js"]
 
+["test_stealth_hashcompleter_context.js"]  # STEALTH-HOOK(network/doh)
+
 ["test_streamupdater.js"]
 
 ["test_threat_type_conversion.js"]

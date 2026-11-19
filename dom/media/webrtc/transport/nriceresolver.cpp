@@ -145,7 +145,7 @@ int NrIceResolver::resolve(nr_resolver_resource* resource,
   ASSERT_ON_THREAD(sts_thread_);
   RefPtr<PendingResolution> pr;
   nsIDNSService::DNSFlags resolve_flags = nsIDNSService::RESOLVE_DEFAULT_FLAGS;
-  OriginAttributes attrs;
+  OriginAttributes attrs = mAttrs;  // STEALTH-HOOK(network/doh)
 
   if (resource->transport_protocol != IPPROTO_UDP &&
       resource->transport_protocol != IPPROTO_TCP) {

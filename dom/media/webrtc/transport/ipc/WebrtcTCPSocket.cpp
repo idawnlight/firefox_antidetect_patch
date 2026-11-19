@@ -6,6 +6,7 @@
 
 #include "WebrtcTCPSocketCallback.h"
 #include "WebrtcTCPSocketLog.h"
+#include "mozilla/net/StealthDocumentChannel.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/ContentProcessManager.h"
@@ -24,6 +25,7 @@
 #include "nsProxyRelease.h"
 #include "nsSocketTransportService2.h"
 #include "nsString.h"
+#include "transport/nr_stealth_network.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 
 namespace mozilla::net {
 
@@ -216,19 +218,19 @@ nsresult WebrtcTCPSocket::DoProxyConfigLookup() {
     return rv;
   }
 
+  // The channel of the lookup carries the load info of the document, as the one of the HTTP proxy tunnel does
+  // (OpenWithHttpProxy): the proxy filters then see the context of the page, not the system principal's (context 0).
+  const uint32_t flags = nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
+                         nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL;
   nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), mURI,
-                     nsContentUtils::GetSystemPrincipal(),
-                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-                     nsIContentPolicy::TYPE_OTHER);
+  rv = StealthNewChannelOfLoadInfo(mURI, flags, mProxyConfig->loadInfoArgs(),  // STEALTH-HOOK(network/proxy-udp)
+                                   getter_AddRefs(channel));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  rv = pps->AsyncResolve(channel,
-                         nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
-                             nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL,
-                         this, nullptr, getter_AddRefs(mProxyRequest));
+  rv = pps->AsyncResolve(channel, flags, this, nullptr,
+                         getter_AddRefs(mProxyRequest));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -268,6 +270,7 @@ NS_IMETHODIMP WebrtcTCPSocket::OnProxyAvailable(nsICancelable* aRequest,
     }
   }
 
+  if (mozilla::StealthTcpDirectRefused(mProxyConfig.isSome(), NS_FAILED(aResult), aProxyinfo)) { CloseWithReason(NS_ERROR_FAILURE); return NS_OK; }  // STEALTH-HOOK(network/proxy-udp)
   OpenWithoutHttpProxy(nullptr);
 
   return NS_OK;
@@ -333,8 +336,7 @@ void WebrtcTCPSocket::OpenWithoutHttpProxy(nsIProxyInfo* aSocksProxyInfo) {
     return;
   }
 
-  if (NS_WARN_IF(PR_SUCCESS !=
-                 PR_StringToNetAddr(mLocalAddress.get(), &prAddr))) {
+  if (NS_WARN_IF(!mozilla::StealthTcpSocketBorn(mTransport, mProxyConfig.ptrOr(nullptr), mLocalAddress.get(), mLocalPort, &prAddr))) {  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
     CloseWithReason(NS_ERROR_FAILURE);
     return;
   }
@@ -391,46 +393,19 @@ nsresult WebrtcTCPSocket::OpenWithHttpProxy() {
   MOZ_ASSERT(NS_IsMainThread(), "not on main thread");
   LOG("WebrtcTCPSocket::OpenWithHttpProxy {}\n", fmt::ptr(this));
   nsresult rv;
-  nsCOMPtr<nsIIOService> ioService;
-  ioService = do_GetService(NS_IOSERVICE_CONTRACTID, &rv);
-  if (NS_FAILED(rv)) {
-    LOG("WebrtcTCPSocket {}: io service missing\n", fmt::ptr(this));
-    return rv;
-  }
-
   nsCOMPtr<nsILoadInfo> loadInfo;
-
-  // FIXME: We don't know the remote type of the process which provided these
-  // LoadInfoArgs. Pass in `RemoteType::NotRemote()` as the origin process to
-  // blindly accept whatever value was passed by the other side for now, as we
-  // aren't using it for security checks here.
-  // If this code ever starts checking the triggering remote type, this needs to
-  // be changed.
-  rv = ipc::LoadInfoArgsToLoadInfo(mProxyConfig->loadInfoArgs(),
-                                   dom::RemoteType::NotRemote(),
-                                   getter_AddRefs(loadInfo));
-  if (NS_FAILED(rv)) {
-    LOG("WebrtcTCPSocket {}: could not init load info\n", fmt::ptr(this));
-    return rv;
-  }
-
+  nsCOMPtr<nsIChannel> localChannel;
   // -need to always tunnel since we're using a proxy
   // -there shouldn't be an opportunity to send cookies, but explicitly disallow
   // them anyway.
   // -the previous proxy tunnel didn't support redirects e.g. 307. don't need to
   // introduce new behavior. can't follow redirects on connect anyway.
-  nsCOMPtr<nsIChannel> localChannel;
-  rv = ioService->NewChannelFromURIWithProxyFlags(
-      mURI, mURI,
+  rv = StealthNewChannelOfLoadInfo(  // STEALTH-HOOK(network/proxy-udp)
+      mURI,
       nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
           nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL,
-      loadInfo->LoadingNode(), loadInfo->GetLoadingPrincipal(),
-      loadInfo->TriggeringPrincipal(),
-      // We need this flag to allow loads from any origin since this channel
-      // is being used to CONNECT to an HTTP proxy.
-      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-      nsIContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA,
-      getter_AddRefs(localChannel));
+      mProxyConfig->loadInfoArgs(), getter_AddRefs(localChannel),
+      getter_AddRefs(loadInfo));
   if (NS_FAILED(rv)) {
     LOG("WebrtcTCPSocket {}: bad open channel\n", fmt::ptr(this));
     return rv;

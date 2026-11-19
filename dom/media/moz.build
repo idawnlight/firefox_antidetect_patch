@@ -214,7 +214,6 @@ EXPORTS += [
     "SeekTarget.h",
     "SelfRef.h",
     "SharedBuffer.h",
-    "StealthMediaDeclaration.h",
     "TimedPacketizer.h",
     "TimeUnits.h",
     "Tracing.h",
@@ -225,6 +224,7 @@ EXPORTS += [
     "WavDumper.h",
     "XiphExtradata.h",
 ]
+EXPORTS += ["StealthMediaDeclaration.h"]  # STEALTH-HOOK(fingerprint/media/decode-declaration)
 
 EXPORTS.mozilla += [
     "MediaFragmentURIParser.h",
@@ -336,7 +336,6 @@ UNIFIED_SOURCES += [
     "QueueObject.cpp",
     "ReaderProxy.cpp",
     "SeekJob.cpp",
-    "StealthMediaDeclaration.cpp",
     "TimeUnits.cpp",
     "Tracing.cpp",
     "VideoFrameContainer.cpp",
@@ -348,6 +347,7 @@ UNIFIED_SOURCES += [
     "VideoUtils.cpp",
     "XiphExtradata.cpp",
 ]
+UNIFIED_SOURCES += ["StealthMediaDeclaration.cpp"]  # STEALTH-HOOK(fingerprint/media/decode-declaration)
 
 if CONFIG["OS_TARGET"] == "Linux":
     UNIFIED_SOURCES += ["UnderrunHandlerLinux.cpp"]

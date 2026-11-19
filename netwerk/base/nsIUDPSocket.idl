@@ -12,6 +12,7 @@ interface nsISocketTransport;
 interface nsIOutputStream;
 interface nsIInputStream;
 interface nsIPrincipal;
+interface nsIProxyInfo;
 
 %{ C++
 #include "mozilla/OriginAttributes.h"
@@ -128,6 +129,13 @@ interface nsIUDPSocket : nsISupports
      *        The remote address to connect to
      */
     [noscript] void connect([const] in NetAddrPtr aAddr);
+
+    /**
+     * The SOCKS5 proxy the datagrams of this socket go by (UDP ASSOCIATE), as the connection that owns it learned it:
+     * the SOCKS5 UDP layer is put on the socket when it is opened. Call before initWithAddress. A proxy that is not
+     * SOCKS5 is ignored. No proxy: the socket is a plain one.
+     */
+    [noscript] void setSocksProxy(in nsIProxyInfo aProxyInfo);
 
     /**
      * Returns the local address of this UDP socket

@@ -101,6 +101,8 @@ UNIFIED_SOURCES += [
     "TestYUVBufferGenerator.cpp",
     "YUVBufferGenerator.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthAudioNoise.cpp"]  # STEALTH-HOOK(fingerprint/audio/noise)
+UNIFIED_SOURCES += ["TestStealthMediaDeclaration.cpp"]  # STEALTH-HOOK(fingerprint/media/decode-declaration)
 
 # Not in UNIFIED_SOURCES: on macOS it includes MacIOSurface.h, which pulls in
 # CoreVideo, see the MOZ_APPLEMEDIA block.

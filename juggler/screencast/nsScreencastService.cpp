@@ -51,8 +51,43 @@ namespace {
 // the main thread never grows, and neither does the base64 held in memory.
 const uint32_t kMaxFramesInFlight = 1;
 
+// A capture that ended on its own is started again after this long, and again
+// after the same interval for as long as the window cannot be captured.
+//
+// ⛔ THE CAPTURE MODULE ENDS FOR GOOD ON A WINDOW THAT IS ONLY TEMPORARILY
+// UNCAPTURABLE, AND SAYS SO TO NOBODY WHO LISTENS. Measured 2026-09-14: a
+// headed window minimised for a moment. The GDI capturer answers a 1x1 black
+// frame for an iconic window, the blank detector passes the turn to the WGC
+// capturer Firefox keeps as a fallback, and that one - built with the delayed
+// capturability check - reports the minimised window as a PERMANENT error.
+// DesktopCaptureImpl then cancels its timer and fires CaptureEndedEvent, which
+// this file did not subscribe to. The client kept serving the last frame it
+// held, and a person watched a search page while the browser was two sites
+// on. Restoring the window changed nothing: nothing was asking any more.
 const uint32_t kRetryDelayMs = 1000;
 
+// A window whose capturer reports nothing new is answered with the last frame
+// again at this interval, so the client can tell a quiet window from a dead
+// capture by the frame's age alone.
+//
+// Measured on the same day: a headed window that is fully visible on screen
+// is captured through the SCREEN capturer, which delivers a frame only when
+// the screen changed - one frame in four seconds on a still page - while the
+// same window occluded, or a cloaked one, is captured through the window
+// capturer at the requested rate: 48 and 65 frames in four seconds. So
+// silence meant two different things, and a client that restarted the
+// capture after two silent seconds was right for the dead capture and wrong
+// for the quiet window. Repeating the last frame makes silence mean one thing.
+//
+// The age is checked more often than it is allowed to grow, or a tick that
+// lands just short of the age lets it run to two ticks: measured with one
+// constant for both, 6 frames in 4 s where 16 were meant.
+//
+// And the age is never shorter than the period the caller asked for (see
+// HeartbeatAgeFor). With a fixed 250 ms every rate under 4 fps was filled up
+// to about 4: asking for 2 delivered 11 frames in 3 s on CI, the ordinary
+// half-second gap between two captured frames being taken for silence. A
+// repetition must answer a capture that went quiet, never the rate itself.
 const uint32_t kHeartbeatMs = 250;
 const uint32_t kHeartbeatTickMs = 100;
 
@@ -82,6 +117,41 @@ nsresult GenerateUid(nsString& aUid) {
 
 }  // namespace
 
+// One capture session: one window, one capture module at a time, one client.
+//
+// The module is Firefox's own DesktopCaptureImpl, the code path behind
+// getDisplayMedia's window sharing. It hands us I420 frames on its capture
+// thread; we crop and scale in one step, convert to ARGB, encode a JPEG,
+// base64 it and hop to the main thread to give the string to the JavaScript
+// client. Nothing here touches the content process or the page.
+//
+// The module is replaced when it ends on its own, and the last frame is
+// repeated while the module is quiet: the two constants above say why. The
+// repetition happens on the main thread; the replacement on the control
+// thread, below.
+//
+// ⛔ THE MODULE LIVES ON THE SESSION'S OWN CONTROL THREAD, NEVER ON THE MAIN
+// THREAD. The window capturer reads the window with PrintWindow, which sends
+// the window a message and waits for the thread that owns it to answer: the
+// main thread, because the window captured is our own. StopCapture waits for
+// the capture thread with a SyncRunnable, which answers no message while it
+// waits. Both called on the main thread, they waited for each other forever
+// and Juggler answered nothing more (B277). Measured with four browsers
+// starting and stopping screencasts on the hidden desktop: the main thread
+// parked in a condition variable under DesktopCaptureImpl::StopCapture and the
+// DesktopCapture thread in NtUserPrintWindow, both stacks unchanged, three
+// runs out of three (two on firefox-44, one on firefox-43), each within the
+// first fifteen stops. Firefox's own window sharing drives the module from
+// CamerasParent's "VideoCapture" thread, never from the main thread.
+//
+// ⛔ AND THE MAIN THREAD NEVER WAITS FOR THE CONTROL THREAD, NOT EVEN TO
+// START. StartCapture asks the main thread for its X11 options with a
+// SyncRunnable (CreateDesktopCaptureOptions, "help avoid an X11 deadlock",
+// bug 1456101), so a main thread waiting for the start waited for itself:
+// measured on the first build of this rule, every screencast start on Linux
+// wedged, two e2e of two, while Windows, which has no such request, started.
+// Everything the module needs is handed to the control thread and nothing is
+// waited for.
 class nsScreencastService::Session final
     : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
@@ -196,6 +266,14 @@ class nsScreencastService::Session final
     const int frameWidth = i420->width();
     const int frameHeight = i420->height();
 
+    // The area we keep: the window, minus its OS frame and the toolbar rows
+    // above the content - unless the caller asked for the whole window, in
+    // which case the margin is zero and this is the identity.
+    //
+    // ⛔ The margin's members are `IntCoordTyped`, a unit-carrying type, not
+    // int. std::clamp deduces one type from all three arguments and refuses
+    // the mix, so the conversion is written here once rather than left to
+    // four call sites to get right.
     const int marginLeft = int(mMargin.left);
     const int marginTop = int(mMargin.top);
     const int marginRight = int(mMargin.right);
@@ -260,6 +338,15 @@ class nsScreencastService::Session final
     info.image_width = outWidth;
     info.image_height = outHeight;
     info.input_components = 4;
+    // libyuv's "ARGB" is a 32-bit little-endian word, so the bytes come out
+    // B,G,R,A on a little-endian machine and A,R,G,B on a big-endian one.
+    //
+    // ⛔ `if constexpr`, not `#if MOZ_LITTLE_ENDIAN()`. That macro is what
+    // Playwright's version used and it does NOT EXIST in Firefox 151 - the
+    // tree moved to std::endian, and the preprocessor form fails the build
+    // with "function-like macro is not defined" rather than quietly picking
+    // the wrong branch. Both branches here are compiled on every platform, so
+    // the one this machine does not take cannot rot unnoticed.
     if constexpr (std::endian::native == std::endian::little) {
       info.in_color_space = JCS_EXT_BGRA;
     } else {
@@ -355,6 +442,14 @@ class nsScreencastService::Session final
     return true;
   }
 
+  // Control thread. The listener goes first: it holds a raw pointer to this
+  // object and a module being stopped can still fire the event.
+  //
+  // The order is load-bearing. DeRegisterCaptureDataCallback takes the same
+  // lock NotifyOnFrame holds while it is inside OnFrame, so when it returns
+  // no OnFrame is running and none will start; StopCapture then waits for the
+  // capture thread, which may be inside PrintWindow waiting for the main
+  // thread - free to answer, because nothing there waits for this one.
   void ReleaseModule() {
     mEnded.DisconnectIfExists();
     if (mModule) {
@@ -475,6 +570,14 @@ NS_IMETHODIMP nsScreencastService::StartScreencast(
     return NS_ERROR_NOT_AVAILABLE;
   }
 
+  // The widget of the window this docShell paints into.
+  //
+  // Not nsIBaseWindow::GetMainWidget: nsDocShell answers that one with its
+  // PARENT widget, which is a different question. And not the view tree
+  // either - Playwright's version walked PresShell to nsViewManager to
+  // nsView, and Firefox 151 has no `view/` directory at all. PresShell
+  // climbs the pres contexts to the nearest owning widget, which is the one
+  // that was wanted all along.
   PresShell* presShell = aDocShell->GetPresShell();
   if (!presShell) {
     return NS_ERROR_UNEXPECTED;
@@ -499,6 +602,20 @@ NS_IMETHODIMP nsScreencastService::StartScreencast(
     }
   }
 
+  // What to crop off. Screen bounds are the widget on the screen; client
+  // bounds are the content area in the parent's coordinates, so they are
+  // walked up to screen coordinates before subtracting. The difference is the
+  // window's OS frame.
+  //
+  // ⛔ THE FRAME IS CROPPED IN BOTH MODES, and the first version of this file
+  // did not: with fullWindow it left the margin at zero, and the frames opened
+  // from the firefox-28 build carried a strip of a few pixels on the right
+  // and at the bottom showing whatever window lay UNDERNEATH. Windows 11
+  // draws its resize border transparent on screen, but the capturer hands
+  // those pixels over like any others. Nobody sitting at the machine sees
+  // that border, so a "full window" frame should not either. What fullWindow
+  // skips is only the CHROME crop below: the tab strip, the address bar and
+  // the chrome-side pointer overlay are what it exists to keep.
   gfx::IntMargin margin;
   {
     auto screenBounds = widget->GetScreenBounds().ToUnknownRect();

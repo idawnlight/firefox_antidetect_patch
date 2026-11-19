@@ -383,6 +383,9 @@ dictionary SynthesizeEventData {
 
 // Mozilla-specific stuff
 dictionary SynthesizeMouseEventData : SynthesizeEventData {
+  // STEALTH-HOOK(fingerprint/input/latency): members are ordered by name, not here.
+  unsigned long jugglerEventId = 0;
+  double latency = 0;
   // Indicates which mouse button is pressed/released when a mouse event is triggered.
   long button = 0;
   // Indicates which mouse buttons are pressed when a mouse event is triggered.
@@ -400,8 +403,6 @@ dictionary SynthesizeMouseEventData : SynthesizeEventData {
   // reports while the native pointer is locked. Must be specified together.
   long movementX;
   long movementY;
-  unsigned long jugglerEventId = 0;
-  double latency = 0;
 };
 
 // Mozilla-specific stuff

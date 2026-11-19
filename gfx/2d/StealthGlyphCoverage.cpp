@@ -45,8 +45,22 @@ void StealthQuantiseGlyphCoverage(uint8_t* aImage, int32_t aWidth,
     return;
   }
 
-  // Build the lookup per glyph-cache miss to avoid shared mutable state
-  // across rasterization threads.
+  // 256-entry lookup, built on the stack per call and deliberately not cached.
+  //
+  // Two earlier versions of this code (in the canvas readback path it replaces)
+  // were caches and both were wrong: a one-shot `static bool sMapReady`, correct
+  // only while the ladder was a process constant, and then a pair of
+  // function-local statics keyed on the pref string, which fixed the staleness
+  // and introduced a DATA RACE - glyph rasterisation runs on the content main
+  // thread, on WebRender's font thread and in the GPU process, and two of them
+  // writing an unsynchronised static is undefined behaviour that would surface
+  // as wrong pixels, rarely, and never reproducibly.
+  //
+  // The cache was also saving the wrong half of the work. This function runs on
+  // a glyph-cache MISS, not per draw and not per pixel of the page: a few
+  // hundred times for a page that uses a few hundred distinct glyph/size pairs,
+  // against a per-pixel loop that is bounded by one glyph's box. 256 * 17
+  // comparisons is not a cost worth a shared mutable byte.
   uint8_t map[256];
   for (uint32_t a = 0; a < 256; ++a) {
     uint8_t best = ladder[0];

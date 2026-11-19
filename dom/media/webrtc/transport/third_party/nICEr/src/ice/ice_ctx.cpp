@@ -52,6 +52,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "util.h"
 #include "addrs.h"
 #include "nr_socket_local.h"
+#include "nr_stealth_network.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 
 #define ICE_UFRAG_LEN 8
 #define ICE_PWD_LEN 32
@@ -567,120 +568,14 @@ static int nr_ice_ctx_pair_new_trickle_candidates(nr_ice_ctx *ctx, nr_ice_candid
     return(_status);
   }
 
-/* Get the default address by creating a UDP socket, binding it to a wildcard
-   address, and connecting it to the remote IP. Because this is UDP, no packets
-   are sent. This lets us query the local address assigned to the socket by the
-   kernel.
-
-   If the context's remote address is NULL, then the application wasn't loaded
-   over the network, and we can fall back on connecting to a known public
-   address (namely Google's):
-
-   IPv4: 8.8.8.8
-   IPv6: 2001:4860:4860::8888
-*/
-/* Only the ADDRESS: nr_transport_addr_is_wildcard also calls port 0 a wildcard,
-   and the port of the document is not what decides the route. */
-static int nr_transport_addr_is_wildcard_ip(const nr_transport_addr *addr)
-  {
-    static const unsigned char zero6[16] = {0};
-    switch(addr->ip_version){
-      case NR_IPV4:
-        return addr->u.addr4.sin_addr.s_addr == INADDR_ANY;
-      case NR_IPV6:
-        return !memcmp(addr->u.addr6.sin6_addr.s6_addr, zero6, sizeof(zero6));
-      default:
-        return 0;
-    }
-  }
-
-static int nr_ice_get_default_address(nr_ice_ctx *ctx, int ip_version, nr_transport_addr* addrp)
-  {
-    int r,_status;
-    nr_transport_addr addr, known_remote_addr;
-    nr_transport_addr *remote_addr=ctx->target_for_default_local_address_lookup;
-    nr_socket *sock=0;
-
-    switch(ip_version) {
-      case NR_IPV4:
-        if ((r=nr_str_port_to_transport_addr("0.0.0.0", nullptr, 0, IPPROTO_UDP, &addr)))
-          ABORT(r);
-        if (!remote_addr || nr_transport_addr_is_loopback(remote_addr)) {
-          if ((r=nr_str_port_to_transport_addr("8.8.8.8", nullptr, 53, IPPROTO_UDP, &known_remote_addr)))
-            ABORT(r);
-          remote_addr=&known_remote_addr;
-        }
-        break;
-      case NR_IPV6:
-        if ((r=nr_str_port_to_transport_addr("::0", nullptr, 0, IPPROTO_UDP, &addr)))
-          ABORT(r);
-        if (!remote_addr || nr_transport_addr_is_loopback(remote_addr)) {
-          if ((r=nr_str_port_to_transport_addr("2001:4860:4860::8888", nullptr, 53, IPPROTO_UDP, &known_remote_addr)))
-            ABORT(r);
-          remote_addr=&known_remote_addr;
-        }
-        break;
-      default:
-        assert(0);
-        ABORT(R_INTERNAL);
-    }
-
-
-
-    if (nr_transport_addr_is_wildcard_ip(remote_addr)) {
-      r_log(LOG_GENERIC, LOG_DEBUG,
-            "Default address: target %s is the wildcard (proxy resolves the host), no default route to probe",
-            remote_addr->as_string);
-      ABORT(R_NOT_FOUND);
-    }
-
-    if ((r=nr_socket_factory_create_socket(ctx->socket_factory, &addr, &sock)))
-      ABORT(r);
-    if ((r=nr_socket_connect(sock, remote_addr)))
-      ABORT(r);
-    if ((r=nr_socket_getaddr(sock, addrp)))
-      ABORT(r);
-
-    r_log(LOG_GENERIC, LOG_DEBUG, "Default address: %s", addrp->as_string);
-
-    _status=0;
-  abort:
-    nr_socket_destroy(&sock);
-    return(_status);
-  }
-
+/* STEALTH-HOOK(fingerprint/webrtc/declared-network): the default address of a family is the declared
+   address of that family (nr_stealth_network.h), found in the list the parent sent, which is the
+   declaration. There is no route probe: no socket is connected and getsockname() is not read, so nothing of
+   the host's routing reaches the candidates. A family the declaration does not have has no default address,
+   as a machine without a route in that family has none. */
 static int nr_ice_get_default_local_address(nr_ice_ctx *ctx, int ip_version, nr_local_addr* addrs, int addr_ct, nr_local_addr *addrp)
   {
-    int r,_status;
-    nr_transport_addr default_addr;
-    int i;
-
-    if ((r=nr_ice_get_default_address(ctx, ip_version, &default_addr)))
-        ABORT(r);
-
-    for (i=0; i < addr_ct; ++i) {
-      // if default addr is found in local addrs, copy the more fully
-      // complete local addr to the output arg.  Don't need to worry
-      // about comparing ports here.
-      if (!nr_transport_addr_cmp(&default_addr, &addrs[i].addr,
-                                 NR_TRANSPORT_ADDR_CMP_MODE_ADDR)) {
-        if ((r=nr_local_addr_copy(addrp, &addrs[i])))
-          ABORT(r);
-        break;
-      }
-    }
-
-    // if default addr is not in local addrs, just copy the transport addr
-    // to output arg.
-    if (i == addr_ct) {
-      if ((r=nr_transport_addr_copy(&addrp->addr, &default_addr)))
-        ABORT(r);
-      (void)strlcpy(addrp->addr.ifname, "default route", sizeof(addrp->addr.ifname));
-    }
-
-    _status=0;
-  abort:
-    return(_status);
+    return nr_stealth_default_local_address(ip_version, addrs, addr_ct, addrp);
   }
 
 /* if handed a IPv4 default_local_addr, looks for IPv6 address on same interface
@@ -775,8 +670,13 @@ int nr_ice_set_local_addresses(nr_ice_ctx *ctx,
     if ((!addr_ct) || (ctx->flags & NR_ICE_CTX_FLAGS_ONLY_DEFAULT_ADDRS)) {
       if (ctx->target_for_default_local_address_lookup) {
         /* Get just the default IPv4 or IPv6 addr */
+        /* STEALTH-HOOK(fingerprint/webrtc/declared-network): the family of the page's server is a property of the real
+           network path, which the declared machine hides. A machine declared without IPv6 whose page was reached over
+           IPv6 asks for the family it has: with no default address of the target's family the gathering found no
+           address at all (measured on the firefox-63 candidate, Windows, direct: zero candidates). */
         if(!nr_ice_get_default_local_address(
-               ctx, ctx->target_for_default_local_address_lookup->ip_version,
+               ctx, nr_stealth_default_family(ctx->target_for_default_local_address_lookup->ip_version,
+                                              local_addrs, addr_ct),
                local_addrs, addr_ct, &default_addrs[default_addr_ct])) {
           nr_local_addr *new_addr = &default_addrs[default_addr_ct];
 
@@ -806,24 +706,11 @@ int nr_ice_set_local_addresses(nr_ice_ctx *ctx,
         }
       }
       if (!default_addr_ct) {
-
-
-        if (addr_ct) {
-          r_log(LOG_ICE,LOG_WARNING,
-                "ICE(%s): default-route probe failed (proxy?); falling back to %d filtered local addr(s)",
-                ctx->label,addr_ct);
-          addrs = local_addrs;
-          /* addr_ct already holds the filtered survivor count */
-        }
-        else {
-          r_log(LOG_ICE,LOG_ERR,"ICE(%s): failed to find default addresses",ctx->label);
-          ABORT(R_FAILED);
-        }
+        r_log(LOG_ICE,LOG_ERR,"ICE(%s): failed to find default addresses",ctx->label);
+        ABORT(R_FAILED);
       }
-      else {
-        addrs = default_addrs;
-        addr_ct = default_addr_ct;
-      }
+      addrs = default_addrs;
+      addr_ct = default_addr_ct;
     }
     else {
       addrs = local_addrs;

@@ -13,6 +13,7 @@ UNIFIED_SOURCES += [
     "TestXMLSerializerNoBreakLink.cpp",
     "TestXPathGenerator.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthDocumentLanguage.cpp", "TestStealthInputEventBirth.cpp"]  # STEALTH-HOOK(fingerprint/input/event-birth)
 
 LOCAL_INCLUDES += ["/dom/base"]
 

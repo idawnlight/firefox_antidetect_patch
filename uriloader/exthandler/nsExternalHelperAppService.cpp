@@ -118,6 +118,7 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ipc/URIUtils.h"
+#include "StealthDownloadIntercept.h"  // STEALTH-HOOK(automation/downloads)
 
 using namespace mozilla;
 using namespace mozilla::ipc;
@@ -392,6 +393,7 @@ NS_IMETHODIMP nsExternalHelperAppService::GetPreferredDownloadsDirectory(
   return NS_OK;
 }
 
+// STEALTH-HOOK(automation/downloads)
 NS_IMETHODIMP nsExternalHelperAppService::SetDownloadInterceptor(
     nsIDownloadInterceptor* interceptor) {
   mInterceptor = interceptor;
@@ -1759,6 +1761,9 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest* request) {
     return NS_OK;
   }
 
+  // STEALTH-HOOK(automation/downloads): the interceptor may own the download.
+  if (StealthDownloadIntercept::Start(this, request)) return NS_OK;
+
   rv = SetUpTempFile(aChannel);
   if (NS_FAILED(rv)) {
     nsresult transferError = rv;
@@ -2347,6 +2352,7 @@ nsExternalAppHandler::OnSaveComplete(nsIBackgroundFileSaver* aSaver,
     NotifyTransfer(aStatus);
   }
 
+  StealthDownloadIntercept::Complete(this, aStatus);  // STEALTH-HOOK(automation/downloads)
   return NS_OK;
 }
 
@@ -2843,6 +2849,7 @@ NS_IMETHODIMP nsExternalAppHandler::Cancel(nsresult aReason) {
   // observer of the listener).
   mDialogProgressListener = nullptr;
 
+  StealthDownloadIntercept::Complete(this, aReason);  // STEALTH-HOOK(automation/downloads)
   return NS_OK;
 }
 

@@ -13,6 +13,7 @@ import {
 } from "moz-src:///toolkit/components/bitsdownload/Bits.sys.mjs";
 import { FileUtils } from "resource://gre/modules/FileUtils.sys.mjs";
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+import * as StealthUpdate from "resource://gre/modules/StealthUpdate.sys.mjs"; // STEALTH-HOOK(stillborn/updater)
 
 const lazy = {};
 
@@ -4280,6 +4281,10 @@ export class UpdateService {
     if (!update) {
       throw Components.Exception("", Cr.NS_ERROR_NULL_POINTER);
     }
+    // STEALTH-HOOK(stillborn/updater)
+    if (StealthUpdate.refusesDownload()) {
+      return Ci.nsIApplicationUpdateService.DOWNLOAD_FAILURE_GENERIC;
+    }
 
     // Don't download the update if the update's version is less than the
     // current application's version or the update's version is the same as the
@@ -5768,6 +5773,7 @@ export class CheckerService {
       // "looks" fine but there was probably an XML error or a bogus file.
       return this.#getCheckFailedObject(status, 200, request);
     }
+    updates = StealthUpdate.noneOffered(updates); // STEALTH-HOOK(stillborn/updater)
 
     LOG(
       "CheckerService:#updateCheck - number of updates available: " +

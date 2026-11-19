@@ -5,6 +5,7 @@
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 import { EXIT_CODE } from "resource://gre/modules/BackgroundTasksManager.sys.mjs";
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+import * as StealthUpdate from "resource://gre/modules/StealthUpdate.sys.mjs"; // STEALTH-HOOK(stillborn/updater)
 
 const lazy = {};
 
@@ -349,6 +350,10 @@ export var BackgroundUpdate = {
    * @return {object} non-null if the background task was registered.
    */
   async _registerBackgroundUpdateTask(taskId = this.taskId) {
+    // STEALTH-HOOK(stillborn/updater)
+    if (StealthUpdate.refusesHostTask()) {
+      return null;
+    }
     let binary = Services.dirsvc.get("XREExeF", Ci.nsIFile);
     let args = [
       "--MOZ_LOG",

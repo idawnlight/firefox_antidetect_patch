@@ -43,6 +43,7 @@
 #include "mozilla/net/TRRServiceChild.h"
 #include "nsDebugImpl.h"
 #include "nsHttpConnectionInfo.h"
+#include "nsSOCKSUDPIOLayer.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "nsHttpHandler.h"
 #include "nsIDNSService.h"
 #include "nsIHttpActivityObserver.h"
@@ -581,6 +582,13 @@ mozilla::ipc::IPCResult SocketProcessChild::RecvNotifyObserver(
     obs->NotifyObservers(nullptr, PromiseFlatCString(aTopic).get(),
                          PromiseFlatString(aData).get());
   }
+  return IPC_OK();
+}
+
+// STEALTH-HOOK(network/proxy-udp)
+mozilla::ipc::IPCResult SocketProcessChild::RecvStealthWarmSocksUdp(const nsACString& aHost, const int32_t& aPort,
+                                                                    const nsACString& aUser, const nsACString& aPass) {
+  nsSOCKSUDPIOLayerWarm(aHost, aPort, aUser, aPass);
   return IPC_OK();
 }
 

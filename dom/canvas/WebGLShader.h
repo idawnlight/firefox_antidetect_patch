@@ -43,10 +43,8 @@ class WebGLShader final : public WebGLContextBoundObject {
   const auto& CompileResults() const { return mCompileResults; }
   const auto& CompileLog() const { return mCompilationLog; }
   bool IsCompiled() const { return mCompilationSuccessful; }
-
-  const std::string& ObjectCodePerLaPagina() const {
-    return mObjectCodePerLaPagina;
-  }
+  // STEALTH-HOOK(fingerprint/webgl/shader-language)
+  const std::string& ObjectCodePerLaPagina() const;
 
  private:
   void BindAttribLocation(GLuint prog, const std::string& userName,
@@ -70,6 +68,8 @@ class WebGLShader final : public WebGLContextBoundObject {
       mCompileResults;  // Never null.
   bool mCompilationSuccessful = false;
   std::string mCompilationLog;
+  // STEALTH-HOOK(fingerprint/webgl/shader-language)
+  std::string StealthPerPageObjectCode(bool aValid);
   std::string mObjectCodePerLaPagina;
 };
 

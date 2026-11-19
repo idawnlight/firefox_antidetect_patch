@@ -134,6 +134,7 @@ UNIFIED_SOURCES += [
 gen_all_tuple = tuple(gen_h + gen_cpp + gen_rs)
 
 gen_inputs = ["init/StaticPrefList.yaml"]
+gen_inputs += ["init/StealthPrefList.yaml"]  # STEALTH-HOOK(platform/prefs)
 if CONFIG["MOZ_THUNDERBIRD"]:
     gen_inputs += ["/comm/mail/app/StaticPrefList.yaml"]
 GeneratedFile(

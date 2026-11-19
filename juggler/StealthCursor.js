@@ -36,7 +36,7 @@
  * this file and it is VERIFIED, not assumed: `tests/gates/chrome_cursor.py`
  * drives `page.mouse.move` and reads the counter this object keeps.
  *
- * ⛔ AND IT IS OURS, NOT MOZILLA'S. Camoufox does this by patching
+ * ⛔ AND IT IS OURS, NOT MOZILLA'S. Another anti-detect Firefox fork does this by patching
  * `browser/base/content/browser-init.js`, a Mozilla file, which is a conflict
  * to resolve at every major. Everything here lives under `juggler/`, which we
  * already own, and the only foreign line is two in `TargetRegistry.js`.
@@ -44,6 +44,25 @@
 
 const PREF_ENABLED = 'stealthfox.showcursor';
 
+// ── the drawing ─────────────────────────────────────────────────────────────
+//
+// ⛔ IT IS THE WINDOWS ARROW, NOT A DOT, and the shape is the point of the
+// feature rather than decoration. The overlay exists so a person watching the
+// screen can follow what the automation is doing; a coloured circle reads as
+// an instrument, an arrow reads as a pointer, and this project's whole target
+// is looking like Windows. The path below is the standard arrow geometry -
+// tip at the origin, the notch and tail on the lower right - drawn white with
+// a dark outline exactly as the system one is, so what is ours is the colour
+// AROUND it and not the cursor itself.
+//
+// The palette is the package logo's, sampled from `invisible_playwright-logo.png`:
+// the two masks are #6CD830 green and #E42430 red over a #0C1824 outline.
+//
+// ⛔ ONE COLOUR, AND THE CLICK CHANGES THE SIZE RATHER THAN THE HUE. The first
+// version turned the halo red while the button was down, which is the obvious
+// way to show a press and the wrong one here: two colours read as two states
+// of the TOOL, and a person watching then has to learn what red means. Widening
+// the same green says "something happened" without adding a vocabulary.
 const LOGO_INK = '%230C1824';      // the logo's outline navy, URL-encoded
 const LOGO_GREEN = '108, 216, 48';
 const GLOW_IDLE = `rgba(${LOGO_GREEN}, .95)`;
@@ -63,6 +82,16 @@ const ARROW_PAD = 1;
 const ARROW_SCALE = 1.4;
 const ARROW_W = (ARROW_ART_W + 2 * ARROW_PAD) * ARROW_SCALE;
 const ARROW_H = (ARROW_ART_H + 2 * ARROW_PAD) * ARROW_SCALE;
+//: ⛔ WHERE THE TIP SITS INSIDE ITS OWN BOX, and the reason every number above
+//: is derived rather than typed. The padding pushes the artwork away from the
+//: box origin, so the tip - which IS the hotspot - lands `ARROW_PAD` units in
+//: from the corner. The first version wrote the box as a flat `17 x 27` and
+//: left that offset uncompensated: the arrow drew about 1.2px below and right
+//: of the coordinate it was reporting, and the two axes were scaled by
+//: slightly different factors (17/14 against 27/21), so the shape was
+//: distorted as well. Neither is visible in a photograph, which is what makes
+//: it worth deriving: the relation is now true BY CONSTRUCTION instead of
+//: because two hand-written numbers happened to agree.
 const ARROW_OFFSET = ARROW_PAD * ARROW_SCALE;
 
 /**
@@ -85,11 +114,41 @@ function _arrowSvg() {
       ` fill='%23FFFFFF' stroke='${LOGO_INK}' stroke-width='1.3'` +
       ` stroke-linejoin='round'/></svg>`;
 }
+// ⛔ The move counter is PUBLISHED as a pref, and that is not a debug
+// leftover: there is no protocol command that evaluates in the chrome window,
+// so a gate has no other way to ask whether this listener ever fired. A pref
+// survives into `prefs.js` when the profile is written, which is exactly the
+// channel a test can read after shutdown. Inventing a protocol command instead
+// would add a field `checkScheme` validates only at runtime - the failure class
+// a rebase reintroduces in silence.
+//: Quanti anelli al massimo restano in coda per il frame successivo. Vedi
+//: `_onDown`: e' un tetto contro l'accumulo quando rAF non scatta, non una
+//: scelta estetica.
 const MAX_PENDING_RINGS = 3;
 
 const PREF_MOVES = 'stealthfox.showcursor.moves';
+// ⛔ How many overlays are alive. Same channel and same reason as the counter
+// above, and it exists because the property it reports cannot be checked any
+// other way: nothing outside the parent process can look at the chrome
+// document and count nodes.
 const PREF_OVERLAYS = 'stealthfox.showcursor.overlays';
 const NODE_ID = '__stealth_cursor__';
+// ⛔ There is no interval any more, and the measurement is why. A pref write
+// on a timer was still a parent-process write in the path of input delivery,
+// and `tests/gates/chrome_cursor_cost.py` caught it: 1 ms on the gap the PAGE
+// measures between its own mousemove events, p = 0.0005. The count is now
+// written once at the first event and once at teardown.
+//
+// ⛔ AND REMOVING IT DID NOT MAKE THE FEATURE FREE, WHICH IS WHAT THE GREEN
+// AFTERWARDS SAID. That run was taken on a machine with another browser
+// alive: noise inflates the variance and makes the permutation test less
+// sensitive, so a real difference read as 0.000 ms. Measured on 2026-08-28 on
+// a machine the gate itself certified idle, the SAME 1 ms shift was still
+// there - with the arrow, and with the circle that predates it, so it was
+// never about the drawing. The A/A control, where this file refuses to build
+// the overlay at all while the bench believes it is comparing on against off,
+// reports 0.000 ms and p = 1.0000: the statistic does not accuse itself.
+// A false green under load left two places claiming this cost nothing.
 
 /**
  * ⛔ ONE OVERLAY PER CHROME WINDOW, NOT PER PAGE, and the difference is
@@ -134,9 +193,25 @@ export class StealthCursor {
   }
 
   static _publishCount(delta) {
+    // ⛔ CALLED FROM THE CONSTRUCTOR, not from `forWindow`, and the difference
+    // was found by running the mutation rather than by reading the code. With
+    // the call in `forWindow`, restoring the old per-page construction made
+    // the pref DISAPPEAR instead of reading 2 - so the number was reporting
+    // "somebody used the shared entry point", which is not the property being
+    // asserted. Counting where the objects are actually built says one against
+    // two, which is the thing that had to be distinguishable.
+    //
+    // ⛔ And it counts OVERLAY OBJECTS, not holders. Counting holders would
+    // report 2 for two tabs in one window under BOTH the correct arrangement
+    // and the broken one, so the number could never fail.
     _live += delta;
     if (_live < 0)
       _live = 0;
+    // ⛔ THE PEAK IS WHAT IS PUBLISHED, not the live count, and that is not a
+    // stylistic choice: `prefs.js` is written at SHUTDOWN, by which time every
+    // target has disposed and the live count is 0. A gate reading the live
+    // number would see 0 whatever happened during the session - a value that
+    // can never fail is not an assertion.
     if (_live > _peak) {
       _peak = _live;
       try { Services.prefs.setIntPref(PREF_OVERLAYS, _peak); }
@@ -155,6 +230,10 @@ export class StealthCursor {
     this._pendingY = 0;
     this._pendingVisible = false;
     this._pendingPressed = false;
+    //: Una pressione VISTA da quando si e' dipinto l'ultima volta. Serve
+    //: perche' un click veloce apre e chiude dentro lo stesso frame: senza
+    //: questo, `pressed` non verrebbe mai dipinta e la pressione sparirebbe
+    //: dal disegno invece che dal percorso dell'input.
     this._sawDown = false;
     //: Quanti anelli spawnare al prossimo frame. Un contatore, non un nodo:
     //: creare l'elemento qui rimetterebbe nel gestore esattamente il lavoro
@@ -162,6 +241,11 @@ export class StealthCursor {
     this._pendingRings = 0;
     this._frame = 0;
     this._listening = false;
+    // ⛔ Counted for the gate, and it is the only reason this field exists.
+    // A test that asserts "the dot moved" by looking at a style attribute is
+    // asserting on our own write; counting the events we RECEIVED is asserting
+    // that the chrome window is reached at all, which is the thing that was
+    // never certain.
     this.moves = 0;
     this._published = 0;
     this._counted = true;
@@ -179,11 +263,20 @@ export class StealthCursor {
   }
 
   _wanted() {
+    // ⛔ THIS `false` IS NOT THE PRODUCT'S DEFAULT. It answers "nobody wrote
+    // this pref", which is a profile we did not create; the shipped default is
+    // declared by `invisible_core.prefs.DEFAULT_SHOW_CURSOR` and has been true
+    // since 2026-08-28. Reading this line as the default is how a compiled
+    // fallback becomes a second source of truth.
     try { return Services.prefs.getBoolPref(PREF_ENABLED, false); }
     catch (e) { return false; }
   }
 
   _stepMs() {
+    // ⛔ READ, never written here. The same number in two places is exactly
+    // the duplication that caused the defect in section 32 of
+    // `20-our-patches.md`: the motion planner already owns this value, so the
+    // overlay's transition asks IT rather than carrying a copy that can drift.
     try { return Services.prefs.getIntPref('stealthfox.humanize.stepMs', 10); }
     catch (e) { return 10; }
   }
@@ -199,6 +292,12 @@ export class StealthCursor {
     if (this._listening)
       return;
     this._build();
+    // ⛔ `{passive: true}` and capture FALSE, both deliberate. Passive
+    // guarantees this listener can never call `preventDefault`, so it cannot
+    // change what the content receives; bubble phase means it runs after the
+    // event has already been dispatched onward rather than in front of it.
+    // Together they remove the only credible way this overlay could become
+    // visible to a page: by delaying or altering input.
     const opts = {passive: true, capture: false};
     this._win.addEventListener('mousemove', this._onMove, opts);
     this._win.addEventListener('mousedown', this._onDown, opts);
@@ -216,10 +315,16 @@ export class StealthCursor {
       this._win.removeEventListener('mouseleave', this._onLeave, opts);
       this._listening = false;
     }
+    // ⛔ REMOVED, not hidden. "Off" has to mean the node is absent: a hidden
+    // node is still a node, and a gate that asserts on visibility passes on a
+    // switch that does not switch anything.
     if (this._dot) {
       this._dot.remove();
       this._dot = null;
     }
+    // ⛔ Il frame chiesto va ANNULLATO: una callback che scatta dopo che il
+    // nodo e' stato tolto scrive su un elemento staccato, e su una finestra
+    // che sta chiudendo e' un errore in console che nessuno spiega.
     if (this._frame) {
       try { this._win.cancelAnimationFrame(this._frame); } catch (e) {}
       this._frame = 0;
@@ -239,6 +344,22 @@ export class StealthCursor {
       return;
 
     this._style = doc.createElement('style');
+    // ⛔ `transform`, never `left`/`top`. Position through the transform with
+    // `will-change` keeps the dot on its own compositor layer; writing
+    // left/top relayouts the chrome document on every mouse event, which is
+    // work done in the parent process while an input event is in flight - the
+    // one thing that could make this measurable from the page.
+    //
+    // ⛔ `pointer-events: none` and no `cursor:` declaration, so the overlay
+    // never enters the chrome hit-test and never changes what is under the
+    // pointer.
+    // ⛔ THE HOTSPOT IS THE ELEMENT'S ORIGIN, NOT ITS CENTRE, and that is what
+    // separates an arrow from the dot this replaced. A dot is symmetric, so
+    // centring it on the coordinate with a negative margin put the drawing
+    // where the pointer was. An arrow points: its tip is the hotspot, exactly
+    // as Windows defines it, and the tip is at (0,0) of the artwork. Any
+    // margin here would draw the cursor beside the place it is actually
+    // clicking, which is worse than a dot - it would look right and lie.
     this._style.textContent = `
       #${NODE_ID} {
         position: fixed; top: 0; left: 0;
@@ -279,18 +400,66 @@ export class StealthCursor {
 
   _onMove(event) {
     this.moves++;
+    // ⛔ ONCE, on the first event, and then never again in this path. The
+    // first version wrote the count every 250 ms, and the bench found what
+    // that cost: with the overlay on, the gap between the mousemove events
+    // THE PAGE receives moved by 1 ms with p = 0.0005 - a real, page-visible
+    // difference, produced not by the feature but by the instrumentation
+    // measuring it. A parent-process pref write sits directly in the path of
+    // input delivery.
+    //
+    // The number the gate actually reads is written in `dispose()`, where it
+    // costs nothing. This one write exists so that "the pref is absent" keeps
+    // its unambiguous meaning - the listener never fired - instead of also
+    // meaning "the browser did not shut down cleanly".
     if (!this._published) {
       this._published = 1;
       this._publishMoves();
     }
     if (!this._dot)
       return;
+    // ⛔ LA SCRITTURA DI STILE NON AVVIENE QUI, e questa e' la seconda volta
+    // che un lavoro dentro il percorso di consegna dell'input viene tolto da
+    // questo file. La prima era una pref scritta su timer; questa e' il
+    // `transform` scritto dentro il gestore del mousemove, cioe' nel processo
+    // padre mentre un evento di input e' in volo.
+    //
+    // Misurato il 2026-08-28 a macchina VERAMENTE ferma: con l'overlay acceso
+    // la distanza mediana fra i mousemove che LA PAGINA riceve si sposta di
+    // uno scalino intero (18 ms contro 17), p = 0,0005 - e succede col cerchio
+    // come con la freccia, quindi non e' il disegno. Il controllo A/A - il
+    // banco che crede di confrontare acceso contro spento mentre l'overlay non
+    // si accende mai - riporta 0,000 ms e p = 1,0000, quindi la statistica non
+    // accusa se stessa.
+    //
+    // ⛔ E LA MISURA PRECEDENTE CHE DICEVA "0,000 ms" ERA PRESA SOTTO CARICO.
+    // Il rumore gonfia la varianza e rende il test permutazionale meno
+    // sensibile: era un falso verde, e ha lasciato scritto in due posti che
+    // questa funzione costasse zero.
+    //
+    // La posizione si registra e basta; il disegno lo fa il frame successivo.
+    // ⛔ I NUMERI, NON L'EVENTO. Trattenere l'oggetto evento attraverso un
+    // frame lo tiene vivo insieme a cio' a cui punta, e questo file ha gia'
+    // pagato una volta per un oggetto che sopravviveva al suo giro.
     this._pendingX = event.clientX;
     this._pendingY = event.clientY;
     this._pendingVisible = true;
     this._schedule();
   }
 
+  // ⛔ UN SOLO POSTO CHE TOCCA IL DOM, e questa e' la ragione per cui la
+  // correzione del 2026-08-28 non e' bastata. Quella differi' il `transform`
+  // del solo `_onMove` e lascio' gli altri tre gestori a scrivere sincroni
+  // dentro la consegna dell'input: `_onDown` aggiungeva una classe, CREAVA UN
+  // NODO, gli attaccava un listener e lo appendeva avviando un'animazione,
+  // cioe' piu' lavoro di quello che era stato tolto; `_onUp` toglieva una
+  // classe; `_onLeave` scriveva l'opacita'. Correggere solo `_onDown` sarebbe
+  // stata una pezza: dopo la correzione i posti che scrivono sarebbero stati
+  // ancora piu' di uno.
+  //
+  // La regola adesso e' una e vale per tutti: **un gestore registra numeri e
+  // chiede il frame, non tocca niente**. Chi disegna e' `_paint`, e chi lo
+  // chiama e' il frame.
   _schedule() {
     if (this._frame)
       return;
@@ -306,6 +475,10 @@ export class StealthCursor {
     this._dot.style.opacity = this._pendingVisible ? '1' : '0';
     this._dot.style.transform =
         `translate3d(${this._pendingX}px, ${this._pendingY}px, 0)`;
+    // ⛔ Una pressione vista dentro questo frame si dipinge ANCHE se il
+    // rilascio e' gia' arrivato: un click veloce nasce e muore fra due frame,
+    // e senza questo la classe non comparirebbe mai. Il rilascio lo fa il
+    // frame dopo, che viene chiesto qui sotto.
     const press = this._pendingPressed || this._sawDown;
     this._dot.classList.toggle('pressed', press);
     while (this._pendingRings > 0) {
@@ -328,8 +501,28 @@ export class StealthCursor {
   }
 
   _onDown(event) {
+    // ⛔ NIENTE DOM QUI. Fino al 2026-08-31 questo gestore girava sincrono
+    // dentro la consegna del mousedown e creava un nodo, gli attaccava un
+    // listener e lo appendeva avviando un'animazione - piu' lavoro di quel
+    // `transform` che il rimedio del 2026-08-28 aveva tolto da `_onMove`
+    // perche' spostava di uno scalino intero i tempi che LA PAGINA misura.
+    // La stessa forma, sul percorso del click, non era misurata da nessun
+    // gate: `chrome_cursor_cost.py` inietta e ascolta solo `mousemove`, cioe'
+    // il ramo gia' corretto. Il banco che guarda questo e'
+    // `chrome_cursor_click_cost.py`.
+    //
+    // L'anello resta, con il suo perche' misurato: una pressione si legge
+    // come l'alone che GONFIA - 802 pixel di bagliore contro 715 a riposo,
+    // +12% - e non come un contorno che si allarga, perche' l'alone e' di un
+    // colore solo. Cambia solo QUANDO viene costruito: al frame, non
+    // nell'evento.
     this._pendingPressed = true;
     this._sawDown = true;
+    // ⛔ Con un tetto: se la finestra chrome va in background rAF smette di
+    // scattare, e senza questo ogni pressione accumulerebbe un anello da
+    // costruire tutto insieme al ritorno. Se ne vede uno per volta comunque -
+    // l'animazione dura meno della distanza fra due click - quindi il tetto
+    // non toglie niente di visibile e toglie una raffica di nodi.
     if (this._pendingRings < MAX_PENDING_RINGS)
       this._pendingRings++;
     this._schedule();
@@ -341,6 +534,9 @@ export class StealthCursor {
   }
 
   _onLeave(event) {
+    // ⛔ Without this the dot stays frozen wherever the pointer left the
+    // window, which looks exactly like a stuck automation and is the opposite
+    // of what a person watching wants to see.
     this._pendingVisible = false;
     this._schedule();
   }
@@ -349,7 +545,14 @@ export class StealthCursor {
     try { Services.prefs.removeObserver(PREF_ENABLED, this._onPrefChanged); }
     catch (e) {}
     this._disable();
+    // ⛔ The number the gate reads, written where it costs nothing: teardown
+    // happens once, off the input path, and `prefs.js` is flushed after it.
     this._publishMoves();
+    // ⛔ Guarded: `dispose()` is reachable twice (the refcount drops to zero,
+    // and a caller holding the object calls it directly), and a live count
+    // that can go down twice for one object reports fewer overlays than exist
+    // - which is the direction that hides the defect this number exists to
+    // catch.
     if (this._counted) {
       this._counted = false;
       StealthCursor._publishCount(-1);

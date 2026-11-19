@@ -303,7 +303,11 @@ class nsExternalHelperAppService : public nsIExternalHelperAppService,
       nsIInterfaceRequestor* aWindowContext,
       nsIStreamListener** aStreamListener);
 
+  // Stealthfox: our automation's download interceptor (set via
+  // setDownloadInterceptor). When non-null, StealthDownloadIntercept::Start
+  // asks it to redirect each download into the automation's downloads folder.
   nsCOMPtr<nsIDownloadInterceptor> mInterceptor;
+  friend class StealthDownloadIntercept;  // STEALTH-HOOK(automation/downloads)
 };
 
 /**
@@ -605,6 +609,9 @@ class nsExternalAppHandler final : public nsIStreamListener,
   nsCOMPtr<nsIRequest> mRequest;
 
   RefPtr<nsExternalHelperAppService> mExtProtSvc;
+
+  friend class StealthDownloadIntercept;  // STEALTH-HOOK(automation/downloads)
+  bool mStealthIntercepted = false;       // STEALTH-HOOK(automation/downloads)
 };
 
 #endif  // nsExternalHelperAppService_h_

@@ -6,6 +6,7 @@
 #include "GLContext.h"
 #include "WebGLContext.h"
 #include "WebGLExtensions.h"
+#include "StealthWebGLParams.h"  // STEALTH-HOOK(fingerprint/webgl/parameters)
 #include "mozilla/EnumeratedRange.h"
 #include "mozilla/StaticPrefs_webgl.h"
 #include "mozilla/dom/BindingDeclarations.h"
@@ -384,6 +385,8 @@ bool WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const {
 
     case WebGLExtensionID::WEBGL_provoking_vertex:
       if (!gl->IsSupported(gl::GLFeature::provoking_vertex)) return false;
+      // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, so served wherever the GL can
+      if (StealthWebGLExtensionVerdict(IsWebGL2(), ext) == Some(true)) return true;
 
       // > Implementations SHOULD only expose this extension when
       // > FIRST_VERTEX_CONVENTION is more efficient than the default behavior
@@ -420,6 +423,8 @@ void WebGLContext::RequestExtension(const WebGLExtensionID ext,
                                     const bool explicitly) {
   const auto& limits = Limits();
   if (!limits.supportedExtensions[ext]) return;
+  // STEALTH-HOOK(fingerprint/webgl/parameters): declared but not served: harmless
+  if (!IsExtensionSupported(ext)) return;
 
   auto& slot = mExtensions[ext];
   switch (ext) {

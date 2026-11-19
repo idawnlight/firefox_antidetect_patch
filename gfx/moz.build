@@ -43,6 +43,8 @@ if CONFIG["MOZ_FONTATIONS"]:
         "fontations_glue",
     ]
 
+DIRS += ["idwr"]  # STEALTH-HOOK(fingerprint/fonts/idwr)
+
 TEST_DIRS += ["tests/gtest"]
 
 if CONFIG["FUZZING_INTERFACES"]:

@@ -216,6 +216,7 @@ bool CSP_ShouldURIInheritCSP(nsIURI* aURI);
 void CSP_ApplyMetaCSPToDoc(mozilla::dom::Document& aDoc,
                            const nsAString& aPolicyStr);
 
+// STEALTH-HOOK(automation/bypass-csp)
 bool CSP_IsBypassedFor(const mozilla::dom::Document& aDoc);
 
 // Checks if the URI is "chrome://browser/content/browser.xhtml"

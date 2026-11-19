@@ -18,6 +18,7 @@
 #include "nsCOMPtr.h"
 #include "nsDebug.h"
 #include "nsXULAppAPI.h"
+#include "StealthOwnBinaries.h"  // STEALTH-HOOK(platform/untrusted-modules)
 #include "WinUtils.h"
 
 // Some utility functions
@@ -114,20 +115,26 @@ ModuleRecord::ModuleRecord(const nsAString& aResolvedNtPath)
 void ModuleRecord::GetVersionAndVendorInfo(const nsAString& aPath) {
   RefPtr<DllServices> dllSvc(DllServices::Get());
 
+  ModuleVersionInfo verInfo;
+  const bool hasVersion = verInfo.GetFromImage(aPath);
+
   // WinVerifyTrust is too slow and of limited utility for our purposes, so
   // we pass SkipTrustVerification here to avoid it.
   bool hasNestedMicrosoftSignature = false;
-  UniquePtr<wchar_t[]> signedBy(dllSvc->GetBinaryOrgName(
-      PromiseFlatString(aPath).get(), &hasNestedMicrosoftSignature,
-      AuthenticodeFlags::SkipTrustVerification));
+  UniquePtr<wchar_t[]> signedBy(
+      // STEALTH-HOOK(platform/untrusted-modules)
+      StealthSkipsSignatureLookup(aPath, verInfo, hasVersion)
+          ? nullptr
+          : dllSvc->GetBinaryOrgName(PromiseFlatString(aPath).get(),
+                                     &hasNestedMicrosoftSignature,
+                                     AuthenticodeFlags::SkipTrustVerification));
   if (signedBy) {
     mVendorInfo = Some(VendorInfo(VendorInfo::Source::Signature,
                                   nsDependentString(signedBy.get()),
                                   hasNestedMicrosoftSignature));
   }
 
-  ModuleVersionInfo verInfo;
-  if (!verInfo.GetFromImage(aPath)) {
+  if (!hasVersion) {
     return;
   }
 

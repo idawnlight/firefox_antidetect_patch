@@ -19,6 +19,7 @@
 #include "mozilla/Tokenizer.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/glean/NetwerkDnsMetrics.h"
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "nsCharSeparatedTokenizer.h"
 #include "nsContentUtils.h"
 #include "nsHostResolver.h"
@@ -304,6 +305,8 @@ nsresult TRR::SendHTTPRequest() {
     LOG(("TRR:SendHTTPRequest: NewChannel failed!\n"));
     return rv;
   }
+  rv = StealthApplyTRRContextToChannel(channel, StealthTRRContextOfSuffix(mOriginSuffix));  // STEALTH-HOOK(network/doh)
+  NS_ENSURE_SUCCESS(rv, rv);  // STEALTH-HOOK(network/doh)
 
   auto loadFlags = nsIRequest::LOAD_ANONYMOUS | nsIRequest::INHIBIT_CACHING |
                    nsIRequest::LOAD_BYPASS_CACHE |
@@ -353,7 +356,7 @@ nsresult TRR::SendHTTPRequest() {
   // When using OHTTP, the we can't use cached connection info, since we
   // need to connect to the relay, not the TRR server.
   if (UseDefaultServer() && !useOHTTP &&
-      StaticPrefs::network_trr_async_connInfo()) {
+      StaticPrefs::network_trr_async_connInfo() && StealthTRRContextOfSuffix(mOriginSuffix).isNothing()) {  // STEALTH-HOOK(network/doh)
     RefPtr<nsHttpConnectionInfo> trrConnInfo =
         TRRService::Get()->TRRConnectionInfo();
     if (trrConnInfo) {

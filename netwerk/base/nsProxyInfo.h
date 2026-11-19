@@ -52,6 +52,7 @@ class nsProxyInfo final : public nsIProxyInfo {
   bool IsHTTP();
   bool IsHTTPS();
   bool IsSOCKS();
+  bool IsSOCKS5();  // STEALTH-HOOK(network/proxy-udp)
   bool IsHttp3Proxy();
 
   static void SerializeProxyInfo(nsProxyInfo* aProxyInfo,

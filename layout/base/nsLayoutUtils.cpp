@@ -18,6 +18,7 @@
 #include "PseudoStyleType.h"
 #include "RegionBuilder.h"
 #include "RetainedDisplayListBuilder.h"
+#include "StealthSurfaceFlags.h"  // STEALTH-HOOK(fingerprint/canvas/as-drawn)
 #include "TextDrawTarget.h"
 #include "UnitTransforms.h"
 #include "ViewportFrame.h"
@@ -7496,10 +7497,7 @@ SurfaceFromElementResult nsLayoutUtils::SurfaceFromElement(
     pAlphaType =
         nullptr;  // Coersce GetSurfaceSnapshot to give us Opaque/Premult only.
   }
-  result.mSourceSurface =
-      (aSurfaceFlags & SFE_AS_DRAWN)
-          ? aElement->GetSurfaceSnapshotAsDrawn(pAlphaType, aTarget)
-          : aElement->GetSurfaceSnapshot(pAlphaType, aTarget);
+  result.mSourceSurface = StealthCanvasSnapshot(aElement, aSurfaceFlags, pAlphaType, aTarget);  // STEALTH-HOOK(fingerprint/canvas/as-drawn)
   if (!result.mSourceSurface) {
     // If the element doesn't have a context then we won't get a snapshot. The
     // canvas spec wants us to not error and just draw nothing, so return an

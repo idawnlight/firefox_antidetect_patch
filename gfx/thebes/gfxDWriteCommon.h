@@ -106,11 +106,6 @@ class gfxDWriteFontFileStream final : public IDWriteFontFileStream {
    * @param aData Font data
    */
   gfxDWriteFontFileStream(FontData* aData, uint64_t aFontFileKey);
-
-  enum class Borrowed { Yes };
-  gfxDWriteFontFileStream(const uint8_t* aData, uint32_t aLength,
-                          uint64_t aFontFileKey, Borrowed);
-
   ~gfxDWriteFontFileStream();
 
   // IUnknown interface
@@ -144,9 +139,6 @@ class gfxDWriteFontFileStream final : public IDWriteFontFileStream {
 
   virtual HRESULT STDMETHODCALLTYPE GetLastWriteTime(OUT UINT64* lastWriteTime);
 
-  // Deliberately reports mData only: a borrowed stream owns no bytes, and
-  // counting the lender's would double-count them in about:memory. The bundle
-  // cache is where those bytes belong and where they should be reported.
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
     // We don't report the size of mData, because the original user font entry
     // will account for that.
@@ -158,13 +150,7 @@ class gfxDWriteFontFileStream final : public IDWriteFontFileStream {
   }
 
  private:
-  const uint8_t* Bytes() const { return mBorrowed ? mBorrowed : mData->Data(); }
-  uint32_t BytesLength() const {
-    return mBorrowed ? mBorrowedLength : mData->Length();
-  }
   RefPtr<FontData> mData;
-  const uint8_t* mBorrowed = nullptr;
-  uint32_t mBorrowedLength = 0;
   mozilla::Atomic<uint32_t> mRefCnt;
   uint64_t mFontFileKey;
 };
@@ -216,10 +202,6 @@ class gfxDWriteFontFileLoader : public IDWriteFontFileLoader {
    */
   static HRESULT CreateCustomFontFile(
       FontData* aFontData, IDWriteFontFile** aFontFile,
-      gfxDWriteFontFileStream** aFontFileStream);
-
-  static HRESULT CreateBorrowedFontFile(
-      const uint8_t* aFontData, uint32_t aLength, IDWriteFontFile** aFontFile,
       gfxDWriteFontFileStream** aFontFileStream);
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;

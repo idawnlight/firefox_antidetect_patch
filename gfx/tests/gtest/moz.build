@@ -27,13 +27,15 @@ UNIFIED_SOURCES += [
     "TestQcms.cpp",
     "TestRegion.cpp",
     "TestSkipChars.cpp",
-    "TestStealthCanvasProjection.cpp",
     "TestSwizzle.cpp",
     "TestTextures.cpp",
     "TestTreeTraversal.cpp",
     "TestVsync.cpp",
     "TestYUVtoRGB32.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthCanvasProjection.cpp"]  # STEALTH-HOOK(fingerprint/canvas/noise-projection)
+UNIFIED_SOURCES += ["TestStealthWebGPUDeclaration.cpp"]  # STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
+UNIFIED_SOURCES += ["TestStealthWebGPUExternalTexture.cpp"]  # STEALTH-HOOK(fingerprint/webgpu/external-texture-vulkan)
 
 SOURCES += [
     "SwizzleGeneric.cpp",
@@ -44,9 +46,13 @@ if CONFIG["OS_TARGET"] != "Android":
         "TestRect.cpp",
     ]
 
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":  # STEALTH-HOOK(fingerprint/fonts/font-list)
+    UNIFIED_SOURCES += ["TestStealthFcFontList.cpp", "TestStealthFontMetrics.cpp"]
+    CXXFLAGS += CONFIG["CAIRO_FT_CFLAGS"]
 if CONFIG["OS_TARGET"] == "WINNT":
     # gfxDWriteFonts' text quality and ClearType parameters, Windows only.
     UNIFIED_SOURCES += [
+        "TestStealthBundledCollection.cpp",
         "TestStealthTextQuality.cpp",
     ]
 

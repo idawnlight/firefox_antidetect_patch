@@ -88,6 +88,10 @@ class ModuleRecord final {
   bool IsXUL() const;
   bool IsTrusted() const;
 
+  // STEALTH-HOOK(platform/untrusted-modules)
+  static bool IsInDirectoryOf(const nsAString& aDllPath,
+                              const nsAString& aExePath);
+
   ModuleRecord(const ModuleRecord&) = delete;
   ModuleRecord(ModuleRecord&&) = delete;
 

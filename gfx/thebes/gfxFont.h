@@ -1716,7 +1716,7 @@ class gfxFont {
     return *mVerticalMetrics;
   }
 
-  // Read OS/2 vertical metrics in font units and scale by the adjusted size.
+  // STEALTH-HOOK(fingerprint/fonts/metrics): defined in StealthBundleFontList.cpp
   bool GetStealthHostIndepVMetrics(gfxFloat& aEmAscent, gfxFloat& aEmDescent,
                                    gfxFloat& aMaxAscent, gfxFloat& aMaxDescent);
 

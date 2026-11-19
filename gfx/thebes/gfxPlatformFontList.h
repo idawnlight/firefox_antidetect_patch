@@ -434,11 +434,9 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
   void InitializeFamily(uint32_t aGeneration, uint32_t aFamilyIndex,
                         bool aLoadCmaps);
 
-  // Bundle fallback loads character maps synchronously; normal lists may defer.
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
   bool MayDeferCmapLoading() const;
-
-  // The bundle-only flag is set in the constructor and never mutated.
-  bool StealthBundleOnly() const { return mStealthBundleOnly; }
+  bool StealthBundleOnly() const;
 
   // name lookup table methods
 
@@ -466,13 +464,11 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
   /**
    * Read PSName and FullName of the given face, for src:local lookup,
    * returning true if actually implemented and succeeded.
-   * STEALTH [B317]: implemented here for the bundle's faces, on every platform,
-   * from the 'name' table of the bundle file; a platform's override delegates
-   * here when the font list is bundle-only.
    */
   virtual bool ReadFaceNames(const mozilla::fontlist::Family* aFamily,
                              const mozilla::fontlist::Face* aFace,
                              nsCString& aPSName, nsCString& aFullName);
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
 
   // initialize localized family names
   bool InitOtherFamilyNames(bool aDeferOtherFamilyNamesLoading);
@@ -1013,14 +1009,12 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
    */
   virtual void ReadFaceNamesForFamily(mozilla::fontlist::Family* aFamily,
                                       bool aNeedFullnamePostscriptNames)
-      MOZ_REQUIRES(mLock);
+      MOZ_REQUIRES(mLock);  // STEALTH-HOOK(fingerprint/fonts/font-list)
 
-  // Record aliases, full names and PostScript names from a face name table.
-  void RecordFaceNamesFromTable(mozilla::fontlist::Family* aFamily,
-                                uint32_t aFaceIndex, const nsACString& aKey,
-                                const nsCString& aFamilyName,
-                                const char* aNameTable, uint32_t aLength)
-      MOZ_REQUIRES(mLock);
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
+  void RecordFaceNamesFromTable(mozilla::fontlist::Family*, uint32_t,
+                                const nsACString&, const nsCString&,
+                                const char*, uint32_t) MOZ_REQUIRES(mLock);
 
   typedef nsRefPtrHashtable<nsCStringHashKey, gfxFontFamily> FontFamilyTable;
   typedef nsRefPtrHashtable<nsCStringHashKey, gfxFontEntry> FontEntryTable;
@@ -1123,9 +1117,7 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
 
   nsTArray<nsCString> mEnabledFontsList;
   nsTHashSet<nsCString> mIconFontsSet;
-
-  // Build this font list exclusively from the bundle.
-  bool mStealthBundleOnly = false;
+  bool mStealthBundleOnly = false;  // STEALTH-HOOK(fingerprint/fonts/font-list)
 
   // This is an owning reference; we are responsible to delete the FontList at
   // appropriate times.

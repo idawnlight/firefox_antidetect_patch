@@ -4,7 +4,6 @@
 
 #include "OffscreenCanvasDisplayHelper.h"
 
-#include "CanvasUtils.h"
 #include "mozilla/SVGObserverUtils.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/dom/Document.h"
@@ -530,18 +529,8 @@ OffscreenCanvasDisplayHelper::TransformSurface(gfx::SourceSurface* aSurface,
 already_AddRefed<gfx::SourceSurface>
 OffscreenCanvasDisplayHelper::GetSurfaceSnapshot() {
   MOZ_ASSERT(NS_IsMainThread());
-  RefPtr<gfx::SourceSurface> drawn = GetSurfaceSnapshotAsDrawn();
-  nsCOMPtr<nsIPrincipal> principal;
-  {
-    MutexAutoLock lock(mMutex);
-    if (!CanvasUtils::StealthProjectsContextType(mType)) {
-      return drawn.forget();
-    }
-    if (mCanvasElement) {
-      principal = mCanvasElement->NodePrincipal();
-    }
-  }
-  return CanvasUtils::StealthProjectSnapshot(drawn, true, principal);
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  return StealthPageSnapshot();
 }
 
 already_AddRefed<gfx::SourceSurface>
@@ -653,8 +642,7 @@ OffscreenCanvasDisplayHelper::GetSurfaceSnapshotAsDrawn() {
 already_AddRefed<layers::Image> OffscreenCanvasDisplayHelper::GetAsImage() {
   MOZ_ASSERT(NS_IsMainThread());
 
-  // The screen's copy (nsHTMLCanvasFrame): as drawn, like every canvas on
-  // screen.
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
   RefPtr<gfx::SourceSurface> surface = GetSurfaceSnapshotAsDrawn();
   if (!surface) {
     return nullptr;

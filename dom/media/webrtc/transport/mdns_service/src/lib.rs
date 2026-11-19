@@ -459,12 +459,21 @@ impl MDNSService {
         socket.set_multicast_loop_v4(true)?;
         socket.set_read_timeout(Some(time::Duration::from_millis(1)))?;
         socket.set_write_timeout(Some(time::Duration::from_millis(1)))?;
-        for addr in addrs {
-            if let Err(err) = socket.join_multicast_v4(&mdns_addr, &addr) {
+        for addr in &addrs {
+            if let Err(err) = socket.join_multicast_v4(&mdns_addr, addr) {
                 warn!(
                     "Could not join multicast group on interface: {:?}: {}",
                     addr, err
                 );
+            }
+        }
+        // STEALTH-HOOK(fingerprint/webrtc/declared-network): the parent gives the loopback
+        // (nr_stealth_mdns_interfaces). The responder speaks through the interface it joined on, or a query
+        // would leave on the default multicast route and never come back to this socket: on Linux a join on
+        // 127.0.0.1 hears nothing without it (captures/mdns-loopback/loopback-join of invisible_WebRTC).
+        if let Some(addr) = addrs.first() {
+            if let Err(err) = socket2::SockRef::from(&socket).set_multicast_if_v4(addr) {
+                warn!("Could not send multicast through interface: {:?}: {}", addr, err);
             }
         }
 

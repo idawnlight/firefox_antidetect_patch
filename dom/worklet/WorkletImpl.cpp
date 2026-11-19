@@ -13,11 +13,12 @@
 #include "mozilla/dom/PolicyContainer.h"
 #include "mozilla/dom/RegisterWorkletBindings.h"
 #include "mozilla/dom/ScriptSettings.h"
-#include "mozilla/dom/StealthSessionDeclaration.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"  // STEALTH-HOOK(fingerprint/locale-time/workers)
 #include "mozilla/dom/WorkletBinding.h"
 #include "mozilla/dom/WorkletGlobalScope.h"
 #include "mozilla/dom/worklet/WorkletModuleLoader.h"
 #include "nsGlobalWindowInner.h"
+// STEALTH-HOOK(fingerprint/locale-time/workers)
 #include "nsPIDOMWindowInlines.h"
 
 using mozilla::dom::loader::WorkletModuleLoader;

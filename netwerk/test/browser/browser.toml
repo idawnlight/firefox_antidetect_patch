@@ -233,6 +233,9 @@ skip-if = [
 
 ["browser_speculative_connection_link_header.js"]
 
+# STEALTH-HOOK(fingerprint/locale-time/accept-language)
+["browser_stealth_accept_language_list.js"]
+
 ["browser_test_data_channel_observer.js"]
 
 ["browser_test_favicon.js"]

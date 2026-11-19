@@ -108,6 +108,7 @@ SOURCES += [
     "OffscreenCanvasRenderingContext2D.cpp",  # See bug 1745384
     "SourceSurfaceWebgl.cpp",
 ]
+SOURCES += ["StealthCanvasNoise.cpp", "StealthOffscreenSnapshot.cpp"]  # STEALTH-HOOK(fingerprint/canvas/noise-projection)
 
 # WebGL Sources
 UNIFIED_SOURCES += [
@@ -164,6 +165,8 @@ UNIFIED_SOURCES += [
     "WebGLVertexArrayFake.cpp",
     "WebGLVertexArrayGL.cpp",
 ]
+UNIFIED_SOURCES += ["StealthWebGLParams.cpp"]  # STEALTH-HOOK(fingerprint/webgl/parameters)
+UNIFIED_SOURCES += ["StealthWebGLShaderLanguage.cpp"]  # STEALTH-HOOK(fingerprint/webgl/shader-language)
 
 SOURCES += [
     "MurmurHash3.cpp",

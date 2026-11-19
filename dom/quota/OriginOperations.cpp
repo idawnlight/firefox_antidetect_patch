@@ -18,6 +18,7 @@
 #include "OriginParser.h"
 #include "QuotaRequestBase.h"
 #include "ResolvableNormalOriginOp.h"
+#include "StealthQuotaEstimate.h"  // STEALTH-HOOK(fingerprint/hardware/storage-quota)
 #include "mozilla/Assertions.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
@@ -3854,7 +3855,8 @@ void EstimateOp::GetResponse(RequestResponse& aResponse) {
   EstimateResponse estimateResponse;
 
   estimateResponse.usage() = mUsageAndLimit.first;
-  estimateResponse.limit() = mUsageAndLimit.second;
+  estimateResponse.limit() =
+      StealthEstimateLimit(mUsageAndLimit.second, mScope == Scope::Origin);  // STEALTH-HOOK(fingerprint/hardware/storage-quota)
 
   aResponse = estimateResponse;
 }

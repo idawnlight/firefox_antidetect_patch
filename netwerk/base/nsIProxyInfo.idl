@@ -122,4 +122,12 @@ interface nsIProxyInfo : nsISupports
    * through the proxy.
    */
   const unsigned short ALWAYS_TUNNEL_VIA_PROXY = 1 << 1;
+
+  /**
+   * STEALTH-HOOK(network/proxy-udp)
+   * Set by the session on a SOCKS5 proxy whose UDP was measured coherent: UDP ASSOCIATE is granted and a STUN
+   * binding through the relay answers with the same public address as the proxy's TCP exit. Only such a proxy
+   * carries the UDP of a PeerConnection or of HTTP/3; every other proxy (flag absent) is a router that drops it.
+   */
+  const unsigned short CARRIES_COHERENT_UDP = 1 << 2;
 };

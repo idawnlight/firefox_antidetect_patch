@@ -145,7 +145,8 @@ class NrSocketBase {
 
 class NrSocket : public NrSocketBase, public nsASocketHandler {
  public:
-  NrSocket() : fd_(nullptr) {}
+  explicit NrSocket(const std::shared_ptr<NrSocketProxyConfig>& aProxyConfig = nullptr)  // STEALTH-HOOK(network/proxy-udp)
+      : fd_(nullptr), mProxyConfig(aProxyConfig) {}  // STEALTH-HOOK(network/proxy-udp)
 
   // Implement nsASocket
   virtual void OnSocketReady(PRFileDesc* fd, int16_t outflags) override;
@@ -188,6 +189,9 @@ class NrSocket : public NrSocketBase, public nsASocketHandler {
   DISALLOW_COPY_ASSIGN(NrSocket);
 
   PRFileDesc* fd_;
+  std::shared_ptr<NrSocketProxyConfig> mProxyConfig;  // STEALTH-HOOK(network/proxy-udp)
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): the port registered as one of ours (R3), 0 for none.
+  uint16_t stealth_own_port_ = 0;
   nsCOMPtr<nsIEventTarget> ststhread_;
 };
 

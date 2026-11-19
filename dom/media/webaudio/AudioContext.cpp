@@ -562,10 +562,9 @@ double AudioContext::OutputLatency() {
   if (mIsShutDown) {
     return 0.0;
   }
-  // Stealth: outputLatency from pref set by Python at launch
+  // STEALTH-HOOK(fingerprint/audio/context-values)
   {
-    int32_t latency_ms =
-        mozilla::StaticPrefs::zoom_stealth_audio_output_latency_ms();
+    int32_t latency_ms = mozilla::StaticPrefs::zoom_stealth_audio_output_latency_ms();
     if (latency_ms > 0) return latency_ms / 1000.0;
   }
   // When reduceFingerprinting is enabled, return a latency figure that is
@@ -723,7 +722,7 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
 }
 
 uint32_t AudioContext::MaxChannelCount() const {
-  // Stealth: maxChannelCount from pref set by Python at launch
+  // STEALTH-HOOK(fingerprint/audio/context-values)
   {
     int32_t ch = mozilla::StaticPrefs::zoom_stealth_audio_max_channel_count();
     if (ch > 0) return (uint32_t)ch;

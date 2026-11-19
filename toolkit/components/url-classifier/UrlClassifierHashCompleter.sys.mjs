@@ -15,6 +15,11 @@ const PREF_DEBUG_ENABLED = "browser.safebrowsing.debug";
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 import { NetUtil } from "resource://gre/modules/NetUtil.sys.mjs";
+// STEALTH-HOOK(network/doh)
+import {
+  stealthApplyContext,
+  stealthCompleteInContext,
+} from "resource://gre/modules/StealthHashCompleterContext.sys.mjs";
 
 const lazy = {};
 
@@ -201,6 +206,7 @@ export class HashCompleter {
   // Even though it only takes one partial hash and callback, subsequent
   // calls are made into the same HTTP request by using a thread dispatch.
   complete(aPartialHash, aGethashUrl, aTableName, aCallback) {
+    if (stealthCompleteInContext(this, aPartialHash, aGethashUrl, aTableName, aCallback)) { return; }  // STEALTH-HOOK(network/doh)
     if (!aGethashUrl) {
       throw Components.Exception("", Cr.NS_ERROR_NOT_INITIALIZED);
     }
@@ -510,6 +516,7 @@ class HashCompleterRequestBase {
       firstPartyDomain:
         "safebrowsing.86868755-6b82-4842-b301-72671a0db32e.mozilla",
     };
+    stealthApplyContext(channel, this.completer);  // STEALTH-HOOK(network/doh)
 
     // Disable keepalive.
     let httpChannel = channel.QueryInterface(Ci.nsIHttpChannel);

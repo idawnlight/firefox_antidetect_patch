@@ -999,6 +999,7 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
                          nullptr);
   }
 
+  // STEALTH-HOOK(automation/file-chooser)
   if (nsIDocShell* ds = doc->GetDocShell()) {
     bool interceptFileChooser = false;
     ds->GetFileInputInterceptionEnabled(&interceptFileChooser);

@@ -18,6 +18,7 @@ UNIFIED_SOURCES += [
 SOURCES += [
     "XrayWrapper.cpp",
 ]
+SOURCES += ["StealthHybridXray.cpp"]  # STEALTH-HOOK(automation/hybrid-xrays)
 
 include("/ipc/chromium/chromium-config.mozbuild")
 

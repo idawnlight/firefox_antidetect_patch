@@ -25,7 +25,7 @@
               '../nrappkit/src/util/libekr',
               '../nrappkit/src/port/generic/include',
 
-              # transport dir — for nr_stealth_bridge.h
+              # transport dir — for nr_stealth_network.h
               '../..',
 
               # INTERNAL
@@ -79,13 +79,6 @@
                 # STUN
                 "./src/stun/addrs.cpp",
                 "./src/stun/addrs.h",
-                "./src/stun/addrs-bsd.cpp",
-                "./src/stun/addrs-bsd.h",
-                "./src/stun/addrs-netlink.cpp",
-                "./src/stun/addrs-netlink.h",
-                "./src/stun/addrs-netlink-wireless.cpp",
-                "./src/stun/addrs-win32.cpp",
-                "./src/stun/addrs-win32.h",
                 "./src/stun/nr_socket_turn.cpp",
                 "./src/stun/nr_socket_turn.h",
                 "./src/stun/nr_socket_buffered_stun.cpp",

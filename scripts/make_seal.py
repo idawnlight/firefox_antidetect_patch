@@ -69,16 +69,17 @@ ENTRY_REL = {
 # tag STORICI (firefox-20 e giu') che il mac ce l'avevano, e senza saperlo
 # leggere quel workflow si romperebbe. Si smette di PRETENDERE il mac, non di
 # saperlo leggere.
+# linux-arm64 uscito il 2026-11-04 (Federico): da firefox-56 DUE gambe, Linux e
+# Windows x86_64. Come per il mac, arm64 resta in NAME_RE: i tag vecchi che lo hanno
+# si leggono ancora. Si smette di pretenderlo, non di saperlo leggere.
 EXPECTED = {
     ("linux", "x86_64"): "-linux-x86_64.tar.gz",
-    ("linux", "arm64"): "-linux-arm64.tar.gz",
     ("win32", "x86_64"): "-win-x86_64.zip",
 }
 NAME_RE = re.compile(r"^firefox-(?P<ver>[0-9.]+)-stealth-(?P<os>win|linux|macos)-(?P<arch>x86_64|arm64)\.(zip|tar\.gz)$")
 # What a release tag looks like. The one place that knows: the seal refuses
 # anything else, and release_plan.py asks this before a release run builds.
-RELEASE_TAG_RE = re.compile(
-    r"firefox-(?:(?P<n>\d+)|(?P<version>\d+\.\d+(?:\.\d+)?)-r(?P<revision>[1-9]\d*))")
+RELEASE_TAG_RE = re.compile(r"firefox-(?P<n>\d+)")
 
 
 class SealBuildError(RuntimeError):
@@ -86,12 +87,11 @@ class SealBuildError(RuntimeError):
 
 
 def check_release_tag(tag: str) -> int:
-    """Legacy release number or explicit fork revision, or SealBuildError."""
+    """N of a `firefox-N` release tag, or SealBuildError."""
     m = RELEASE_TAG_RE.fullmatch(tag)
     if not m:
-        raise SealBuildError(
-            f"tag must look like firefox-N or firefox-VERSION-rREVISION, got {tag!r}")
-    return int(m.group("n") or m.group("revision"))
+        raise SealBuildError(f"tag must look like firefox-N, got {tag!r}")
+    return int(m.group("n"))
 
 
 def sha256_path(p: Path) -> str:
@@ -174,11 +174,14 @@ def read_archive(archive: Path) -> dict:
         layout = "omni.ja"
         blob = index[omni_name]()
         omni_sha = hashlib.sha256(blob).hexdigest()
-        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-            inner = set(zf.namelist())
-            marked = sum(1 for e in JUGGLER_ENTRIES
-                         if e in inner and any(mk in zf.read(e) for mk in JUGGLER_MARKERS))
-            juggler_files = sum(1 for n in inner if n.startswith(JUGGLER_DIR_REL + "/"))
+        # Mozilla's reader: a PGO build's omni.ja is in the optimized layout
+        # (central directory first) that zipfile refuses.
+        import stock_parity
+        jar = stock_parity.open_jar(blob, omni_name)
+        inner = set(jar.entries)
+        marked = sum(1 for e in JUGGLER_ENTRIES
+                     if e in inner and any(mk in jar[e].read() for mk in JUGGLER_MARKERS))
+        juggler_files = sum(1 for n in inner if n.startswith(JUGGLER_DIR_REL + "/"))
     else:
         # The Linux archives ship the juggler unpacked and carry no omni.ja at
         # all. Same markers, same four entries, read straight out of the archive.
@@ -193,6 +196,7 @@ def read_archive(archive: Path) -> dict:
         raise SealBuildError(
             f"{archive.name}: no {JUGGLER_DIR_REL}/ {where}. Playwright cannot drive this "
             f"build, and invisible_core would refuse every launch of it.")
+    # ⛔ La sbarra e' 4/4, la stessa di validate_release.py, e fino al 2026-08-17
     # qui era 0/4. Non erano "tre soglie per lo stesso segnale": le tre
     # rispondono a domande diverse e due sono legittime - questa chiede "e' una
     # delle NOSTRE build?", validate_release chiede "e' INTEGRA?", seal.py a
@@ -288,7 +292,7 @@ def read_playwright_range(path: Path | None) -> tuple[str, str]:
     return lo, hi
 
 
-def read_source_commit(path: Path | None) -> str:
+def read_source_commit(path: Path | None, flag: str = "--source-commit-file") -> str:
     """The engine commit the seal records, or "" when none is asked for.
 
     The same silent fallback the Playwright window had: the file was read only
@@ -302,11 +306,11 @@ def read_source_commit(path: Path | None) -> str:
     if path is None:
         return ""
     if not path.is_file():
-        raise SealBuildError(f"--source-commit-file {path} does not exist.")
+        raise SealBuildError(f"{flag} {path} does not exist.")
     commit = path.read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise SealBuildError(
-            f"--source-commit-file {path} holds {commit!r}, not a full 40-hex commit id.")
+            f"{flag} {path} holds {commit!r}, not a full 40-hex commit id.")
     return commit
 
 
@@ -333,7 +337,7 @@ def build_from_assets(tag: str, assets_dir: Path, source_commit: str,
     version = versions.pop()
 
     for r in rows:
-        if version != r["declared_version"]:
+        if version not in r["name"]:
             raise SealBuildError(
                 f"asset/base mismatch: {r['name']} does not carry the version its own "
                 f"application.ini reports ({version}). Every user download 404s or "
@@ -345,9 +349,6 @@ def build_from_assets(tag: str, assets_dir: Path, source_commit: str,
         raise SealBuildError(f"incomplete release, missing platforms: {sorted(missing)}")
 
     check_release_tag(tag)
-    tagged_version = RELEASE_TAG_RE.fullmatch(tag).group("version")
-    if tagged_version is not None and tagged_version != version:
-        raise SealBuildError(f"tag/base mismatch: {tag} contains Firefox {version}")
 
     # No top-level build_id: there is no single value that is true of all five
     # legs, and a scalar that is true for one platform is a refusal for the other
@@ -432,6 +433,11 @@ def main(argv=None) -> int:
                     help="a file holding the engine commit this build is of. "
                          "Recorded as the seal's source_commit for BOTH --assets "
                          "and --from-tree; the core's engine-source tests read it.")
+    ap.add_argument("--series-commit-file", type=Path,
+                    help="a file holding the commit of the patch series this build applied "
+                         "(this repository's main). Recorded as series_commit: with the "
+                         "Mozilla tag it rebuilds source_commit (tools/engine.py apply), "
+                         "which lives on no remote.")
     ap.add_argument("--playwright-range", type=Path,
                     help=f"the two-line supported-Playwright window "
                          f"(default: {PW_RANGE_REL} in this tree). No built-in default "
@@ -443,6 +449,7 @@ def main(argv=None) -> int:
     rows: list = []
     try:
         commit = read_source_commit(a.source_commit_file)
+        series = read_source_commit(a.series_commit_file, "--series-commit-file")
         pw_range = a.playwright_range or (REPO_ROOT / PW_RANGE_REL)
         pw_min, pw_max = read_playwright_range(pw_range)
         print(f"playwright window: {pw_min} .. {pw_max}  (from {pw_range})")
@@ -456,6 +463,10 @@ def main(argv=None) -> int:
     except SealBuildError as e:
         print(f"SEAL ERROR: {e}", file=sys.stderr)
         return 1
+    # Only when given: a seal made without it is byte-identical to one made before
+    # the field existed.
+    if series:
+        seal["series_commit"] = series
     dump_canonical(seal, a.out, rows)
     return 0
 

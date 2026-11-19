@@ -1,3 +1,25 @@
+// Juggler is not a chrome package, and every URL that loads it names a file the
+// build installs.
+//
+// A page can tell whether the browser registers a chrome package of a given
+// name: the parent sends every registered package to each content process, and
+// `new Worker("chrome://<name>/...")` returns for a registered name and throws
+// SecurityError at once for an absent one. Until firefox-47 every build
+// registered `juggler` (jar.mn, `% content juggler %content/`), and from
+// 2026-10-06 the challenge scripts of studied systems probed it: one such worker
+// script runs `new Worker("chrome://juggler/content/content/WorkerMain.js")`
+// (another anti-detect Firefox fork, #847), and a solved challenge was refused on our build while retail passed
+// (invisible_playwright #336). Measured from a page on firefox-46, 2026-10-14:
+// of the 65 chrome packages and resource substitutions the build registers,
+// `juggler` was the one retail does not.
+//
+// Juggler now loads from resource://gre/modules/juggler/, a namespace every
+// Firefox registers, inside which a page cannot tell which files exist. This
+// test bounds both sides: nothing registers or names the chrome package, and
+// each resource URL in the tree is one moz.build installs, so a typo is caught
+// here and not as a browser that cannot be driven.
+//
+// Run: node --test juggler/tests/*.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +32,7 @@ const TREE = path.join(JUGGLER, '..');
 const PREFIX = 'resource://gre/modules/juggler/';
 // Outside juggler/, the files that load a Juggler module.
 const LOADERS_OUTSIDE = [
-  'toolkit/components/telemetry/app/TelemetrySend.sys.mjs',
+  'toolkit/components/telemetry/app/StealthPingsender.sys.mjs',
   'toolkit/components/telemetry/pings/BackgroundTask_pingsender.sys.mjs',
 ];
 
@@ -81,11 +103,16 @@ test('every juggler resource URL names a file the build installs', () => {
 
 test('the stack filter skips the prefix the build installs under', () => {
   // js/src/vm/SavedStacks.cpp hides Juggler's frames from the stacks a page
-  // reads by their source URL's prefix. When the install path moves and the
-  // literal does not, every Juggler frame shows up in Error.stack again.
+  // reads by their source URL's prefix, through its hook into
+  // js/src/vm/StealthStackFrames.h, which holds the literal. When the install
+  // path moves and the literal does not, every Juggler frame shows up in
+  // Error.stack again.
   const cpp = fs.readFileSync(path.join(TREE, 'js/src/vm/SavedStacks.cpp'), 'utf8');
-  const literal = cpp.match(/kJuggler\[\]\s*=\s*"([^"]+)"/);
-  assert.ok(literal, 'SavedStacks.cpp no longer names the prefix in kJuggler');
+  assert.match(cpp, /#include "vm\/StealthStackFrames\.h"/,
+               'SavedStacks.cpp no longer includes the stack filter');
+  const header = fs.readFileSync(path.join(TREE, 'js/src/vm/StealthStackFrames.h'), 'utf8');
+  const literal = header.match(/kJuggler\[\]\s*=\s*"([^"]+)"/);
+  assert.ok(literal, 'StealthStackFrames.h no longer names the prefix in kJuggler');
   const build = fs.readFileSync(path.join(JUGGLER, 'moz.build'), 'utf8');
   assert.match(build, /FINAL_TARGET_FILES\.modules\.juggler\s*\+=/);
   // FINAL_TARGET_FILES.modules.juggler lands in dist/bin/modules/juggler,

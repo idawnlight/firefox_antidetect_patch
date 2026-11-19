@@ -1,3 +1,14 @@
+// A response says what certificate served it and whether a service worker
+// answered it, as upstream does.
+//
+// Since 2026-08-24 (B170) `securityDetails` was always null and
+// `fromServiceWorker` always false, to save parsing a certificate per response
+// and an observer: `response.security_details()` answered None over HTTPS and
+// `response.from_service_worker` False for what a service worker answered -
+// values, not refusals, so a script read them as true (B303 E15). The owner
+// chose upstream's behaviour on 2026-10-16.
+//
+// Run: node --test juggler/tests/*.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

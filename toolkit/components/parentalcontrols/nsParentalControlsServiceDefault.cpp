@@ -3,11 +3,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsParentalControlsService.h"
+#include "StealthParentalControls.h"  // STEALTH-HOOK(network/doh)
 #include "nsIFile.h"
 
 NS_IMPL_ISUPPORTS(nsParentalControlsService, nsIParentalControlsService)
 
 nsParentalControlsService::nsParentalControlsService() : mEnabled(false) {
+  if (StealthParentalControlsDeclared(&mEnabled)) { return; }  // STEALTH-HOOK(network/doh)
   (void)mEnabled;
 }
 

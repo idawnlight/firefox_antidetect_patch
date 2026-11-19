@@ -17,7 +17,7 @@ use crate::{
     arena::{Handle, HandleVec, UniqueArena},
     back::spv::{
         helpers::{is_uniform_matcx2_struct_member_access, BindingDecorations},
-        BindingInfo, Std140CompatTypeInfo, WrappedFunction,
+        BindingInfo, ExternalTexture, Std140CompatTypeInfo, WrappedFunction,
     },
     common::ForDebugWithTypes as _,
     proc::{Alignment, TypeResolution},
@@ -106,6 +106,7 @@ impl Writer {
             constant_ids: HandleVec::new(),
             cached_constants: crate::FastHashMap::default(),
             global_variables: HandleVec::new(),
+            external_textures: crate::FastHashMap::default(),
             std140_compat_uniform_types: crate::FastHashMap::default(),
             fake_missing_bindings: options.fake_missing_bindings,
             binding_map: options.binding_map.clone(),
@@ -205,6 +206,7 @@ impl Writer {
             constant_ids: take(&mut self.constant_ids).reclaim(),
             cached_constants: take(&mut self.cached_constants).reclaim(),
             global_variables: take(&mut self.global_variables).reclaim(),
+            external_textures: take(&mut self.external_textures).reclaim(),
             std140_compat_uniform_types: take(&mut self.std140_compat_uniform_types).reclaim(),
             saved_cached: take(&mut self.saved_cached).reclaim(),
             temp_list: take(&mut self.temp_list).reclaim(),
@@ -382,6 +384,14 @@ impl Writer {
         self.get_type_id(LocalType::Numeric(numeric).into())
     }
 
+    pub(super) fn get_vector_type_id(
+        &mut self,
+        size: crate::VectorSize,
+        scalar: crate::Scalar,
+    ) -> Word {
+        self.get_numeric_type_id(NumericType::Vector { size, scalar })
+    }
+
     pub(super) fn get_u32_type_id(&mut self) -> Word {
         self.get_numeric_type_id(NumericType::Scalar(crate::Scalar::U32))
     }
@@ -534,6 +544,7 @@ impl Writer {
                 descriptor_set: res_binding.group,
                 binding: res_binding.binding,
                 binding_array_size: None,
+                external_texture: false,
             }),
             None => Err(Error::MissingBinding(*res_binding)),
         }
@@ -548,6 +559,8 @@ impl Writer {
         ir_module: &crate::Module,
     ) -> Result<(), Error> {
         log::trace!("Generating wrapped functions for {:?}", ir_function.name);
+
+        let mut uses_external_texture_params = false;
 
         for (expr_handle, expr) in ir_function.expressions.iter() {
             match *expr {
@@ -633,8 +646,54 @@ impl Writer {
                         }
                     }
                 }
+                crate::Expression::ImageQuery {
+                    image,
+                    query: crate::ImageQuery::Size { .. },
+                } if info[image]
+                    .ty
+                    .inner_with(&ir_module.types)
+                    .is_external_image() =>
+                {
+                    self.write_external_texture_size_query(ir_module)?;
+                    uses_external_texture_params = true;
+                }
+                crate::Expression::ImageLoad { image, .. }
+                    if info[image]
+                        .ty
+                        .inner_with(&ir_module.types)
+                        .is_external_image() =>
+                {
+                    self.write_external_texture_image_load(ir_module)?;
+                    uses_external_texture_params = true;
+                }
+                crate::Expression::ImageSample { image, .. }
+                    if info[image]
+                        .ty
+                        .inner_with(&ir_module.types)
+                        .is_external_image() =>
+                {
+                    self.write_external_texture_image_sample(ir_module)?;
+                    uses_external_texture_params = true;
+                }
                 _ => {}
             }
+        }
+
+        // The prelude of a function that uses an external texture global
+        // converts its parameters from the std140-compatible type, even if the
+        // function only passes the texture on to other functions.
+        uses_external_texture_params |= ir_module
+            .global_variables
+            .iter()
+            .any(|(handle, var)| {
+                !info[handle].is_empty() && ir_module.types[var.ty].inner.is_external_image()
+            });
+
+        if uses_external_texture_params {
+            self.write_wrapped_convert_from_std140_compat_type(
+                ir_module,
+                ir_module.special_types.external_texture_params.unwrap(),
+            )?;
         }
 
         Ok(())
@@ -676,53 +735,27 @@ impl Writer {
             left_type_id,
             right_type_id,
         };
-        let function_id = match self.wrapped_functions.entry(wrapped) {
-            Entry::Occupied(_) => return Ok(()),
-            Entry::Vacant(e) => *e.insert(self.id_gen.next()),
+        if self.wrapped_functions.contains_key(&wrapped) {
+            return Ok(());
+        }
+
+        let function_name = match op {
+            crate::BinaryOperator::Divide => "naga_div",
+            crate::BinaryOperator::Modulo => "naga_mod",
+            _ => unreachable!(),
         };
 
-        let scalar = return_type.scalar();
-
-        if self.flags.contains(WriterFlags::DEBUG) {
-            let function_name = match op {
-                crate::BinaryOperator::Divide => "naga_div",
-                crate::BinaryOperator::Modulo => "naga_mod",
-                _ => unreachable!(),
-            };
-            self.debugs
-                .push(Instruction::name(function_id, function_name));
-        }
-        let mut function = Function::default();
-
-        let function_type_id = self.get_function_type(LookupFunctionType {
-            parameter_type_ids: vec![left_type_id, right_type_id],
+        let (mut function, [lhs_id, rhs_id]) = self.write_wrapped_function_signature(
+            wrapped,
+            function_name,
+            &[(left_type_id, "lhs"), (right_type_id, "rhs")],
             return_type_id,
-        });
-        function.signature = Some(Instruction::function(
-            return_type_id,
-            function_id,
-            spirv::FunctionControl::empty(),
-            function_type_id,
-        ));
-
-        let lhs_id = self.id_gen.next();
-        let rhs_id = self.id_gen.next();
-        if self.flags.contains(WriterFlags::DEBUG) {
-            self.debugs.push(Instruction::name(lhs_id, "lhs"));
-            self.debugs.push(Instruction::name(rhs_id, "rhs"));
-        }
-        let left_par = Instruction::function_parameter(left_type_id, lhs_id);
-        let right_par = Instruction::function_parameter(right_type_id, rhs_id);
-        for instruction in [left_par, right_par] {
-            function.parameters.push(FunctionArgument {
-                instruction,
-                handle_id: 0,
-            });
-        }
+        );
 
         let label_id = self.id_gen.next();
         let mut block = Block::new(label_id);
 
+        let scalar = return_type.scalar();
         let bool_type = return_type.with_scalar(crate::Scalar::BOOL);
         let bool_type_id = self.get_numeric_type_id(bool_type);
 
@@ -887,35 +920,18 @@ impl Writer {
         }
         // Check if we've already emitted this function.
         let wrapped = WrappedFunction::ConvertFromStd140CompatType { r#type };
-        let function_id = match self.wrapped_functions.entry(wrapped) {
-            Entry::Occupied(_) => return Ok(()),
-            Entry::Vacant(e) => *e.insert(self.id_gen.next()),
-        };
-        if self.flags.contains(WriterFlags::DEBUG) {
-            self.debugs.push(Instruction::name(
-                function_id,
-                &format!("{:?}_from_std140", r#type.for_debug(&ir_module.types)),
-            ));
+        if self.wrapped_functions.contains_key(&wrapped) {
+            return Ok(());
         }
-        let param_type_id = self.std140_compat_uniform_types[&r#type].type_id;
+
         let return_type_id = self.get_handle_type_id(r#type);
 
-        let mut function = Function::default();
-        let function_type_id = self.get_function_type(LookupFunctionType {
-            parameter_type_ids: vec![param_type_id],
+        let (mut function, [param_id]) = self.write_wrapped_function_signature(
+            wrapped,
+            &format!("{:?}_from_std140", r#type.for_debug(&ir_module.types)),
+            &[(self.std140_compat_uniform_types[&r#type].type_id, "value")],
             return_type_id,
-        });
-        function.signature = Some(Instruction::function(
-            return_type_id,
-            function_id,
-            spirv::FunctionControl::empty(),
-            function_type_id,
-        ));
-        let param_id = self.id_gen.next();
-        function.parameters.push(FunctionArgument {
-            instruction: Instruction::function_parameter(param_type_id, param_id),
-            handle_id: 0,
-        });
+        );
 
         let label_id = self.id_gen.next();
         let mut block = Block::new(label_id);
@@ -1119,15 +1135,8 @@ impl Writer {
         r#type: Handle<crate::Type>,
     ) -> Result<(), Error> {
         let wrapped = WrappedFunction::MatCx2GetColumn { r#type };
-        let function_id = match self.wrapped_functions.entry(wrapped) {
-            Entry::Occupied(_) => return Ok(()),
-            Entry::Vacant(e) => *e.insert(self.id_gen.next()),
-        };
-        if self.flags.contains(WriterFlags::DEBUG) {
-            self.debugs.push(Instruction::name(
-                function_id,
-                &format!("{:?}_get_column", r#type.for_debug(&ir_module.types)),
-            ));
+        if self.wrapped_functions.contains_key(&wrapped) {
+            return Ok(());
         }
 
         let crate::TypeInner::Matrix {
@@ -1139,33 +1148,19 @@ impl Writer {
             unreachable!();
         };
 
-        let mut function = Function::default();
         let matrix_type_id = self.get_handle_type_id(r#type);
         let column_index_type_id = self.get_u32_type_id();
         let column_type_id = self.get_numeric_type_id(NumericType::Vector { size: rows, scalar });
-        let matrix_param_id = self.id_gen.next();
-        let column_index_param_id = self.id_gen.next();
-        function.parameters.push(FunctionArgument {
-            instruction: Instruction::function_parameter(matrix_type_id, matrix_param_id),
-            handle_id: 0,
-        });
-        function.parameters.push(FunctionArgument {
-            instruction: Instruction::function_parameter(
-                column_index_type_id,
-                column_index_param_id,
-            ),
-            handle_id: 0,
-        });
-        let function_type_id = self.get_function_type(LookupFunctionType {
-            parameter_type_ids: vec![matrix_type_id, column_index_type_id],
-            return_type_id: column_type_id,
-        });
-        function.signature = Some(Instruction::function(
-            column_type_id,
-            function_id,
-            spirv::FunctionControl::empty(),
-            function_type_id,
-        ));
+        let (mut function, [matrix_param_id, column_index_param_id]) = self
+            .write_wrapped_function_signature(
+                wrapped,
+                &format!("{:?}_get_column", r#type.for_debug(&ir_module.types)),
+                &[
+                    (matrix_type_id, "matrix"),
+                    (column_index_type_id, "column_index"),
+                ],
+                column_type_id,
+            );
 
         let label_id = self.id_gen.next();
         let mut block = Block::new(label_id);
@@ -1359,6 +1354,22 @@ impl Writer {
                 };
                 ep_context.argument_ids.push(id);
             } else {
+                function
+                    .parameter_offsets
+                    .push(function.parameters.len() as u32);
+                if ir_module.types[argument.ty].inner.is_external_image() {
+                    // An external texture is a single logical argument, but it
+                    // is passed as four SPIR-V parameters: three planes and a
+                    // parameters buffer.
+                    self.write_external_texture_function_parameters(
+                        &mut function,
+                        &mut parameter_type_ids,
+                        argument.ty,
+                        argument.name.as_deref(),
+                        ir_module,
+                    )?;
+                    continue;
+                }
                 let argument_id = self.id_gen.next();
                 let instruction = Instruction::function_parameter(argument_type_id, argument_id);
                 if self.flags.contains(WriterFlags::DEBUG) {
@@ -1550,8 +1561,65 @@ impl Writer {
         for gv in self.global_variables.iter_mut() {
             gv.reset_for_function();
         }
+        for external_texture in self.external_textures.values_mut() {
+            external_texture.reset_for_function();
+        }
         for (handle, var) in ir_module.global_variables.iter() {
             if info[handle].is_empty() {
+                continue;
+            }
+
+            if ir_module.types[var.ty].inner.is_external_image() {
+                // External textures are lowered to separate plane and
+                // parameter globals held in `external_textures`; the dummy
+                // entry in `global_variables` must not be processed here.
+                if let Some(ref mut iface) = interface {
+                    if self.physical_layout.version >= 0x10400 {
+                        let external_texture = &self.external_textures[&handle];
+                        for plane in &external_texture.planes {
+                            iface.varying_ids.push(plane.var_id);
+                        }
+                        iface.varying_ids.push(external_texture.params.var_id);
+                    }
+                }
+                // TODO: ideally we would lower this in a way that enables handling
+                // them the same as regular globals
+                let params_ty = ir_module.special_types.external_texture_params.unwrap();
+                let params_type_id = self.get_handle_type_id(params_ty);
+                let params_std140_type_id = self.std140_compat_uniform_types[&params_ty].type_id;
+                let params_std140_pointer_type_id = self.get_pointer_type_id(params_std140_type_id, spirv::StorageClass::Uniform);
+                let index_id = self.get_index_constant(0);
+                // The planes are passed to the helper functions and to other
+                // functions as pointers (their `var_id`s), so nothing is loaded
+                // for them here.
+                let external_texture = self.external_textures.get_mut(&handle).unwrap();
+                let params_std140_pointer_id = self.id_gen.next();
+                prelude.body.push(Instruction::access_chain(
+                    params_std140_pointer_type_id,
+                    params_std140_pointer_id,
+                    external_texture.params.var_id,
+                    &[index_id],
+                ));
+
+                let params_std140_value_id = self.id_gen.next();
+                prelude
+                    .body
+                    .push(Instruction::load(params_std140_type_id, params_std140_value_id, params_std140_pointer_id, None));
+
+                let params_value_id = self.id_gen.next();
+                prelude.body.push(Instruction::function_call(
+                    params_type_id,
+                    params_value_id,
+                    self.wrapped_functions[
+                        &WrappedFunction::ConvertFromStd140CompatType {
+                            r#type: params_ty,
+                        }
+                    ],
+                    &[params_std140_value_id],
+                ));
+
+                external_texture.params.access_id = params_std140_pointer_id;
+                external_texture.params.handle_id = params_value_id;
                 continue;
             }
 
@@ -1578,7 +1646,8 @@ impl Writer {
                             .push(Instruction::load(var_type_id, id, gv.var_id, None));
                         gv.access_id = gv.var_id;
                         gv.handle_id = id;
-                    } else if global_needs_wrapper(ir_module, var) {
+                    } else if global_needs_wrapper(ir_module, var.space, LookupType::Handle(var.ty))
+                    {
                         let class = map_storage_class(var.space);
                         let pointer_type_id = match self.std140_compat_uniform_types.get(&var.ty) {
                             Some(std140_type_info) if var.space == crate::AddressSpace::Uniform => {
@@ -2037,7 +2106,7 @@ impl Writer {
                         self.request_image_format_capabilities(format.into())?;
                         false
                     }
-                    crate::ImageClass::External => unimplemented!(),
+                    crate::ImageClass::External => true,
                 };
 
                 match dim {
@@ -3472,50 +3541,73 @@ impl Writer {
         }
     }
 
+    /// Write a global variable.
+    ///
+    /// `binding` should be used instead of `global_variable.binding` in this function.
+    /// Normally, `binding` is the result of `resolve_resource_binding` for the global's
+    /// binding, but external textures are a special case.
+    /// The arguments following `ir_module` roughly correspond to the members of
+    /// [`crate::ir::GlobalVariable`].
+    ///  - `binding` is normally the result of `resolve_resource_binding` with the original
+    ///    global's binding, but for external textures, bindings are computed manually for
+    ///    each of the components.
+    ///  - In the case of the planes of an external texture, `ty` is [`LookupType::Local`],
+    ///    because the planes' image type may not be present in the module.
+    #[allow(clippy::too_many_arguments)]
     fn write_global_variable(
         &mut self,
         ir_module: &crate::Module,
-        global_variable: &crate::GlobalVariable,
+        name: Option<String>,
+        space: crate::AddressSpace,
+        binding: Option<BindingInfo>,
+        ty: LookupType,
+        init: Option<Handle<crate::Expression>>,
+        memory_decorations: crate::MemoryDecorations,
     ) -> Result<Word, Error> {
         use spirv::Decoration;
 
         let id = self.id_gen.next();
-        let class = map_storage_class(global_variable.space);
+        let class = map_storage_class(space);
 
-        if let crate::AddressSpace::RayPayload | crate::AddressSpace::IncomingRayPayload =
-            global_variable.space
-        {
+        // When `ty` refers to a type in the module's arena, this is its handle.
+        // For synthesized types (such as the planes of an external texture) it
+        // is `None`, and the code paths that inspect the module's type arena are
+        // not reachable.
+        let ty_handle = match ty {
+            LookupType::Handle(handle) => Some(handle),
+            LookupType::Local(_) => None,
+        };
+
+        if let crate::AddressSpace::RayPayload | crate::AddressSpace::IncomingRayPayload = space {
             self.require_any("ray tracing pipelines", &[spirv::Capability::RayTracingKHR])?;
         }
 
         //self.check(class.required_capabilities())?;
 
-        if global_variable
-            .memory_decorations
-            .contains(crate::MemoryDecorations::COHERENT)
-        {
+        // We may be called for one of the components of an external texture, but
+        // not for the external texture itself.
+        assert!(ty_handle.is_none_or(|ty| !ir_module.types[ty].inner.is_external_image()));
+
+        if memory_decorations.contains(crate::MemoryDecorations::COHERENT) {
             self.decorate(id, Decoration::Coherent, &[]);
         }
-        if global_variable
-            .memory_decorations
-            .contains(crate::MemoryDecorations::VOLATILE)
-        {
+        if memory_decorations.contains(crate::MemoryDecorations::VOLATILE) {
             self.decorate(id, Decoration::Volatile, &[]);
         }
 
         if self.flags.contains(WriterFlags::DEBUG) {
-            if let Some(ref name) = global_variable.name {
+            if let Some(ref name) = name {
                 self.debugs.push(Instruction::name(id, name));
             }
         }
 
-        let storage_access = match global_variable.space {
+        let storage_access = match space {
             crate::AddressSpace::Storage { access } => Some(access),
-            _ => match ir_module.types[global_variable.ty].inner {
-                crate::TypeInner::Image {
+            _ => match ty_handle.map(|ty| &ir_module.types[ty].inner) {
+                Some(&crate::TypeInner::Image {
                     class: crate::ImageClass::Storage { access, .. },
                     ..
-                } => Some(access),
+                }) => Some(access),
                 _ => None,
             },
         };
@@ -3532,14 +3624,14 @@ impl Writer {
         // but there is still code that tries to register the pre-substituted type,
         // and it is failing on 0.
         let mut substitute_inner_type_lookup = None;
-        if let Some(ref res_binding) = global_variable.binding {
-            let bind_target = self.resolve_resource_binding(res_binding)?;
+        if let Some(bind_target) = binding {
             self.decorate(id, Decoration::DescriptorSet, &[bind_target.descriptor_set]);
             self.decorate(id, Decoration::Binding, &[bind_target.binding]);
 
-            if let Some(remapped_binding_array_size) = bind_target.binding_array_size {
-                if let crate::TypeInner::BindingArray { base, .. } =
-                    ir_module.types[global_variable.ty].inner
+            if let Some(remapped_binding_array_size) = bind_target.binding_array_size
+            {
+                if let Some(&crate::TypeInner::BindingArray { base, .. }) =
+                    ty_handle.map(|ty| &ir_module.types[ty].inner)
                 {
                     let binding_array_type_id =
                         self.get_type_id(LookupType::Local(LocalType::BindingArray {
@@ -3554,21 +3646,22 @@ impl Writer {
             }
         };
 
-        let init_word = global_variable
-            .init
-            .map(|constant| self.constant_ids[constant]);
-        let inner_type_id = self.get_type_id(
-            substitute_inner_type_lookup.unwrap_or(LookupType::Handle(global_variable.ty)),
-        );
+        let init_word = init.map(|constant| self.constant_ids[constant]);
+        let inner_type_id = self.get_type_id(substitute_inner_type_lookup.unwrap_or(ty));
 
         // generate the wrapping structure if needed
-        let pointer_type_id = if global_needs_wrapper(ir_module, global_variable) {
+        let pointer_type_id = if global_needs_wrapper(ir_module, space, ty) {
             let wrapper_type_id = self.id_gen.next();
 
             self.decorate(wrapper_type_id, Decoration::Block, &[]);
 
-            match self.std140_compat_uniform_types.get(&global_variable.ty) {
-                Some(std140_type_info) if global_variable.space == crate::AddressSpace::Uniform => {
+            // A global only needs a wrapper if it is in the `Uniform`, `Storage`,
+            // or `Immediate` address space, which is never the case for the
+            // synthesized types passed for external textures, so `ty` refers to a
+            // type in the module's arena here.
+            let ty = ty_handle.expect("wrapped globals must use a type from the arena");
+            match self.std140_compat_uniform_types.get(&ty) {
+                Some(std140_type_info) if space == crate::AddressSpace::Uniform => {
                     self.annotations.push(Instruction::member_decorate(
                         wrapper_type_id,
                         0,
@@ -3581,7 +3674,7 @@ impl Writer {
                 _ => {
                     let member = crate::StructMember {
                         name: None,
-                        ty: global_variable.ty,
+                        ty,
                         binding: None,
                         offset: 0,
                     };
@@ -3603,9 +3696,9 @@ impl Writer {
             // a runtime-sized or binding array.
             // Runtime-sized arrays were decorated when iterating through struct content.
             // Now binding arrays require Block decorating.
-            if let crate::AddressSpace::Storage { .. } = global_variable.space {
-                match ir_module.types[global_variable.ty].inner {
-                    crate::TypeInner::BindingArray { base, .. } => {
+            if let crate::AddressSpace::Storage { .. } = space {
+                match ty_handle.map(|ty| &ir_module.types[ty].inner) {
+                    Some(&crate::TypeInner::BindingArray { base, .. }) => {
                         let ty = &ir_module.types[base];
                         let mut should_decorate = true;
                         // Check if the type has a runtime array.
@@ -3634,11 +3727,14 @@ impl Writer {
             if substitute_inner_type_lookup.is_some() {
                 inner_type_id
             } else {
-                self.get_handle_pointer_type_id(global_variable.ty, class)
+                // `inner_type_id` is the id of `ty`, so a pointer to it is the
+                // pointer type we need, whether `ty` is a handle or a synthesized
+                // local type.
+                self.get_pointer_type_id(inner_type_id, class)
             }
         };
 
-        let init_word = match (global_variable.space, self.zero_initialize_workgroup_memory) {
+        let init_word = match (space, self.zero_initialize_workgroup_memory) {
             (crate::AddressSpace::Private, _)
             | (crate::AddressSpace::WorkGroup, super::ZeroInitializeWorkgroupMemoryMode::Native) => {
                 init_word.or_else(|| Some(self.get_constant_null(inner_type_id)))
@@ -3649,6 +3745,134 @@ impl Writer {
         Instruction::variable(pointer_type_id, id, class, init_word)
             .to_words(&mut self.logical_layout.declarations);
         Ok(id)
+    }
+
+    fn write_global_external_texture(
+        &mut self,
+        ir_module: &crate::Module,
+        global_variable: &crate::GlobalVariable,
+    ) -> Result<ExternalTexture, Error> {
+        let binding = match global_variable.binding {
+            None => None,
+            Some(ref res_binding) => Some(match self.binding_map.get(res_binding) {
+                Some(info) if info.external_texture => *info,
+                Some(_) => return Err(Error::ExternalTextureBindingMismatch(*res_binding)),
+                None if self.fake_missing_bindings => BindingInfo {
+                    descriptor_set: res_binding.group,
+                    binding: res_binding.binding,
+                    binding_array_size: None,
+                    external_texture: true,
+                },
+                None => return Err(Error::MissingBinding(*res_binding)),
+            }),
+        };
+
+        // Write three globals for the planes
+        let plane_ty = LookupType::Local(LocalType::EXTERNAL_TEXTURE_PLANE);
+        let planes: [_; 3] = core::array::from_fn(|i| i).map(|i| {
+            self.write_global_variable(
+                ir_module,
+                None,
+                crate::AddressSpace::Handle,
+                binding.map(|b| BindingInfo {
+                    descriptor_set: b.descriptor_set,
+                    binding: b.binding + i as u32,
+                    binding_array_size: None,
+                    external_texture: false,
+                }),
+                plane_ty,
+                None,
+                Default::default(),
+            )
+        });
+        // ...and one global for the parameters buffer. We pass a regular type handle.
+        //  `write_global_variable` looks up the std140 compat type.
+        let params = self.write_global_variable(
+            ir_module,
+            None,
+            crate::AddressSpace::Uniform,
+            binding.map(|b| BindingInfo {
+                descriptor_set: b.descriptor_set,
+                binding: b.binding + 3,
+                binding_array_size: None,
+                external_texture: false,
+            }),
+            LookupType::Handle(ir_module.special_types.external_texture_params.unwrap()),
+            None,
+            Default::default(),
+        )?;
+
+        let [plane0, plane1, plane2] = planes;
+        Ok(ExternalTexture {
+            planes: [
+                GlobalVariable::new(plane0?),
+                GlobalVariable::new(plane1?),
+                GlobalVariable::new(plane2?),
+            ],
+            params: GlobalVariable::new(params),
+        })
+    }
+
+    /// Emit the SPIR-V function parameters for an external texture argument.
+    ///
+    /// A `texture_external` is a single logical function argument, but it is
+    /// lowered to four SPIR-V parameters: three plane textures followed by the
+    /// parameters buffer. The planes are passed as `UniformConstant` pointers,
+    /// like any other texture argument, and the parameters buffer is passed by
+    /// value.
+    fn write_external_texture_function_parameters(
+        &mut self,
+        function: &mut Function,
+        parameter_type_ids: &mut Vec<Word>,
+        ty: Handle<crate::Type>,
+        name: Option<&str>,
+        ir_module: &crate::Module,
+    ) -> Result<(), Error> {
+        // Each plane is an ordinary 2D sampled float texture.
+        let plane_pointer_type_id =
+            self.get_handle_pointer_type_id(ty, spirv::StorageClass::UniformConstant);
+        for plane in 0..3 {
+            let argument_id = self.id_gen.next();
+            let instruction = Instruction::function_parameter(plane_pointer_type_id, argument_id);
+            if self.flags.contains(WriterFlags::DEBUG) {
+                if let Some(name) = name {
+                    self.debugs.push(Instruction::name(
+                        argument_id,
+                        &format!("{name}_plane{plane}"),
+                    ));
+                }
+            }
+            // External texture parameters are used through
+            // `get_external_texture_plane_id` and
+            // `get_external_texture_params_id`, never through `handle_id`.
+            function.parameters.push(FunctionArgument {
+                instruction,
+                handle_id: 0,
+            });
+            parameter_type_ids.push(plane_pointer_type_id);
+        }
+
+        let params_type_id = self.get_handle_type_id(
+            ir_module
+                .special_types
+                .external_texture_params
+                .expect("external textures should have generated a parameters type"),
+        );
+        let argument_id = self.id_gen.next();
+        let instruction = Instruction::function_parameter(params_type_id, argument_id);
+        if self.flags.contains(WriterFlags::DEBUG) {
+            if let Some(name) = name {
+                self.debugs
+                    .push(Instruction::name(argument_id, &format!("{name}_params")));
+            }
+        }
+        function.parameters.push(FunctionArgument {
+            instruction,
+            handle_id: 0,
+        });
+        parameter_type_ids.push(params_type_id);
+
+        Ok(())
     }
 
     /// Write the necessary decorations for a struct member.
@@ -3846,6 +4070,9 @@ impl Writer {
                 self.write_std140_compat_type_declaration(ir_module, var.ty)?;
             }
         }
+        if let Some(ty) = ir_module.special_types.external_texture_params {
+            self.write_std140_compat_type_declaration(ir_module, ty)?;
+        }
 
         // write all const-expressions as constants
         self.constant_ids
@@ -3870,16 +4097,41 @@ impl Writer {
             // If a single entry point was specified, only write `OpVariable` instructions
             // for the globals it actually uses. Emit dummies for the others,
             // to preserve the indices in `global_variables`.
-            let gvar = match ep_index {
+            match ep_index {
                 Some(index) if mod_info.get_entry_point(index)[handle].is_empty() => {
-                    GlobalVariable::dummy()
+                    self.global_variables
+                        .insert(handle, GlobalVariable::dummy());
                 }
                 _ => {
-                    let id = self.write_global_variable(ir_module, var)?;
-                    GlobalVariable::new(id)
+                    if ir_module.types[ir_module.global_variables[handle].ty]
+                        .inner
+                        .is_external_image()
+                    {
+                        // External textures become multiple globals, so are stored separately.
+                        self.global_variables
+                            .insert(handle, GlobalVariable::dummy());
+                        let info = self.write_global_external_texture(ir_module, var)?;
+                        self.external_textures.insert(handle, info);
+                    } else {
+                        let binding = var
+                            .binding
+                            .as_ref()
+                            .map(|b| self.resolve_resource_binding(b))
+                            .transpose()?;
+                        let id = self.write_global_variable(
+                            ir_module,
+                            var.name.clone(),
+                            var.space,
+                            binding,
+                            LookupType::Handle(var.ty),
+                            var.init,
+                            var.memory_decorations,
+                        )?;
+                        self.global_variables
+                            .insert(handle, GlobalVariable::new(id));
+                    }
                 }
-            };
-            self.global_variables.insert(handle, gvar);
+            }
         }
 
         // write all functions

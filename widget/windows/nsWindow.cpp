@@ -53,6 +53,7 @@
  **************************************************************/
 
 #include "nsWindow.h"
+#include "StealthFullscreenWin.h"  // STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 #include <appmodel.h>
 #include <commctrl.h>
@@ -5808,6 +5809,7 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
                    std::max((int32_t)mmi->ptMinTrackSize.y, minH));
       mmi->ptMaxTrackSize.x = std::min((int32_t)mmi->ptMaxTrackSize.x, maxW);
       mmi->ptMaxTrackSize.y = std::min((int32_t)mmi->ptMaxTrackSize.y, maxH);
+      mozilla::widget::StealthDeclaredFullscreenTrackSize(*this, mFrameState->GetSizeMode() == nsSizeMode_Fullscreen, mmi);  // STEALTH-HOOK(fingerprint/screen-window/geometry)
     } break;
 
     case WM_SETFOCUS: {
@@ -6677,6 +6679,7 @@ void nsWindow::OnWindowPosChanging(WINDOWPOS* info) {
       }
     }
   }
+  mozilla::widget::StealthHoldDeclaredFullscreen(*this, mFrameState->GetSizeMode() == nsSizeMode_Fullscreen, info);  // STEALTH-HOOK(fingerprint/screen-window/geometry)
 
   // When waking from sleep or switching out of tablet mode, Windows 10
   // Version 1809 will reopen popup windows that should be hidden. Detect

@@ -9,6 +9,7 @@
 #include "transport/dtlsidentity.h"
 #include "transport/nricemediastream.h"
 #include "transport/nriceresolver.h"
+#include "transport/StealthIceResolverContext.h"  // STEALTH-HOOK(network/doh)
 #include "transport/sigslot.h"
 #include "transport/transportflow.h"
 #include "transport/transportlayerdtls.h"
@@ -946,6 +947,7 @@ void MediaTransportImplNicer::SetProxyConfig(
     return;  // Probably due to XPCOM shutdown
   }
 
+  mDNSResolver->SetOriginAttributes(StealthIceResolverAttributes(aProxyConfig));  // STEALTH-HOOK(network/doh)
   mIceCtx->SetProxyConfig(std::move(aProxyConfig));
 }
 

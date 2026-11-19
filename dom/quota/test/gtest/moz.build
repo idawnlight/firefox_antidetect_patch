@@ -50,6 +50,7 @@ UNIFIED_SOURCES = [
     "TestThreadUtils.cpp",
     "TestUsageInfo.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthQuotaEstimate.cpp"]  # STEALTH-HOOK(fingerprint/hardware/storage-quota)
 
 IPDL_SOURCES += [
     "PQuotaTest.ipdl",

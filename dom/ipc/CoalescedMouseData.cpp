@@ -47,6 +47,8 @@ void CoalescedMouseData::Coalesce(const WidgetMouseEvent& aMouseOrPointerEvent,
     mCoalescedInputEvent->mTimeStamp = aMouseOrPointerEvent.mTimeStamp;
     mCoalescedInputEvent->mRefPoint = aMouseOrPointerEvent.mRefPoint;
     mCoalescedInputEvent->mPressure = aMouseOrPointerEvent.mPressure;
+    // Stealthfox [B217]: the coalesced event acks the LAST id folded into it,
+    // which is the one a caller waiting on "has my move landed" holds.
     mCoalescedInputEvent->mJugglerEventId =
         aMouseOrPointerEvent.mJugglerEventId;
     mCoalescedInputEvent->AssignPointerHelperData(aMouseOrPointerEvent);

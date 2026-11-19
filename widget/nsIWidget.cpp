@@ -55,6 +55,7 @@
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "mozilla/widget/ScreenManager.h"
+#include "StealthFullscreen.h"  // STEALTH-HOOK(fingerprint/screen-window/geometry)
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsBaseDragService.h"
 #include "nsCOMPtr.h"
@@ -861,6 +862,10 @@ void nsIWidget::InfallibleMakeFullScreen(bool aFullScreen) {
     nsCOMPtr<nsIScreen> screen = GetWidgetScreen();
     if (!screen) {
       return;
+    }
+    if (const auto declared = mozilla::widget::StealthDeclaredFullscreenRect(*this)) {  // STEALTH-HOOK(fingerprint/screen-window/geometry)
+      doReposition(*declared);
+      return void(mSavedBounds->screenRect = GetScreenBounds() / GetDesktopToDeviceScale());
     }
 
     // Move to fill the screen.

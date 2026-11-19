@@ -128,7 +128,9 @@ parent:
   async InitSocketBackground(Endpoint<PSocketProcessBackgroundParent> aEndpoint);
   async PAltService();
   async PProxyConfigLookup(nullable nsIURI aUri, uint32_t aFlags,
-                           bool aIsTRRServiceChannel);
+                           bool aIsTRRServiceChannel,
+                           LoadInfoArgs? aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+                           OriginAttributes? aOriginAttributes);  // STEALTH-HOOK(network/doh)
 
   async ExcludeHttp2OrHttp3(HttpConnectionInfoCloneArgs aArgs);
 
@@ -190,6 +192,11 @@ child:
                     nsCString[] aDNSSuffixList);
   async PNativeDNSResolverOverride();
   async NotifyObserver(nsCString aTopic, nsString aData);
+
+  // STEALTH-HOOK(network/proxy-udp)
+  // A SOCKS5 proxy the parent opened a connection to, whose UDP the session measured coherent: the pool of UDP associations of
+  // that proxy is made HERE, where the sockets of the PeerConnections are. Endpoint and credentials travel in this message only.
+  async StealthWarmSocksUdp(nsCString aHost, int32_t aPort, nsCString aUser, nsCString aPass);
 
   async GetSocketData()
     returns (SocketDataArgs data);

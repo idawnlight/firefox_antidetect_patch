@@ -840,6 +840,18 @@ pub struct SharedFontResources {
     pub instance_keys: FontInstanceKeyMap,
 }
 
+/// What `SharedFontResources::clear_namespace` took out, for the owner of a window's resource cache to
+/// remove from the glyph rasterizer and the glyph cache, which are not shared.
+#[derive(Default)]
+pub struct ClearedFonts {
+    /// The font keys of the namespace's own templates (not shared with another namespace).
+    pub local_font_keys: Vec<FontKey>,
+    /// The shared font keys that no namespace refers to any more.
+    pub shared_font_keys: Vec<FontKey>,
+    /// The shared font instance keys that no namespace refers to any more.
+    pub shared_instance_keys: Vec<FontInstanceKey>,
+}
+
 impl SharedFontResources {
     pub fn new(namespace: IdNamespace) -> Self {
         SharedFontResources {
@@ -848,6 +860,29 @@ impl SharedFontResources {
             font_keys: FontKeyMap::new(namespace),
             instance_keys: FontInstanceKeyMap::new(namespace),
         }
+    }
+
+    /// Takes everything a namespace put in the shared font resources out of them: its own templates and
+    /// instances, its mappings to shared keys, and the shared templates and instances that were left
+    /// with no mapping.
+    ///
+    /// This is the part of clearing a namespace that does not need a window: a namespace's fonts live here,
+    /// in the resources every window of a pool shares, and a namespace whose window was unregistered before
+    /// its `ClearNamespace` arrived has no resource cache to clear them through.
+    pub fn clear_namespace(&mut self, namespace: IdNamespace) -> ClearedFonts {
+        // First clear out any non-shared resources associated with the namespace.
+        self.instances.clear_namespace(namespace);
+        let local_font_keys = self.templates.clear_namespace(namespace);
+
+        // Then any shared instance keys that were remapped from the namespace.
+        let shared_instance_keys = self.instance_keys.clear_namespace(namespace);
+        self.instances.delete_font_instances(&shared_instance_keys);
+
+        // Finally any shared font keys that were remapped from the namespace.
+        let shared_font_keys = self.font_keys.clear_namespace(namespace);
+        self.templates.delete_fonts(&shared_font_keys);
+
+        ClearedFonts { local_font_keys, shared_font_keys, shared_instance_keys }
     }
 }
 
@@ -2242,5 +2277,63 @@ mod test_glyph_rasterizer {
         assert_eq!(SubpixelOffset::quantize(1.5), SubpixelOffset::Half);
         assert_eq!(SubpixelOffset::quantize(-1.625), SubpixelOffset::Half);
         assert_eq!(SubpixelOffset::quantize(-4.33), SubpixelOffset::ThreeQuarters);
+    }
+}
+
+#[cfg(test)]
+mod test_shared_fonts_clear_namespace {
+    use super::*;
+    use std::sync::Arc;
+
+    /// What a window's resource cache does when a font is added: map the key to a shared key
+    /// (one per distinct bytes), and store the template once.
+    fn add(fonts: &mut SharedFontResources, namespace: u32, id: u32, bytes: &[u8]) {
+        let key = FontKey::new(IdNamespace(namespace), id);
+        let template = FontTemplate::Raw(Arc::new(bytes.to_vec()), 0);
+        if let Some(shared) = fonts.font_keys.add_key(&key, &template) {
+            fonts.templates.add_font(shared, template);
+        }
+    }
+
+    #[test]
+    fn a_namespace_takes_its_fonts_out_of_the_shared_resources() {
+        let mut fonts = SharedFontResources::new(IdNamespace(0));
+        add(&mut fonts, 7, 1, b"font one");
+        add(&mut fonts, 7, 2, b"font two");
+        assert_eq!(fonts.templates.len(), 2);
+
+        let cleared = fonts.clear_namespace(IdNamespace(7));
+
+        assert_eq!(fonts.templates.len(), 0, "the templates of the namespace stay in the shared resources");
+        assert!(fonts.font_keys.keys().is_empty());
+        assert_eq!(cleared.shared_font_keys.len(), 2);
+    }
+
+    #[test]
+    fn a_font_two_namespaces_have_stays_until_the_last_one_is_cleared() {
+        let mut fonts = SharedFontResources::new(IdNamespace(0));
+        add(&mut fonts, 7, 1, b"the same bytes");
+        add(&mut fonts, 8, 1, b"the same bytes");
+        assert_eq!(fonts.templates.len(), 1, "the bytes are stored once");
+
+        let first = fonts.clear_namespace(IdNamespace(7));
+        assert_eq!(fonts.templates.len(), 1);
+        assert!(first.shared_font_keys.is_empty());
+
+        let last = fonts.clear_namespace(IdNamespace(8));
+        assert_eq!(fonts.templates.len(), 0);
+        assert_eq!(last.shared_font_keys.len(), 1);
+    }
+
+    #[test]
+    fn another_namespace_is_not_touched() {
+        let mut fonts = SharedFontResources::new(IdNamespace(0));
+        add(&mut fonts, 7, 1, b"font of seven");
+        add(&mut fonts, 8, 1, b"font of eight");
+
+        fonts.clear_namespace(IdNamespace(7));
+
+        assert_eq!(fonts.templates.len(), 1);
+        assert_eq!(fonts.font_keys.keys().len(), 1);
     }
 }

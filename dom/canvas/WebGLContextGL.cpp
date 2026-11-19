@@ -124,6 +124,8 @@ void WebGLContext::BlendEquationSeparate(Maybe<GLuint> i, GLenum modeRGB,
   }
 
   if (i) {
+    // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, maybe not enabled here
+    if (!IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed)) return;
     MOZ_RELEASE_ASSERT(
         IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed));
     const auto limit = MaxValidDrawBuffers();
@@ -205,6 +207,8 @@ void WebGLContext::BlendFuncSeparate(Maybe<GLuint> i, GLenum srcRGB,
     return;
 
   if (i) {
+    // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, maybe not enabled here
+    if (!IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed)) return;
     MOZ_RELEASE_ASSERT(
         IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed));
     const auto limit = MaxValidDrawBuffers();
@@ -1566,6 +1570,8 @@ void WebGLContext::PolygonOffsetClampEXT(const GLfloat factor,
                                          const GLfloat clamp) {
   const FuncScope funcScope(*this, "polygonOffsetClampEXT");
   if (IsContextLost()) return;
+  // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, maybe not enabled here
+  if (!IsExtensionEnabled(WebGLExtensionID::EXT_polygon_offset_clamp)) return;
   MOZ_RELEASE_ASSERT(
       IsExtensionEnabled(WebGLExtensionID::EXT_polygon_offset_clamp));
 
@@ -1575,6 +1581,8 @@ void WebGLContext::PolygonOffsetClampEXT(const GLfloat factor,
 void WebGLContext::ProvokingVertex(const webgl::ProvokingVertex mode) const {
   const FuncScope funcScope(*this, "provokingVertex");
   if (IsContextLost()) return;
+  // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, maybe not enabled here
+  if (!IsExtensionEnabled(WebGLExtensionID::WEBGL_provoking_vertex)) return;
   MOZ_RELEASE_ASSERT(
       IsExtensionEnabled(WebGLExtensionID::WEBGL_provoking_vertex));
 
@@ -1591,6 +1599,8 @@ void WebGLContext::SampleCoverage(GLclampf value, WebGLboolean invert) {
 void WebGLContext::ClipControlEXT(const GLenum origin, const GLenum depth) {
   const FuncScope funcScope(*this, "clipControlEXT");
   if (IsContextLost()) return;
+  // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, maybe not enabled here
+  if (!IsExtensionEnabled(WebGLExtensionID::EXT_clip_control)) return;
   MOZ_RELEASE_ASSERT(IsExtensionEnabled(WebGLExtensionID::EXT_clip_control));
 
   if (origin != LOCAL_GL_LOWER_LEFT && origin != LOCAL_GL_UPPER_LEFT) {

@@ -17,6 +17,7 @@
 #include "PositionedEventTargeting.h"
 #include "PresShellWidgetListener.h"
 #include "ScrollSnap.h"
+#include "StealthJugglerAck.h"  // STEALTH-HOOK(automation/input)
 #include "StickyScrollContainer.h"
 #include "Units.h"
 #include "VisualViewport.h"
@@ -7375,44 +7376,8 @@ nsresult PresShell::HandleEvent(nsIFrame* aFrameForPresShell,
   MOZ_ASSERT(aGUIEvent);
 
   RecordModifiers(aGUIEvent);
-
-  // Acknowledge only after dispatch and only once across nested shells.
-  const uint32_t jugglerEventId =
-      aGUIEvent->AsMouseEvent() ? aGUIEvent->AsMouseEvent()->mJugglerEventId
-                                : 0;
-  auto ackJugglerEvent = MakeScopeExit([&] {
-    if (!jugglerEventId || !aGUIEvent->AsMouseEvent() ||
-        aGUIEvent->AsMouseEvent()->mJugglerEventId != jugglerEventId) {
-      return;
-    }
-    const char* type = nullptr;
-    switch (aGUIEvent->mMessage) {
-      case eMouseMove:
-        type = "mousemove";
-        break;
-      case eMouseDown:
-        type = "mousedown";
-        break;
-      case eMouseUp:
-        type = "mouseup";
-        break;
-      case eContextMenu:
-        type = "contextmenu";
-        break;
-      default:
-        return;
-    }
-    aGUIEvent->AsMouseEvent()->mJugglerEventId = 0;
-    if (nsCOMPtr<nsIObserverService> os =
-            mozilla::services::GetObserverService()) {
-      nsAutoString info;
-      info.AppendASCII(type);
-      info.Append(' ');
-      info.AppendInt(jugglerEventId);
-      os->NotifyObservers(nullptr, "juggler-mouse-event-hit-renderer",
-                          info.get());
-    }
-  });
+  // STEALTH-HOOK(automation/input)
+  StealthJugglerMouseAck jugglerMouseAck(aGUIEvent);
 
   AutoWeakFrame weakFrameForPresShell(aFrameForPresShell);
 

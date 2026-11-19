@@ -22,6 +22,7 @@
 #include "mozilla/StaticPrefs_security.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/glean/SecurityManagerSslMetrics.h"
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "mozpkix/pkixtypes.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
@@ -277,6 +278,7 @@ OCSPRequest::Run() {
     OriginAttributes attrs;
     attrs.mFirstPartyDomain = mOriginAttributes.mFirstPartyDomain;
     attrs.mPrivateBrowsingId = mOriginAttributes.mPrivateBrowsingId;
+    mozilla::net::StealthKeepRequestContext(mOriginAttributes, attrs);  // STEALTH-HOOK(network/doh)
 
     rv = loadInfo->SetOriginAttributes(attrs);
     if (NS_FAILED(rv)) {

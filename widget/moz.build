@@ -325,6 +325,7 @@ SOURCES += [
     "nsIWidget.cpp",
     "ScreenManager.cpp",
 ]
+UNIFIED_SOURCES += ["StealthFullscreen.cpp"]  # STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 EXPORTS.ipc = [
     "nsGUIEventIPC.h",

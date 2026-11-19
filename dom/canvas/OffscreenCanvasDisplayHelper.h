@@ -78,11 +78,8 @@ class OffscreenCanvasDisplayHelper final {
   bool CanElementCaptureStream() const;
   bool UsingElementCaptureStream() const;
 
-  // The placeholder's pixels as a page reads them (with the canvas noise).
   already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshot();
-  // The placeholder's pixels as drawn: for the browser's own readers, which
-  // show the canvas and never hand its bytes to a page (the screen,
-  // -moz-element, the drag image, the taskbar preview).
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
   already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshotAsDrawn();
   already_AddRefed<mozilla::layers::Image> GetAsImage();
   UniquePtr<uint8_t[]> GetImageBuffer(
@@ -100,6 +97,8 @@ class OffscreenCanvasDisplayHelper final {
   already_AddRefed<gfx::SourceSurface> TransformSurface(
       gfx::SourceSurface* aSurface, bool aHasAlpha, bool aIsAlphaPremult,
       gl::OriginPos aOriginPos) const;
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  already_AddRefed<gfx::SourceSurface> StealthPageSnapshot();
 
   mutable Mutex mMutex;
   HTMLCanvasElement* MOZ_NON_OWNING_REF mCanvasElement MOZ_GUARDED_BY(mMutex);

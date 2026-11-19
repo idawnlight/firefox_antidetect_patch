@@ -746,8 +746,8 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
   return rv;
 }
 
-static nsresult PrepareAcceptLanguages(const char* aLanguages,
-                                       nsACString& aResult);
+static nsresult PrepareAcceptLanguages(const char* i_AcceptLanguages,
+                                       nsACString& o_AcceptLanguages);
 
 nsresult nsHttpHandler::AddStandardRequestHeaders(
     nsHttpRequestHead* request, nsIURI* aURI, bool aIsHTTPS,
@@ -787,14 +787,16 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
   if (NS_FAILED(rv)) return rv;
 
   if (!aLanguageOverride.IsEmpty()) {
+    // STEALTH-HOOK(fingerprint/locale-time/accept-language)
+    // The override is a language list, prepared like intl.accept_languages.
     nsAutoCString acceptLanguage;
     rv = PrepareAcceptLanguages(aLanguageOverride.get(), acceptLanguage);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
-                            nsHttpHeaderArray::eVarietyRequestOverride);
     if (NS_FAILED(rv)) return rv;
+    if (!acceptLanguage.IsEmpty()) {
+      rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
+                              nsHttpHeaderArray::eVarietyRequestOverride);
+      if (NS_FAILED(rv)) return rv;
+    }
   } else {
     // Add the "Accept-Language" header.  This header is also exposed to the
     // service worker.

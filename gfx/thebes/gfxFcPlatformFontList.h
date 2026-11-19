@@ -67,6 +67,7 @@ struct default_delete<FcObjectSet> {
 // defines versions of these, so use the verbose name for now.
 
 class gfxFontconfigFontEntry final : public gfxFT2FontEntryBase {
+  friend struct StealthFcAccess;  // STEALTH-HOOK(fingerprint/fonts/bundle)
   friend class gfxFcPlatformFontList;
 
  public:
@@ -79,8 +80,7 @@ class gfxFontconfigFontEntry final : public gfxFT2FontEntryBase {
   explicit gfxFontconfigFontEntry(const nsACString& aFaceName,
                                   WeightRange aWeight, WidthRange aWidth,
                                   SlantStyleRange aStyle,
-                                  RefPtr<mozilla::gfx::SharedFTFace>&& aFace,
-                                  const char* aFile = nullptr, int aIndex = 0);
+                                  RefPtr<mozilla::gfx::SharedFTFace>&& aFace);
 
   // used for @font-face local system fonts with explicit patterns
   explicit gfxFontconfigFontEntry(const nsACString& aFaceName,

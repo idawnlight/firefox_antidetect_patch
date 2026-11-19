@@ -301,6 +301,12 @@ NS_IMETHODIMP Http3ConnectUDPStream::SetMulticastInterfaceAddr(
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
+// STEALTH-HOOK(network/proxy-udp): nsIUDPSocket.setSocksProxy is for the sockets that leave by a SOCKS5 proxy; this stream
+// goes by its own HTTP proxy (CONNECT-UDP).
+NS_IMETHODIMP Http3ConnectUDPStream::SetSocksProxy(nsIProxyInfo* aProxyInfo) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
 NS_IMETHODIMP Http3ConnectUDPStream::GetRecvBufferSize(
     int32_t* aRecvBufferSize) {
   return NS_ERROR_NOT_IMPLEMENTED;

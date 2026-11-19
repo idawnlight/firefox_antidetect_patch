@@ -349,9 +349,9 @@ mozilla::UniquePtr<uint8_t[]> CanvasContext::GetImageBuffer(
   if (!snapshot) {
     return nullptr;
   }
-  // toDataURL/toBlob: the canvas noise, as every reader of a canvas reads it.
-  snapshot =
-      CanvasUtils::StealthProjectSnapshot(snapshot, true, PrincipalOrNull());
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  snapshot = CanvasUtils::StealthProjectSnapshot(snapshot, true,
+                                                 PrincipalOrNull());
 
   RefPtr<gfx::DataSourceSurface> dataSurface = snapshot->GetDataSurface();
   *out_imageSize = dataSurface->GetSize();
@@ -377,9 +377,9 @@ NS_IMETHODIMP CanvasContext::GetInputStream(
   if (!snapshot) {
     return NS_ERROR_FAILURE;
   }
-  // toDataURL/toBlob: the canvas noise, as every reader of a canvas reads it.
-  snapshot =
-      CanvasUtils::StealthProjectSnapshot(snapshot, true, PrincipalOrNull());
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  snapshot = CanvasUtils::StealthProjectSnapshot(snapshot, true,
+                                                 PrincipalOrNull());
 
   RefPtr<gfx::DataSourceSurface> dataSurface = snapshot->GetDataSurface();
 

@@ -281,6 +281,7 @@ class nsWindow : public nsIWidget {
                                    nsIRunnable* aCallback) override;
   already_AddRefed<mozilla::widget::Screen> GetWidgetScreen() override;
   nsresult MakeFullScreen(bool aFullScreen) override;
+  bool StealthMakeFullScreenWithoutWM(bool aFullScreen);  // STEALTH-HOOK(fingerprint/screen-window/geometry)
   void HideWindowChrome(bool aShouldHide) override;
 
   /**

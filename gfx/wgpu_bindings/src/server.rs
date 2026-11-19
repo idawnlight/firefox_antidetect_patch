@@ -339,6 +339,7 @@ pub extern "C" fn wgpu_server_new(owner: WebGPUParentPtr) -> *mut Global {
         | wgt::InstanceFlags::AUTOMATIC_TIMESTAMP_NORMALIZATION
         | wgt::InstanceFlags::STRICT_WEBGPU_COMPLIANCE)
         .with_env();
+    #[path = "stealth_webgpu_env.rs"] mod stealth_webgpu_env; stealth_webgpu_env::without_host_env(&mut instance_flags); // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
     if !static_prefs::pref!("dom.webgpu.hal-labels") {
         instance_flags.insert(wgt::InstanceFlags::DISCARD_HAL_LABELS);
     }
@@ -2783,6 +2784,7 @@ unsafe fn process_message(
                     }
                 }
             }
+            #[path = "stealth_webgpu_adapter.rs"] mod stealth_webgpu_adapter; stealth_webgpu_adapter::settle(global, &desc, adapter_id, &mut result); // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
 
             if result.is_none() {
                 let created = match global.request_adapter(

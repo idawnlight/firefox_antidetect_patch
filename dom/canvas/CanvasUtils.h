@@ -215,14 +215,17 @@ void DashArrayToJSVal(nsTArray<T>& dashes, JSContext* cx,
 bool CheckWriteOnlySecurity(bool aCORSUsed, nsIPrincipal* aPrincipal,
                             bool aHadCrossOriginRedirects);
 
+// STEALTH-HOOK(fingerprint/canvas/noise-projection)
 gfx::StealthCanvasNoise StealthNoise(nsIPrincipal* aCanvasPrincipal);
 
+// STEALTH-HOOK(fingerprint/canvas/noise-projection)
 inline bool StealthProjectsContextType(dom::CanvasContextType aType) {
   return aType == dom::CanvasContextType::WebGL1 ||
          aType == dom::CanvasContextType::WebGL2 ||
          aType == dom::CanvasContextType::WebGPU;
 }
 
+// STEALTH-HOOK(fingerprint/canvas/noise-projection)
 already_AddRefed<gfx::SourceSurface> StealthProjectSnapshot(
     gfx::SourceSurface* aSnapshot, bool aPremultiplied,
     nsIPrincipal* aCanvasPrincipal);

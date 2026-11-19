@@ -567,20 +567,21 @@ class gfxFontUtils {
   static nsresult GetFamilyNameFromTable(hb_blob_t* aNameTable,
                                          nsACString& aFamilyName);
 
-  static const void* FindSfntOffset(const void* aFontData, uint32_t aFaceIndex);
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
+  static const mozilla::SFNTHeader* FindSfntOffset(const void* aFontData,
+                                                   uint32_t aFaceIndex);
 
   // Find the table directory entry for a given table tag, in a (validated)
-  // buffer of font data (single-face sfnt or .ttc collection). aFaceIndex
-  // selects the face within a .ttc (ignored for single-face fonts).
-  // Returns null if the tag is not present.
+  // buffer of 'sfnt' data. Returns null if the tag is not present.
   static mozilla::TableDirEntry* FindTableDirEntry(const void* aFontData,
                                                    uint32_t aTableTag,
                                                    uint32_t aFaceIndex = 0);
 
+  // Return a blob that wraps a table found within a buffer of font data.
   // The blob does NOT own its data; caller guarantees that the buffer
   // will remain valid at least as long as the blob.
   // Returns null if the specified table is not found.
-  // This method assumes aFontData is valid font data; before using this,
+  // This method assumes aFontData is valid 'sfnt' data; before using this,
   // caller is responsible to do any sanitization/validation necessary.
   static hb_blob_t* GetTableFromFontData(const void* aFontData,
                                          uint32_t aTableTag,

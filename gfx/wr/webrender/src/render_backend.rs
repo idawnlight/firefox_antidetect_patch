@@ -28,7 +28,7 @@ use crate::glyph_cache::GlyphCache;
 use crate::picture_textures::PictureTextures;
 use crate::render_api::{MemoryReport, TransactionMsg, ResourceUpdate, ApiMsg, FrameMsg, ClearCache, DebugCommand, ResourceCacheInit, WindowRegistration};
 use crate::texture_cache::TextureCache;
-use glyph_rasterizer::GlyphRasterizer;
+use glyph_rasterizer::{GlyphRasterizer, SharedFontResources};
 use crate::clip::{ClipIntern, PolygonIntern, ClipStoreScratchBuffer};
 use crate::filterdata::FilterDataIntern;
 #[cfg(any(feature = "capture", feature = "replay"))]
@@ -1012,6 +1012,12 @@ pub struct RenderBackend {
     /// from several pipelines - and so several documents and windows - live
     /// in one store and can be batched together.
     dl_stores: DlStores,
+    /// The font resources shared by every window of this backend's pool (the instance the pool's scene
+    /// builder has too). A window's resource cache clears a namespace's fonts out of them; this handle is
+    /// for a namespace whose window was unregistered first: `ApiMsg::UnregisterWindow` goes on the direct
+    /// channel and `ClearNamespace` through the low-priority scene builder, and the window took its
+    /// resource cache with it, so nobody else would ever take those fonts out.
+    fonts: SharedFontResources,
     /// Ops for `dl_stores` from transactions that built no scene, per
     /// document, waiting for that document's next scene swap. The store may
     /// only advance together with a swap: the scene being drawn in the
@@ -1079,6 +1085,7 @@ impl RenderBackend {
         scene_tx: Sender<SceneBuilderRequest>,
         size_of_ops: Option<MallocSizeOfOps>,
         namespace_alloc_by_client: bool,
+        fonts: SharedFontResources,
     ) -> RenderBackend {
         RenderBackend {
             api_rx,
@@ -1088,6 +1095,7 @@ impl RenderBackend {
             document_to_window: FastHashMap::default(),
             last_touched_window: None,
             dl_stores: DlStores::default(),
+            fonts,
             held_dl_updates: FastHashMap::default(),
             size_of_ops,
             namespace_alloc_by_client,
@@ -1883,6 +1891,22 @@ impl RenderBackend {
         RenderBackendStatus::Continue
     }
 
+    /// A namespace's `RenderApi` was dropped: its resources and documents go.
+    ///
+    /// The resource cache of the window clears the images and glyphs (its own) and the fonts (shared by
+    /// the pool); when the window is no longer registered the shared fonts are cleared here, or they would
+    /// stay in the pool for as long as it lives: a web font of a closed page is up to a few MB, kept once
+    /// per distinct font.
+    fn clear_namespace(&mut self, backend_id: RenderBackendId, id: IdNamespace) {
+        if let Some(win) = self.windows.get_mut(&backend_id) {
+            win.resource_cache.clear_namespace(id);
+        } else {
+            self.fonts.clear_namespace(id);
+        }
+        self.documents.retain(|doc_id, _doc| doc_id.namespace_id != id);
+        self.document_to_window.retain(|doc_id, _| doc_id.namespace_id != id);
+    }
+
     fn process_scene_builder_result(
         &mut self,
         msg: SceneBuilderResult,
@@ -1978,11 +2002,7 @@ impl RenderBackend {
                 }
             }
             SceneBuilderResult::ClearNamespace(backend_id, id) => {
-                if let Some(win) = self.windows.get_mut(&backend_id) {
-                    win.resource_cache.clear_namespace(id);
-                }
-                self.documents.retain(|doc_id, _doc| doc_id.namespace_id != id);
-                self.document_to_window.retain(|doc_id, _| doc_id.namespace_id != id);
+                self.clear_namespace(backend_id, id);
             }
             SceneBuilderResult::DeleteDocument(document_id) => {
                 self.documents.remove(&document_id);
@@ -2799,5 +2819,54 @@ impl RenderBackend {
                 SceneBuilderRequest::LoadScenes(scenes_to_build)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod clear_namespace_tests {
+    use super::*;
+    use api::channel::unbounded_channel;
+    use api::{FontKey, FontTemplate};
+    use std::sync::Arc;
+
+    fn backend_with_a_font_of(namespace: u32) -> (RenderBackend, SharedFontResources) {
+        let mut fonts = SharedFontResources::new(IdNamespace(0));
+        let key = FontKey::new(IdNamespace(namespace), 1);
+        let template = FontTemplate::Raw(Arc::new(vec![1, 2, 3, 4]), 0);
+        let shared = fonts.font_keys.add_key(&key, &template).expect("a first font gets a shared key");
+        fonts.templates.add_font(shared, template);
+        let (_api_tx, api_rx) = unbounded_channel::<ApiMsg>();
+        let (scene_tx, _scene_rx) = unbounded_channel::<SceneBuilderRequest>();
+        let backend = RenderBackend::new(api_rx, scene_tx, None, false, fonts.clone());
+        (backend, fonts)
+    }
+
+    /// The message the scene builder sends the backend when a `RenderApi` was dropped, for a backend
+    /// that has no window registered under that id: `UnregisterWindow` came first.
+    #[test]
+    fn the_fonts_of_a_namespace_leave_the_shared_resources_when_its_window_is_gone() {
+        let (mut backend, fonts) = backend_with_a_font_of(7);
+        assert_eq!(fonts.templates.len(), 1);
+
+        let mut frames = 0;
+        backend.process_scene_builder_result(
+            SceneBuilderResult::ClearNamespace(RenderBackendId(1), IdNamespace(7)),
+            &mut frames,
+        );
+
+        assert_eq!(fonts.templates.len(), 0, "the font of a namespace whose window left stays in the pool for good");
+    }
+
+    #[test]
+    fn the_fonts_of_another_namespace_stay() {
+        let (mut backend, fonts) = backend_with_a_font_of(7);
+
+        let mut frames = 0;
+        backend.process_scene_builder_result(
+            SceneBuilderResult::ClearNamespace(RenderBackendId(1), IdNamespace(8)),
+            &mut frames,
+        );
+
+        assert_eq!(fonts.templates.len(), 1);
     }
 }

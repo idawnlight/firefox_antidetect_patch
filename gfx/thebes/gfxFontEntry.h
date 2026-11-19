@@ -459,6 +459,7 @@ class gfxFontEntry {
     explicit AutoHBFace(hb_face_t* aFace) : mFace(aFace) {}
     ~AutoHBFace() { hb_face_destroy(mFace); }
 
+    // STEALTH-HOOK(fingerprint/fonts/bundle)
     operator hb_face_t*() const& { return mFace; }
     operator hb_face_t*() const&& = delete;
 
@@ -851,6 +852,9 @@ class gfxFontEntry {
   void InitializeFrom(mozilla::fontlist::Face* aFace,
                       const mozilla::fontlist::Family* aFamily);
 
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
+  bool ShouldPublishCharacterMap() const;
+
 #ifdef MOZ_FONTATIONS
   // Set the Skrifa font ref and hold on to the memory mapping, unless the
   // face has already been set, in which case the passed font and mapping
@@ -870,8 +874,6 @@ class gfxFontEntry {
   mozilla::Atomic<SkrifaFontRef*> mSkrifaFontFace;
   mozilla::MemoryMappedFile mSkrifaFontFile;
 #endif
-
-  bool ShouldPublishCharacterMap() const;
 
   // Shaper-specific face objects, shared by all instantiations of the same
   // physical font, regardless of size.

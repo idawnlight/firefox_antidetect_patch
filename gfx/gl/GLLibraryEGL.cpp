@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GLLibraryEGL.h"
+#include "StealthOwnGL.h"  // STEALTH-HOOK(fingerprint/webgl/own-gl)
 
 #include "gfxConfig.h"
 #include "gfxCrashReporterUtils.h"
@@ -548,6 +549,7 @@ bool GLLibraryEGL::Init(nsACString* const out_failureId) {
 
   // On non-Windows (Android) we use system copies of libEGL. We look for
   // the APITrace lib, libEGL.so, and libEGL.so.1 in that order.
+  if (!StealthLoadOwnGLOrRefuse(&mEGLLibrary, &mGLLibrary, out_failureId)) return false;  // STEALTH-HOOK(fingerprint/webgl/own-gl): ours or none
 
 #  if defined(ANDROID)
   if (!mEGLLibrary) mEGLLibrary = LoadApitraceLibrary();
@@ -1016,6 +1018,7 @@ std::shared_ptr<EglDisplay> GLLibraryEGL::CreateDisplayLocked(
   } else {
     void* nativeDisplay = EGL_DEFAULT_DISPLAY;
 #ifdef MOZ_WIDGET_GTK
+    if (StealthOwnGLRequired()) return StealthOwnGLSurfacelessDisplay(*this, aProofOfLock);  // STEALTH-HOOK(fingerprint/webgl/own-gl): surfaceless only
     if (!ret && (!gfx::gfxVars::WebglUseHardware() || aFlags.mForceSoftware)) {
       // Initialize a swrast egl device such as llvmpipe
       ret = GetAndInitSoftwareDisplay(*this, aProofOfLock);

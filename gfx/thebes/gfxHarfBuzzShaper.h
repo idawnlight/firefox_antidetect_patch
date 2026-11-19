@@ -55,7 +55,7 @@ class gfxHarfBuzzShaper : public gfxFontShaper {
                                  hb_font_extents_t* extents, void* user_data);
 
  public:
-  // Read design-space extents and advances from HarfBuzz in font units.
+  // STEALTH-HOOK(fingerprint/fonts/metrics)
   bool GetDesignGlyphExtents(uint16_t aGID, int32_t& aXBearing,
                              int32_t& aYBearing, int32_t& aWidth,
                              int32_t& aHeight) const;
@@ -173,9 +173,7 @@ class gfxHarfBuzzShaper : public gfxFontShaper {
   // size-specific font object, owned by the gfxHarfBuzzShaper
   hb_font_t* mHBFont = nullptr;
 
-  // STEALTH: the design-space metrics font, built on demand by GetDesignFont
-  // and never used for shaping. Mutable because the two accessors above are
-  // const and a font that is only read has no business forcing them not to be.
+  // STEALTH-HOOK(fingerprint/fonts/metrics)
   mutable hb_font_t* mDesignFont = nullptr;
   hb_font_t* GetDesignFont() const;
 

@@ -8,16 +8,20 @@ with Files("**"):
 EXPORTS.mozilla += [
     "GeolocationService.h",
 ]
+EXPORTS.mozilla += ["StealthGeolocation.h"]  # STEALTH-HOOK(fingerprint/geolocation/no-host-provider)
 
 UNIFIED_SOURCES += [
     "GeolocationService.cpp",
 ]
+UNIFIED_SOURCES += ["StealthGeolocation.cpp"]  # STEALTH-HOOK(fingerprint/geolocation/no-host-provider)
 
 XPCOM_MANIFESTS += [
     "components.conf",
 ]
 XPIDL_SOURCES += ["nsIGeolocationService.idl"]
 XPIDL_MODULE = "toolkit_geolocation"
+
+TEST_DIRS += ["test/gtest"]  # STEALTH-HOOK(fingerprint/geolocation/no-host-provider)
 
 include("/ipc/chromium/chromium-config.mozbuild")
 
@@ -30,10 +34,6 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     LOCAL_INCLUDES += [
         "/dom/system/mac",
-    ]
-elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
-    LOCAL_INCLUDES += [
-        "/dom/system/windows/location",
     ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     if CONFIG["MOZ_ENABLE_DBUS"]:

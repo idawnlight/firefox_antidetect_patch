@@ -4,27 +4,4 @@
 
 #include "WindowsUtilsChild.h"
 
-#include "WindowsLegacyLocationChild.h"
-#include "mozilla/StaticPrefs_geo.h"
-#include "mozilla/dom/PWindowsUtilsChild.h"
-#include "mozilla/dom/WindowsLocationChild.h"
-
-#if !defined(__MINGW32__)
-#  include "WindowsRuntimeLocationChild.h"
-#endif
-
-namespace mozilla::dom {
-
-already_AddRefed<PWindowsLocationChild>
-WindowsUtilsChild::AllocPWindowsLocationChild() {
-  // MinGW has windows.devices.geolocation.h header, but it lacks some
-  // Geolocation classes/structures such as BasicGeoposition.
-#if !defined(__MINGW32__)
-  if (StaticPrefs::geo_provider_use_winrt()) {
-    return MakeAndAddRef<WindowsRuntimeLocationChild>();
-  }
-#endif
-  return MakeAndAddRef<WindowsLegacyLocationChild>();
-}
-
-}  // namespace mozilla::dom
+namespace mozilla::dom {}  // namespace mozilla::dom

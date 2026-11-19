@@ -3,8 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
+const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {StealthCursor} = ChromeUtils.importESModule('resource://gre/modules/juggler/StealthCursor.js');
+const {ContentMux} = ChromeUtils.importESModule('resource://gre/modules/juggler/ContentMux.js');
+const {GoneContexts} = ChromeUtils.importESModule('resource://gre/modules/juggler/GoneContexts.js');
 const {newProxyInfoFor, proxyForHost} = ChromeUtils.importESModule('resource://gre/modules/juggler/SessionRoute.js');
+const {syncTrrPrefs} = ChromeUtils.importESModule('resource://gre/modules/juggler/TrrPrefs.js');
 const {Preferences} = ChromeUtils.importESModule("resource://gre/modules/Preferences.sys.mjs");
 const {ContextualIdentityService} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs");
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
@@ -14,9 +18,45 @@ const Cr = Components.results;
 
 const helper = new Helper();
 
+// A root is told apart by its page and by its browsing context.
+function rootKey(browserId, rootId) {
+  return browserId + '/' + rootId;
+}
 
+
+// Chrome flag of a popup whose window.open features give a size: the value
+// of kJugglerWindowExplicitSize in toolkit/components/windowwatcher/
+// JugglerWindowSize.h, a bit nsIWebBrowserChrome leaves free
+// (juggler/tests/explicit_size_flag_is_free.test.mjs).
+const JUGGLER_WINDOW_EXPLICIT_SIZE = 1 << 1;
+
+// The size the page's <browser> is pinned to, or undefined when it follows the
+// window. A window in fullscreen is the screen, content included, as in every
+// Firefox (outer == inner == screen): pinned, the page kept the maximized
+// window's viewport inside a fullscreen window
+// (juggler/tests/fullscreen_releases_the_viewport.test.mjs).
+function pinnedViewportSize(windowInFullscreen, pageViewportSize, contextViewportSize) {
+  if (windowInFullscreen)
+    return undefined;
+  return pageViewportSize || contextViewportSize;
+}
 const IDENTITY_NAME = 'JUGGLER ';
+
+// How long a context that is being removed waits for its content processes to exit once its pages are closed,
+// how long it waits again after killing the ones that did not, and how often it looks.
+const PROCESS_EXIT_WAIT_MS = 3000;
+const PROCESS_KILL_WAIT_MS = 2000;
+const PROCESS_POLL_MS = 20;
 const HUNDRED_YEARS = 60 * 60 * 24 * 365 * 100;
+
+// The name of an nsICookieValidation result, e.g. eRejectedNoneRequiresSecure.
+function validationName(result) {
+  for (const key of Object.keys(Ci.nsICookieValidation)) {
+    if (key.startsWith('eRejected') && Ci.nsICookieValidation[key] === result)
+      return key;
+  }
+  return String(result);
+}
 
 const ALL_PERMISSIONS = [
   'geo',
@@ -80,19 +120,19 @@ class DownloadInterceptor {
     return true;
   }
 
-  onDownloadComplete(externalAppHandler, canceled, errorName) {
+  // nsIDownloadInterceptor.onDownloadComplete(aHandler, aErrorName): the error
+  // name is empty on success and NS_BINDING_ABORTED for a cancel.
+  onDownloadComplete(externalAppHandler, errorName) {
     const uuid = this._handlerToUuid.get(externalAppHandler);
     if (!uuid)
       return;
     this._handlerToUuid.delete(externalAppHandler);
     this._uuidToHandler.delete(uuid);
-    const downloadInfo = {
-      uuid,
-      error: errorName,
-    };
-    if (canceled === 'NS_BINDING_ABORTED') {
+    const downloadInfo = { uuid };
+    if (errorName === 'NS_BINDING_ABORTED')
       downloadInfo.canceled = true;
-    }
+    else if (errorName)
+      downloadInfo.error = errorName;
     this._registry.emit(TargetRegistry.Events.DownloadFinished, downloadInfo);
   }
 
@@ -130,6 +170,29 @@ export class TargetRegistry {
     return TargetRegistry._instance || null;
   }
 
+  // The browser was started with the Juggler pipe: its session has a proxy to
+  // be decided by a command, even before the registry exists (it is built at
+  // final-ui-startup).
+  static markDriven() {
+    TargetRegistry._driven = true;
+  }
+
+  /**
+   * The road of the requests that have no page (the pingsender at exit), as
+   * `{decided, proxy}`. `proxy` is null for the default road. A driven session
+   * whose proxy no command has decided is `{decided: false}`: the caller must
+   * send nothing, because null would mean DIRECT. A browser Juggler does not
+   * drive has nothing to wait for, and its road is the default one.
+   */
+  static roadOfSession(userContextId) {
+    const registry = TargetRegistry._instance;
+    if (!registry)
+      return TargetRegistry._driven ? { decided: false } : { decided: true, proxy: null };
+    if (!registry.browserProxyDecided)
+      return { decided: false };
+    return { decided: true, proxy: registry.proxyRecordFor(userContextId) };
+  }
+
   /**
    * @param {{survivesLastWindow: boolean}} options
    *   survivesLastWindow: the browser was started with -silent, so Juggler
@@ -146,10 +209,30 @@ export class TargetRegistry {
     this._userContextIdToBrowserContext = new Map();
     this._browserToTarget = new Map();
     this._browserIdToTarget = new Map();
-    this._browserIdToActor = new Map();
+    // The Juggler actor of the current top-level document of each <browser>,
+    // keyed by browserId, whether or not its PageTarget exists yet: the actor
+    // of a new tab's about:blank usually arrives BEFORE the TabOpen that
+    // creates the target, and the target picks it up from here.
+    //
+    // ⛔ browserId IS THE ONLY KEY. It is shared by every document of one
+    // <browser> and survives the BrowsingContext replacement of a navigation
+    // out of a bfcache-eligible page. A BrowsingContext id is a different
+    // counter: an earlier version also matched actors on it, set the target's
+    // entry under the FIRST context id and deleted it under the CURRENT one,
+    // so every page that navigated twice left a stale entry behind, and the
+    // first new tab whose browserId equalled that number lost its actor.
+    // Browser.newPage then never answered (the fifth page, measured).
+    //
+    // A page has one actor per fragment root: the top, and every frame whose parent is in another
+    // process. The key is the page and the root together (see rootKey).
+    this._rootActors = new Map();
 
     this._proxiesWithClashingAuthCacheKeys = new Set();
     this._browserProxy = null;
+    // Whether the first command has decided the road of the session (a proxy,
+    // or none): until then the channel filter holds every channel unanswered.
+    this._browserProxyDecided = false;
+    this._browserProxyListeners = [];
 
     // Cleanup containers from previous runs (if any)
     for (const identity of ContextualIdentityService.getPublicIdentities()) {
@@ -162,20 +245,39 @@ export class TargetRegistry {
     this._defaultContext = new BrowserContext(this, undefined, undefined);
 
     Services.obs.addObserver({
-      observe: (subject, topic, data) => {
-        const browser = subject.ownerElement;
-        if (!browser) {
-          return;
-        }
-        const target = this._browserToTarget.get(browser);
-        if (!target) {
-          return;
-        }
-        target.emit(PageTarget.Events.Crashed);
-        target.dispose();
-        target.closeCrashedTab();
-      }
+      observe: (subject, topic, data) => this._onFrameLoaderCrashed(subject, data),
     }, 'oop-frameloader-crashed');
+
+    // A root whose browsing context is discarded has no process to wait for: without this its endpoint
+    // would stay in the page's mux with no actor. The main root is not touched here; it changes its
+    // browsing context with the top and ends with the page.
+    Services.obs.addObserver({
+      observe: (browsingContext, topic, data) => {
+        let browserId;
+        try {
+          browserId = browsingContext.browserId;
+        } catch (e) {
+          return;
+        }
+        this._browserIdToTarget.get(browserId)?._contentMux.onRootRemoved(browsingContext.id);
+        this._rootActors.delete(rootKey(browserId, browsingContext.id));
+      }
+    }, 'browsing-context-discarded');
+
+    // A document that is not a process root, created for the browsing context of a root: the frame turned local (it
+    // navigated to the site of its parent). The browsing context stays, so the root would stay with it.
+    Services.obs.addObserver({
+      observe: (windowGlobal, topic, data) => {
+        try {
+          const browsingContext = windowGlobal.browsingContext;
+          if (!browsingContext.parent || windowGlobal.isProcessRoot)
+            return;
+          this._browserIdToTarget.get(browsingContext.browserId)?._contentMux.onRootTurnedLocal(browsingContext.id);
+        } catch (e) {
+          // a window global of a context that is going: nothing to do
+        }
+      }
+    }, 'window-global-created');
 
     const onTabOpenListener = (appWindow, window, event) => {
       const tab = event.target;
@@ -185,7 +287,7 @@ export class TargetRegistry {
       // window.open features give a size. Such a popup keeps the size the page
       // asked for, as in every Firefox; the context's default viewport is for
       // tabs and for popups that did not name one.
-      const hasExplicitSize = appWindow && (appWindow.chromeFlags & Ci.nsIWebBrowserChrome.JUGGLER_WINDOW_EXPLICIT_SIZE) !== 0;
+      const hasExplicitSize = appWindow && (appWindow.chromeFlags & JUGGLER_WINDOW_EXPLICIT_SIZE) !== 0;
       const openerContext = tab.linkedBrowser.browsingContext.opener;
       let openerTarget;
       if (openerContext) {
@@ -263,6 +365,14 @@ export class TargetRegistry {
         const domWindow = aSubject;
         if (!domWindow.isChromeWindow || !domWindow.gBrowser)
           return;
+        // The tree owner of a browser window is an nsChromeTreeOwner, which
+        // does not QueryInterface to nsIAppWindow: it hands out its
+        // AppWindow through getInterface. The QueryInterface that was here
+        // threw, the catch swallowed it, and every window that arrived this
+        // way - every window.open popup does - came with a null appWindow.
+        // onTabOpenListener reads the explicit-size chrome flag from it, so a
+        // popup opened with 'width=500,height=400' was resized to the
+        // context's default viewport like a tab.
         const appWindow = domWindow.docShell.treeOwner
             .QueryInterface(Ci.nsIInterfaceRequestor)
             .getInterface(Ci.nsIAppWindow);
@@ -340,8 +450,72 @@ export class TargetRegistry {
     // proxy" from "my proxy was refused", and cannot tell either from a
     // session that quietly goes out in the clear.
     newProxyInfoFor(proxy);
+    const previous = this._browserProxy;
     this._browserProxy = proxy;
+    try {
+      // Before the hold is lifted: no channel leaves with a proxy and without DoH.
+      this._syncTrrPrefs();
+    } catch (e) {
+      this._browserProxy = previous;
+      throw e;
+    }
+    this._decideBrowserProxy();
+  }
+
+  // The session goes out with no proxy: an explicit decision, so that the
+  // filter answers the channels that waited with the default road.
+  setNoBrowserProxy() {
+    const previous = this._browserProxy;
+    this._browserProxy = null;
+    try {
+      // DoH stays on while a context still has a proxy; otherwise it goes off
+      // before the held channels are answered with the default road.
+      this._syncTrrPrefs();
+    } catch (e) {
+      this._browserProxy = previous;
+      throw e;
+    }
+    this._decideBrowserProxy();
+  }
+
+  // The proxy records present: the browser-wide one and those of every live
+  // context, each with its userContextId. The DoH prefs, and the list of the
+  // contexts that have a proxy, follow this set (see TrrPrefs.js). It is the
+  // same registry that proxyRecordFor() answers the channel filter from.
+  _proxiesPresent() {
+    const live = [...this._browserContextIdToBrowserContext.values()]
+        .map(bc => ({ userContextId: bc.userContextId, proxy: bc._proxy }));
+    // A context that ended with a proxy stays proxied for the resolver for the life of the browser: its lookups in flight (a beacon
+    // sent as it closed, an OCSP request, a retry) resolve after it is gone, and the resolver decides from this list alone
+    // (StealthSessionResolver). Dropped from it, they went to the host's resolver. The ids are never reused, so no live context
+    // inherits the entry; nothing is dropped on a timer.
+    const liveIds = new Set(live.map(context => context.userContextId));
+    const ended = GoneContexts.entries().filter(context => !liveIds.has(context.userContextId));
+    return {
+      browserProxy: this._browserProxy,
+      contexts: live.concat(ended),
+    };
+  }
+
+  _syncTrrPrefs() {
+    const {browserProxy, contexts} = this._proxiesPresent();
+    syncTrrPrefs(browserProxy, contexts);
+  }
+
+  get browserProxyDecided() {
+    return this._browserProxyDecided;
+  }
+
+  // `callback` runs every time the browser proxy is decided or changed.
+  onBrowserProxyDecided(callback) {
+    this._browserProxyListeners.push(callback);
+  }
+
+  _decideBrowserProxy() {
     this._updateProxiesWithSameAuthCacheAndDifferentCredentials();
+    this._browserProxyDecided = true;
+    for (const callback of this._browserProxyListeners)
+      callback();
   }
 
   getProxyInfo(channel) {
@@ -370,8 +544,9 @@ export class TargetRegistry {
    */
   proxyRecordFor(userContextId) {
     const browserContext = userContextId === undefined ? null : this.browserContextForUserContextId(userContextId);
-    // Prefer context proxy and fallback to browser-level proxy.
-    return (browserContext && browserContext._proxy) || this._browserProxy || null;
+    // Prefer context proxy, then the proxy a context that ended had (its requests in flight still leave by it, never DIRECT),
+    // and fallback to browser-level proxy.
+    return (browserContext && browserContext._proxy) || GoneContexts.recordFor(userContextId) || this._browserProxy || null;
   }
 
   defaultContext() {
@@ -408,6 +583,18 @@ export class TargetRegistry {
     if (browserContext.invalidTimezoneId !== undefined)
       throw new Error('Failed to override timezone');
     const features = "chrome,dialog=no,all";
+    // See _callWithURIToLoad in browser.js for the structure of window.arguments
+    // window.arguments[1]: unused (bug 871161)
+    //                 [2]: referrerInfo (nsIReferrerInfo)
+    //                 [3]: postData (nsIInputStream)
+    //                 [4]: allowThirdPartyFixup (bool)
+    //                 [5]: userContextId (int)
+    //                 [6]: originPrincipal (nsIPrincipal)
+    //                 [7]: originStoragePrincipal (nsIPrincipal)
+    //                 [8]: triggeringPrincipal (nsIPrincipal)
+    //                 [9]: allowInheritPrincipal (bool)
+    //                 [10]: csp (nsIContentSecurityPolicy)
+    //                 [11]: nsOpenWindowInfo
     const args = Cc["@mozilla.org/array;1"].createInstance(Ci.nsIMutableArray);
     const urlSupports = Cc["@mozilla.org/supports-string;1"].createInstance(
       Ci.nsISupportsString
@@ -457,15 +644,48 @@ export class TargetRegistry {
   // Called by JugglerFrameParent for the actor of a CURRENT top-level document
   // only: when it is created, and when a document restored from the bfcache
   // becomes current again.
-  onActorCreated(actor, browserId) {
-    this._browserIdToActor.set(browserId, actor);
-    this._browserIdToTarget.get(browserId)?.setActor(actor);
+  onActorCreated(actor, browserId, rootId) {
+    this._rootActors.set(rootKey(browserId, rootId), actor);
+    this._browserIdToTarget.get(browserId)?.setActor(actor, rootId);
   }
 
-  onActorDestroyed(actor, browserId) {
-    this._browserIdToTarget.get(browserId)?.removeActor(actor);
-    if (this._browserIdToActor.get(browserId) === actor)
-      this._browserIdToActor.delete(browserId);
+  onActorDestroyed(actor, browserId, rootId) {
+    this._browserIdToTarget.get(browserId)?.removeActor(actor, rootId);
+    const key = rootKey(browserId, rootId);
+    if (this._rootActors.get(key) === actor)
+      this._rootActors.delete(key);
+  }
+
+  // ⛔ AN IFRAME'S PROCESS CRASHING IS NOT THE TAB CRASHING. The owner element of an out-of-process iframe's
+  // BrowserParent is the <browser> of the TAB (BrowserBridgeParent::Init, SetOwnerElement), so the notification comes
+  // with the tab's frameloader for either crash, and before the engine passed the crashed BrowsingContext's id as `data`
+  // (nsFrameLoader::MaybeNotifyCrashed) the tab branch closed the whole page for a crash of one iframe. `data` is that
+  // id, empty when the notification does not say (a frameloader that failed to build: a tab).
+  //
+  // A context that is named but already gone (the iframe was removed, or the page navigated, in the same turn as the
+  // crash) is neither: there is nothing of it to tell, and the tab is not what crashed.
+  _onFrameLoaderCrashed(frameLoader, data) {
+    const browser = frameLoader.ownerElement;
+    if (!browser) {
+      return;
+    }
+    const target = this._browserToTarget.get(browser);
+    if (!target) {
+      return;
+    }
+    if (data) {
+      const crashed = BrowsingContext.get(data);
+      if (!crashed) {
+        return;
+      }
+      if (crashed.parent) {
+        target.frameCrashed(crashed);
+        return;
+      }
+    }
+    target.emit(PageTarget.Events.Crashed);
+    target.dispose();
+    target.closeCrashedTab();
   }
 
   targetForId(targetId) {
@@ -495,13 +715,25 @@ export class PageTarget {
     // { screencastId } while a screencast is running on this page, undefined
     // otherwise. One per window: the capture module holds a single sink.
     this._screencastInfo = undefined;
+    // ⛔ The visible pointer overlay, OFF unless `stealthfox.showcursor`
+    // says otherwise. It lives in the chrome document of this window, which
+    // is a different process from the content: the page cannot see it, and
+    // it is absent from `page.screenshot()` by construction. See
+    // `StealthCursor.js` for why that is the point and not a limitation.
     this._stealthCursor = StealthCursor.forWindow(win);
     this._initialDPPX = this._linkedBrowser.browsingContext.overrideDPPX;
     this._url = 'about:blank';
     this._openerId = opener ? opener.id() : undefined;
-    this._actor = undefined;
     this._actorSequenceNumber = 0;
-    this._channel = new SimpleChannel(`browser::page[${this._targetId}]`, 'target-' + this._targetId);
+    // What the page's handler talks through: one channel to the content process of each fragment root.
+    this._contentMux = new ContentMux({
+      pageTarget: this,
+      name: `browser::page[${this._targetId}]`,
+      uid: 'target-' + this._targetId,
+      createChannel: (name, uid) => new SimpleChannel(name, uid),
+      nextTask: callback => Services.tm.dispatchToMainThread(callback),
+      wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    });
     this._dialogs = new Map();
     this.disableCache = false;
     this.mediumOverride = '';
@@ -513,27 +745,39 @@ export class PageTarget {
 
     const navigationListener = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
-      onLocationChange: (aWebProgress, aRequest, aLocation) => this._onNavigated(aLocation),
+      // The progress of a frame climbs to the browsing contexts above it (BrowsingContextWebProgress): without the
+      // test the address of an iframe became the page's url, and the page's permissions were asked for it.
+      onLocationChange: (aWebProgress, aRequest, aLocation) => {
+        if (aWebProgress.isTopLevel)
+          this._onNavigated(aLocation);
+      },
     };
     this._eventListeners = [
       helper.addObserver(this._updateModalDialogs.bind(this), 'common-dialog-loaded'),
       helper.addProgressListener(tab.linkedBrowser, navigationListener, Ci.nsIWebProgress.NOTIFY_LOCATION),
       helper.addEventListener(this._linkedBrowser, 'DOMModalDialogClosed', event => this._updateModalDialogs()),
+      // The chrome window's "fullscreen" event, on entering and on leaving
+      // (nsGlobalWindowOuter::FinishFullscreenChange): the pin follows.
+      helper.addEventListener(this._window, 'fullscreen', () => this.updateViewportSize().catch(e => {})),
     ];
 
     this._disposed = false;
     browserContext.pages.add(this);
     this._registry._browserToTarget.set(this._linkedBrowser, this);
     this._registry._browserIdToTarget.set(this._browserId, this);
-    const actor = this._registry._browserIdToActor.get(this._browserId);
-    if (actor)
-      this.setActor(actor);
+    // The actors that were there before the target: the top first, so a root that is not the main one finds
+    // the main endpoint made.
+    const prefix = this._browserId + '/';
+    const actors = [...this._registry._rootActors].filter(([key]) => key.startsWith(prefix));
+    actors.sort(([, a], [, b]) => (a.browsingContext.parent ? 1 : 0) - (b.browsingContext.parent ? 1 : 0));
+    for (const [, actor] of actors)
+      this.setActor(actor, actor.browsingContext.id);
 
     this._registry.emit(TargetRegistry.Events.TargetCreated, this);
   }
 
   async activateAndRun(callback = () => {}, { muteNotificationsPopup = false } = {}) {
-    const ownerWindow = this._tab.linkedBrowser.ownerDocument.defaultView;
+    const ownerWindow = this._tab.linkedBrowser.documentGlobal;
     const tabBrowser = ownerWindow.gBrowser;
     // Serialize all tab-switching commands per tabbed browser
     // to disallow concurrent tab switching.
@@ -564,20 +808,30 @@ export class PageTarget {
     return ++this._actorSequenceNumber;
   }
 
-  setActor(actor) {
-    this._actor = actor;
+  setActor(actor, rootId = actor.browsingContext.id) {
+    // Every actor that comes (a new process, a document restored from the back-forward cache, a new top after a
+    // change of browsing context group) finds the setting in place: see updateJavaScriptDisabled.
+    this.updateJavaScriptDisabled();
     actor.actorName = `browser::page[${this._targetId}]/${actor.browsingContext.browserId}/${actor.browsingContext.id}/${this.nextActorSequenceNumber()}`;
-    this._channel.bindToActor(actor);
+    const isMain = !actor.browsingContext.parent;
+    this._contentMux.onRootAdded(rootId, actor.browsingContext);
+    this._contentMux.bindRoot(rootId, actor, {isMain});
   }
 
-  removeActor(actor) {
+  removeActor(actor, rootId) {
     // Note: the order between setActor and removeActor is non-deterministic.
-    // Therefore we check that we are still bound to the actor that is being removed.
-    if (this._actor !== actor)
+    // Therefore we check that we are still bound to the actor that is being removed. The root comes from
+    // the registry: the actor may not be readable any more.
+    const endpoint = this._contentMux.unbindRoot(rootId, actor);
+    if (!endpoint)
       return;
-    this._actor = undefined;
-    this.emit(PageTarget.Events.ContentDetached);
-    this._channel.resetTransport();
+    // ⛔ THE CHANNEL GOES QUIET HERE AND MIGHT NEVER SPEAK AGAIN. `resetTransport`
+    // keeps every pending request in the hope that a new actor binds and
+    // replays it; measured 2026-09-19, a reload during a drag removed this
+    // actor and NO replacement ever arrived. Whoever holds a request that only
+    // the old document could answer has to hear about it, so this is emitted
+    // whether or not a replacement follows. [B216]
+    this.emit(PageTarget.Events.ContentDetached, {rootId: endpoint.rootId, isMain: endpoint.isMain});
   }
 
   dialog(dialogId) {
@@ -610,14 +864,55 @@ export class PageTarget {
     this.updateCacheDisabled(browsingContext);
     this.updateLanguageOverride(browsingContext);
     this.updateTimezoneOverride(browsingContext);
+    this.updateJavaScriptDisabled(browsingContext);
   }
 
+  // Whether scripts run in the page is the BrowsingContext's AllowJavascript field, written here, by the parent,
+  // on the page's top-level context. The field is parent-only, synchronized to every process, inherited by the
+  // contexts born under it (an iframe of any process, a popup) and applied by its DidSet to the documents that
+  // exist; a document that is created later computes it at birth, so no script of its first load runs. A browsing
+  // context group change copies it to the new top (CanonicalBrowsingContext::ReplacedBy). It used to be written
+  // by the content process on the WindowContext of each document, which is owner-or-parent-only: a process that
+  // does not own the document of an iframe could not write it, and the write on a document that exists comes after
+  // its first scripts.
+  updateJavaScriptDisabled(browsingContext = undefined) {
+    const context = browsingContext || this._linkedBrowser.browsingContext;
+    const allowed = !this._browserContext.crossProcessCookie.settings.javaScriptDisabled;
+    if (context.allowJavascript !== allowed)
+      context.allowJavascript = allowed;
+  }
+
+  // The context's language list goes into the BrowsingContext's
+  // LanguageOverride field, the one Firefox reads for navigator.language(s),
+  // for the realm's default Intl locale (DidSet, and every realm created
+  // later) and for the Accept-Language header (nsHttpHandler prepares it like
+  // intl.accept_languages). BrowsingContext::Attach seeds that field from
+  // juggler.locale.override, so a context that never asked keeps the
+  // session's list untouched.
+  //
+  // This used to go to docShell.languageOverride, which nothing in Firefox
+  // reads, and to docShell.overrideLocale on whatever realm was current when
+  // the setting arrived, usually the initial about:blank: new_context(locale=
+  // "de-DE") inside an it-IT session reported it-IT in navigator.languages,
+  // Intl and the header.
   updateLanguageOverride(browsingContext = undefined) {
     if (this._browserContext.languageOverride === undefined)
       return;
     (browsingContext || this._linkedBrowser.browsingContext).languageOverride = this._browserContext.languageOverride;
   }
 
+  // The context's zone goes into the BrowsingContext's TimezoneOverride
+  // field, the same channel as the language above: its DidSet re-zones the
+  // realms already alive in every process, and every realm, worker and
+  // worklet created later takes the field at birth
+  // (dom/base/StealthSessionDeclaration.h). BrowsingContext::Attach seeds the
+  // field from juggler.timezone.override, so a context that never asked keeps
+  // the session's zone.
+  //
+  // Until firefox-50 this went to docShell.overrideTimezone, from the content
+  // process, on whatever realm was current when the setting arrived: the
+  // realms created afterwards, the workers and the worklets took the
+  // session's zone instead, and so did document.lastModified.
   updateTimezoneOverride(browsingContext = undefined) {
     if (this._browserContext.timezoneOverride === undefined)
       return;
@@ -681,7 +976,16 @@ export class PageTarget {
     await waitForWindowReady(this._window);
     this.updateDPPXOverride();
 
-    const viewportSize = this._viewportSize || this._browserContext.defaultViewportSize;
+    // Viewport size is defined by three arguments:
+    // 1. default size. Could be explicit if set as part of `window.open` call, e.g.
+    //   `window.open(url, title, 'width=400,height=400')`
+    // 2. page viewport size
+    // 3. browserContext viewport size
+    //
+    // The "default size" (1) is only respected when the page is opened.
+    // Otherwise, explicitly set page viewport prevales over browser context
+    // default viewport.
+    const viewportSize = pinnedViewportSize(this._window.fullScreen, this._viewportSize, this._browserContext.defaultViewportSize);
     if (viewportSize) {
       const {width, height} = viewportSize;
       this._linkedBrowser.style.setProperty('width', width + 'px');
@@ -691,7 +995,7 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.setProperty('contain', 'size');
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
       // Stealth: skip RDM when stealth screen prefs are active.
-      // inRDMPane=true causes Pixelscan to hang on "Collecting Data..."
+      // inRDMPane=true causes a fingerprint-scanner page to hang on "Collecting Data..."
       // because RDM mode interferes with fingerprint collection.
       const stealthW = Preferences.get('zoom.stealth.screen.width', -1);
       if (stealthW <= 0) {
@@ -728,7 +1032,7 @@ export class PageTarget {
    */
   async _awaitContentSize(width, height) {
     const scale = this._window.devicePixelRatio;
-    await this._channel.connect('').send('awaitViewportDimensions', {
+    await this._contentMux.connect('').send('awaitViewportDimensions', {
       deviceWidth: Math.round(width * scale),
       deviceHeight: Math.round(height * scale),
     });
@@ -755,7 +1059,7 @@ export class PageTarget {
   async setInterceptFileChooserDialog(enabled) {
     this.crossProcessCookie.interceptFileChooserDialog = enabled;
     this._updateCrossProcessCookie();
-    await this._channel.connect('').send('setInterceptFileChooserDialog', enabled).catch(e => {});
+    await this._contentMux.connect('').send('setInterceptFileChooserDialog', enabled).catch(e => {});
   }
 
   async setViewportSize(viewportSize) {
@@ -771,7 +1075,7 @@ export class PageTarget {
 
   /**
    * After its content process crashed and the client was told, the tab is
-   * closed (the owner's decision, 2026-10-14, as camoufox #794/#795/#803).
+   * closed (the owner's decision, 2026-10-14, as in another anti-detect Firefox fork's reports).
    * Until firefox-48 the crash only disposed the target: the tab stayed in the
    * parent until the browser exited, 15-60 MB a crash with no bound, and no
    * command reached it any more, not page.close nor the context's close.
@@ -793,8 +1097,27 @@ export class PageTarget {
     this._gBrowser.removeTab(this._tab, { skipPermitUnload: true });
   }
 
+  /**
+   * The process of an iframe crashed; the tab and its top document are alive.
+   * The client is told the frame is gone (Page.frameDetached, the event it
+   * already knows, for the crashed frame: the client removes the frames below
+   * it with it) and no Page.crashed is sent: that event is the tab's.
+   *
+   * What the crashed process held besides the frame (its execution contexts
+   * and workers) is the content multiplexer's to announce as destroyed, when
+   * it exists; here the page keeps working, which is the part that was broken.
+   */
+  frameCrashed(browsingContext) {
+    // The roots of the crashed frame and of the frames below it end: what waits for them is refused, what they held is
+    // forgotten. Then the client is told.
+    this._contentMux.disposeRootsOf(browsingContext);
+    this.emit(PageTarget.Events.FrameCrashed, {
+      frameId: helper.browsingContextToFrameId(browsingContext),
+    });
+  }
+
   channel() {
-    return this._channel;
+    return this._contentMux;
   }
 
   id() {
@@ -815,6 +1138,11 @@ export class PageTarget {
     this._browserContext.grantPermissionsToOrigin(this._url);
   }
 
+  // ⛔ ONE KEY FOR THE LIFE OF THE PAGE, SET HERE AND DELETED IN dispose():
+  // the browserId kept at construction, as the registry's maps do.
+  // sharedData is copied whole into every content process at each flush, and
+  // until firefox-48 nothing deleted a page's entry, so every page ever opened
+  // stayed in it: 31 entries after 30 pages opened and closed, measured.
   _crossProcessCookieKey() {
     return helper.pageCookieKey(this._browserId);
   }
@@ -825,7 +1153,7 @@ export class PageTarget {
   }
 
   async ensurePermissions() {
-    await this._channel.connect('').send('ensurePermissions', {}).catch(e => void e);
+    await this._contentMux.connect('').send('ensurePermissions', {}).catch(e => void e);
   }
 
   async setInitScripts(scripts) {
@@ -835,17 +1163,22 @@ export class PageTarget {
   }
 
   async pushInitScripts() {
-    await this._channel.connect('').send('setInitScripts', [...this._browserContext.crossProcessCookie.initScripts, ...this.crossProcessCookie.initScripts]).catch(e => void e);
+    await this._contentMux.connect('').send('setInitScripts', [...this._browserContext.crossProcessCookie.initScripts, ...this.crossProcessCookie.initScripts]).catch(e => void e);
   }
 
   async addBinding(worldName, name, script) {
     this.crossProcessCookie.bindings.push({ worldName, name, script });
     this._updateCrossProcessCookie();
-    await this._channel.connect('').send('addBinding', { worldName, name, script }).catch(e => void e);
+    await this._contentMux.connect('').send('addBinding', { worldName, name, script }).catch(e => void e);
   }
 
   async applyContextSetting(name, value) {
-    await this._channel.connect('').send('applyContextSetting', { name, value }).catch(e => void e);
+    // The parent's, not the content's: the content processes are not told.
+    if (name === 'javaScriptDisabled') {
+      this.updateJavaScriptDisabled();
+      return;
+    }
+    await this._contentMux.connect('').send('applyContextSetting', { name, value }).catch(e => void e);
   }
 
   /**
@@ -869,7 +1202,7 @@ export class PageTarget {
     if (width < 10 || width > 10000 || height < 10 || height > 10000)
       throw new Error('ERROR: invalid screencast size');
 
-    const docShell = this._gBrowser.ownerDocument.defaultView.docShell;
+    const docShell = this._gBrowser.documentGlobal.docShell;
     // How much chrome sits above the content, in device pixels. The service
     // IGNORES it when fullWindow is set - it is computed either way so that
     // the two paths differ in one place only, which is the C++ that decides
@@ -878,6 +1211,9 @@ export class PageTarget {
     const devicePixelRatio = this._window.devicePixelRatio;
     const offsetTop = Math.round(devicePixelRatio * rect.top);
     const viewport = this._viewportSize || this._browserContext.defaultViewportSize || { width: 0, height: 0 };
+    // ⛔ The viewport clamp is for the CONTENT crop, where an oversized window
+    // would otherwise show a strip of chrome. Applied to a full-window frame
+    // it would cut the window down to the page again, undoing the flag.
     const clampWidth = fullWindow ? 0 : viewport.width;
     const clampHeight = fullWindow ? 0 : viewport.height;
 
@@ -930,6 +1266,9 @@ export class PageTarget {
   dispose() {
     this.ensureContextMenuClosed();
     this._disposed = true;
+    // ⛔ Before anything else touches the window: the overlay holds
+    // listeners on it and a pref observer, and a listener left on a window
+    // that is going away is a leak nobody will look for here.
     if (this._stealthCursor) {
       StealthCursor.releaseWindow(this._window);
       this._stealthCursor = null;
@@ -946,6 +1285,14 @@ export class PageTarget {
     this._browserContext.pages.delete(this);
     this._registry._browserToTarget.delete(this._linkedBrowser);
     this._registry._browserIdToTarget.delete(this._browserId);
+    // The page's roots: what waits for them is refused, and the registry forgets their actors.
+    for (const rootId of this._contentMux.rootIds())
+      this._contentMux.disposeRoot(rootId);
+    const prefix = this._browserId + '/';
+    for (const key of [...this._registry._rootActors.keys()]) {
+      if (key.startsWith(prefix))
+        this._registry._rootActors.delete(key);
+    }
     if (Services.ppmm.sharedData.has(this._crossProcessCookieKey())) {
       Services.ppmm.sharedData.delete(this._crossProcessCookieKey());
       Services.ppmm.sharedData.flush();
@@ -966,6 +1313,7 @@ PageTarget.Events = {
   ContentDetached: Symbol('PageTarget.ContentDetached'),
   Crashed: Symbol('PageTarget.Crashed'),
   DialogOpened: Symbol('PageTarget.DialogOpened'),
+  FrameCrashed: Symbol('PageTarget.FrameCrashed'),
   ScreencastFrame: Symbol('PageTarget.ScreencastFrame'),
 };
 
@@ -1056,6 +1404,24 @@ class BrowserContext {
       page.updateColorSchemeOverride();
   }
 
+  // The content processes of this context that are still alive: their remote type carries the container,
+  // `web=^userContextId=<id>` (the id is followed by `&` or the end, so 6 is not 60).
+  _processesOfContext() {
+    const mine = new RegExp('\\^userContextId=' + this.userContextId + '(?:&|$)');
+    return ChromeUtils.getAllDOMProcesses().filter(process => process.remoteType && mine.test(process.remoteType));
+  }
+
+  async _waitForProcessesToExit(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (this._processesOfContext().length && Date.now() < deadline)
+      await new Promise(f => setTimeout(f, PROCESS_POLL_MS));
+    return this._processesOfContext();
+  }
+
+  // A context ends with its pages; then its content processes are waited for, a short while, and the ones that
+  // are still there are killed. A process that does not stop on its own stays for good: a service worker whose
+  // script is `for (;;) {}` never answers the shutdown, no shutdown starts for its process, and nothing else ends
+  // it (measured with MOZ_LOG: no MaybeBeginShutDown for the child), so each such context left a process alive.
   async destroy() {
     if (this.userContextId !== 0) {
       ContextualIdentityService.remove(this.userContextId);
@@ -1071,7 +1437,21 @@ class BrowserContext {
           });
         });
       }
+      const leftovers = await this._waitForProcessesToExit(PROCESS_EXIT_WAIT_MS);
+      if (leftovers.length) {
+        const tools = Cc['@mozilla.org/processtools-service;1'].getService(Ci.nsIProcessToolsService);
+        for (const process of leftovers) {
+          try {
+            tools.kill(process.osPid);
+          } catch (e) {
+            Components.utils.reportError(e);
+          }
+        }
+        await this._waitForProcessesToExit(PROCESS_KILL_WAIT_MS);
+      }
     }
+    // Before the maps forget it: a request of this context still in flight asks the proxy filter after this point.
+    GoneContexts.keep(this.userContextId, this._proxy);
     this._registry._browserContextIdToBrowserContext.delete(this.browserContextId);
     this._registry._userContextIdToBrowserContext.delete(this.userContextId);
     if (Services.ppmm.sharedData.has(this._crossProcessCookieKey())) {
@@ -1079,6 +1459,8 @@ class BrowserContext {
       Services.ppmm.sharedData.flush();
     }
     this._registry._updateProxiesWithSameAuthCacheAndDifferentCredentials();
+    // The context leaves the registry but not the resolver's list: GoneContexts keeps its proxy, and _proxiesPresent lists it.
+    this._registry._syncTrrPrefs();
     await this.setServiceWorkersBlocked(false);
   }
 
@@ -1141,7 +1523,17 @@ class BrowserContext {
     newProxyInfoFor(proxy);
     // Clear AuthCache.
     Services.obs.notifyObservers(null, "net:clear-active-logins");
+    const previous = this._proxy;
     this._proxy = proxy;
+    try {
+      // In the same turn as the store: no channel is filtered between the two.
+      // The names of this proxy are excluded from DoH, the other names go over it.
+      this._registry._syncTrrPrefs();
+    } catch (e) {
+      // A proxy with no DoH behind it would leak the names to the host's resolver.
+      this._proxy = previous;
+      throw e;
+    }
     this._registry._updateProxiesWithSameAuthCacheAndDifferentCredentials();
   }
 
@@ -1153,6 +1545,18 @@ class BrowserContext {
       "@mozilla.org/security/certoverride;1"
     ].getService(Ci.nsICertOverrideService);
     if (ignoreHTTPSErrors) {
+      // STEALTHFOX: qui c'erano due Preferences.set GLOBALI - la lista HSTS
+      // precaricata e il cert pinning - applicate solo in questo ramo e mai
+      // ripristinate nell'altro. Un solo contesto che chiedeva di ignorare gli
+      // errori di certificato lasciava tutto il browser senza HSTS e senza
+      // pinning per il resto della sessione.
+      // Il meccanismo vero della funzione e' la riga qui sotto, che e' PER
+      // CONTESTO e simmetrica; quelle due erano un colpo di accetta in piu'.
+      // Un browser senza la lista HSTS precaricata si comporta sul filo in modo
+      // diverso da ogni Firefox vero, e la differenza la vede il SERVER: e' la
+      // classe di divergenza che nessuna prova dal lato JavaScript trova.
+      // E resta anche piu' corretto: ignorare gli errori di CERTIFICATO non e'
+      // la stessa cosa che disattivare HSTS.
       certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyDataForUserContext(this.userContextId, true);
     } else {
       certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyDataForUserContext(this.userContextId, false);
@@ -1177,6 +1581,15 @@ class BrowserContext {
       page.updateLanguageOverride();
   }
 
+  // An IANA zone ("America/Phoenix"). Clearing goes back to the session's
+  // zone, the one BrowsingContext::Attach seeds every top-level context with,
+  // as setLanguageOverride does for the language.
+  //
+  // A zone ICU cannot open never reaches the field: SpiderMonkey resolves an
+  // override it cannot open to the MACHINE's zone, in silence
+  // (js/src/vm/DateTime.cpp, DateTimeInfo::timeZone). It is kept aside
+  // instead, and the next Browser.newPage answers 'Failed to override
+  // timezone', the message Playwright reports as "Invalid timezone ID".
   setTimezoneOverride(timezoneId) {
     if (timezoneId === undefined) {
       this.timezoneOverride = Services.prefs.getStringPref('juggler.timezone.override', '');
@@ -1275,13 +1688,24 @@ class BrowserContext {
     }
   }
 
+  // Each cookie as Firefox stores it, or the command fails naming the ones
+  // Firefox refused and why.
+  // - 'None' is SameSite=None, as a site's header sets it, and Firefox refuses
+  //   it without Secure (network.cookie.sameSite.noneRequiresSecure). It was
+  //   stored as no attribute at all.
+  // - A session cookie (expires -1 or none) gets an expiry that does not
+  //   restrict it: Firefox honours the expiry of a session cookie too, and -1
+  //   seconds was 1969, so the cookie was gone before anyone read it.
+  // - A refused cookie is not stored and Services.cookies.add still answers
+  //   NS_OK, with the reason in the validation it returns: it was dropped.
   setCookies(cookies) {
     const protocolToSameSite = {
       [undefined]: Ci.nsICookie.SAMESITE_UNSET,
-      'None': Ci.nsICookie.SAMESITE_UNSET,
+      'None': Ci.nsICookie.SAMESITE_NONE,
       'Lax': Ci.nsICookie.SAMESITE_LAX,
       'Strict': Ci.nsICookie.SAMESITE_STRICT,
     };
+    const refused = [];
     for (const cookie of cookies) {
       const uri = cookie.url ? NetUtil.newURI(cookie.url) : null;
       let domain = cookie.domain;
@@ -1298,20 +1722,25 @@ class BrowserContext {
         secure = cookie.secure;
       else if (uri && uri.scheme === 'https')
         secure = true;
-      Services.cookies.add(
+      const isSession = cookie.expires === undefined || cookie.expires === -1;
+      const validation = Services.cookies.add(
         domain,
         path,
         cookie.name,
         cookie.value,
         secure,
         cookie.httpOnly || false,
-        cookie.expires === undefined || cookie.expires === -1 /* isSession */,
-        cookie.expires === undefined ? Date.now() + HUNDRED_YEARS : cookie.expires * 1000,
+        isSession,
+        isSession ? Date.now() + HUNDRED_YEARS : cookie.expires * 1000,
         { userContextId: this.userContextId || undefined } /* originAttributes */,
         protocolToSameSite[cookie.sameSite],
         Ci.nsICookie.SCHEME_UNSET
       );
+      if (validation && validation.result !== Ci.nsICookieValidation.eOK)
+        refused.push(`"${cookie.name}" (${validationName(validation.result)})`);
     }
+    if (refused.length)
+      throw new Error(`Firefox refused the cookie${refused.length > 1 ? 's' : ''} ${refused.join(', ')}; the others are set`);
   }
 
   clearCookies() {

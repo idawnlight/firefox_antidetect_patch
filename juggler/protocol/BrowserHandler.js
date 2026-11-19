@@ -27,6 +27,23 @@ export class BrowserHandler {
     this._startCompletePromise = startCompletePromise;
   }
 
+  // STEALTHFOX: questo comando non scrive piu' prefs, e le rifiuta.
+  //
+  // Qui c'era un ciclo che applicava una lista di prefs ricevuta dal
+  // protocollo con i setter di ramo UTENTE. Era l'unico posto in cui un
+  // processo esterno poteva cambiare qualunque pref del browser, ed era anche
+  // l'UNICA strada con cui le 204 prefs dello stealth arrivavano: per questo
+  // non si poteva togliere.
+  //
+  // Adesso il client le scrive nel PROFILO prima dell'avvio, quindi qui non
+  // arriva piu' niente. Il parametro pero' si rifiuta invece di essere
+  // ignorato: un client che continuasse a mandarlo otterrebbe altrimenti un
+  // browser senza le prefs che crede di aver impostato, e senza nessun errore.
+  //
+  // E il nuovo ordine vale di suo. Prima le prefs arrivavano DOPO l'avvio, e
+  // il commento in launcher.py ne misurava la conseguenza: il primo lancio
+  // inizializzava gfx e font con i default e il secondo con le prefs attive,
+  // due percorsi diversi, causa di [B150]. Quella asimmetria non esiste piu'.
   async ['Browser.enable']({attachToDefaultContext, userPrefs}) {
     if (userPrefs !== undefined && userPrefs !== null &&
         !(Array.isArray(userPrefs) && userPrefs.length === 0)) {
@@ -173,13 +190,17 @@ export class BrowserHandler {
     this._targetRegistry.browserContextForId(browserContextId).httpCredentials = nullToUndefined(credentials);
   }
 
-  async ['Browser.setBrowserProxy']({type, host, port, bypass, username, password}) {
-    this._targetRegistry.setBrowserProxy({ type, host, port, bypass, username, password});
+  async ['Browser.setBrowserProxy']({type, host, port, bypass, username, password, udp}) {
+    this._targetRegistry.setBrowserProxy({ type, host, port, bypass, username, password, udp });
   }
 
-  async ['Browser.setContextProxy']({browserContextId, type, host, port, bypass, username, password}) {
+  async ['Browser.setNoBrowserProxy']() {
+    this._targetRegistry.setNoBrowserProxy();
+  }
+
+  async ['Browser.setContextProxy']({browserContextId, type, host, port, bypass, username, password, udp}) {
     const browserContext = this._targetRegistry.browserContextForId(browserContextId);
-    browserContext.setProxy({ type, host, port, bypass, username, password });
+    browserContext.setProxy({ type, host, port, bypass, username, password, udp });
   }
 
   ['Browser.setRequestInterception']({browserContextId, enabled}) {
@@ -215,27 +236,41 @@ export class BrowserHandler {
     await this._targetRegistry.browserContextForId(browserContextId).setColorScheme(nullToUndefined(colorScheme));
   }
 
-  _rifiutaSeNonNeutro(nome, valore, neutro) {
-    if (valore === null || valore === undefined || valore === neutro)
+  // Le tre media feature qui sotto NON hanno piu' un apparato dietro: la
+  // potatura di TargetRegistry.js si e' portata via i metodi di PageTarget, e
+  // non tornano. Ma il comando deve restare DICHIARATO, perche' Playwright
+  // upstream lo manda a ogni creazione di contesto e senza dichiarazione il
+  // binario non si pilota affatto (drive gate rosso su tutte e tre le gambe,
+  // firefox-21, primo giro).
+  //
+  // Il valore NEUTRO si accetta e non fa niente, e non e' una bugia: e'
+  // esattamente cio' che il browser riporta - la dichiarazione in
+  // invisible_core non chiede ne' reduce, ne' forced-colors, ne' contrasto. Un
+  // valore diverso si RIFIUTA nominando la manopola vera, che e' la stessa
+  // scelta gia' fatta in 28.4 per i parametri di Page.setEmulatedMedia: un
+  // override ignorato in silenzio farebbe credere al chiamante di aver
+  // cambiato una media feature mentre la pagina ne risponde un'altra.
+  _refuseUnlessNeutral(name, value, neutral) {
+    if (value === null || value === undefined || value === neutral)
       return;
     throw new Error(
-        `Browser.${nome}: '${valore}' non si imposta dal protocollo. ` +
-        `L'apparato di override delle media feature non esiste piu' in questa ` +
-        `build; il solo valore accettato e' '${neutro}', che e' quello che il ` +
-        `browser riporta davvero. Per cambiarlo si dichiara la preferenza in ` +
-        `invisible_core, non si manda questo comando.`);
+        `Browser.${name}: '${value}' cannot be set from the protocol. ` +
+        `The media-feature override machinery no longer exists in this ` +
+        `build; the only accepted value is '${neutral}', which is what the ` +
+        `browser really reports. To change it, declare the preference in ` +
+        `invisible_core instead of sending this command.`);
   }
 
   async ['Browser.setReducedMotion']({reducedMotion}) {
-    this._rifiutaSeNonNeutro('setReducedMotion', reducedMotion, 'no-preference');
+    this._refuseUnlessNeutral('setReducedMotion', reducedMotion, 'no-preference');
   }
 
   async ['Browser.setForcedColors']({forcedColors}) {
-    this._rifiutaSeNonNeutro('setForcedColors', forcedColors, 'none');
+    this._refuseUnlessNeutral('setForcedColors', forcedColors, 'none');
   }
 
   async ['Browser.setContrast']({contrast}) {
-    this._rifiutaSeNonNeutro('setContrast', contrast, 'no-preference');
+    this._refuseUnlessNeutral('setContrast', contrast, 'no-preference');
   }
   async ['Browser.setUserAgentOverride']({browserContextId, userAgent}) {
     await this._targetRegistry.browserContextForId(browserContextId).setDefaultUserAgent(userAgent);

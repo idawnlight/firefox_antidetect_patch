@@ -309,6 +309,11 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
     mSocket->MarkAsTRRServiceChannel();
   }
 
+  // STEALTH-HOOK(network/proxy-udp)
+  if (!isInTunnel && mConnInfo && mConnInfo->ProxyInfo() && mConnInfo->ProxyInfo()->IsSOCKS5()) {
+    NS_ENSURE_SUCCESS(mSocket->SetSocksProxy(mConnInfo->ProxyInfo()), NS_ERROR_FAILURE);
+  }
+
   NetAddr local;
   local.raw.family = aPeerAddr.raw.family;
   nsresult rv = mSocket->InitWithAddress(&local, nullptr, false, 1);

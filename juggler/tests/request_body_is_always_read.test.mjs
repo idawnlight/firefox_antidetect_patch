@@ -1,3 +1,15 @@
+// A request's body reaches the client whether or not anything intercepts it.
+//
+// Since 2026-08-24 (B170) the body of a POST was not read, to save a copy of
+// every upload; on 2026-10-03 it came back only while interception was on
+// (invisible_core#90). So `request.post_data` answered None for every POST of a
+// page with no route - a login, a search - as if the form had been empty, with
+// no error: measured on firefox-47, a fetch POST with a body read as None with
+// no route and as the body with a route that only continues (B303 E15). The
+// owner chose upstream's behaviour on 2026-10-16: the body is always read, with
+// upstream's reader, which leaves the upload intact and skips bodies over 10 MB.
+//
+// Run: node --test juggler/tests/*.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

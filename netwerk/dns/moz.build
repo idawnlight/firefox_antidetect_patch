@@ -91,6 +91,7 @@ UNIFIED_SOURCES += [
     "TRRServiceChild.cpp",
     "TRRServiceParent.cpp",
 ]
+UNIFIED_SOURCES += ["StealthSessionResolver.cpp"]  # STEALTH-HOOK(network/doh)
 
 IPDL_SOURCES = [
     "PDNSRequest.ipdl",

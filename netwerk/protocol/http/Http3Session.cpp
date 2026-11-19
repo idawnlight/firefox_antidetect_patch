@@ -157,8 +157,10 @@ nsresult Http3Session::Init(nsHttpConnectionInfo* aConnInfo,
     ExtState(ExtendedConnectKind::ConnectUDP).mStatus = NEGOTIATING;
   }
 
+  // STEALTH-HOOK(network/proxy-udp): neqo's own I/O writes on the OS handle and never reaches the SOCKS UDP layer on the socket.
+  const bool socksUdp = aConnInfo->ProxyInfo() && aConnInfo->ProxyInfo()->IsSOCKS5();
   mUseNSPRForIO =
-      StaticPrefs::network_http_http3_use_nspr_for_io() || aIsTunnel;
+      StaticPrefs::network_http_http3_use_nspr_for_io() || aIsTunnel || socksUdp;
 
   uint32_t idleTimeout = StaticPrefs::network_http_http3_idle_timeout();
 

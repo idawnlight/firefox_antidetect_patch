@@ -53,16 +53,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "turn_client_ctx.h"
 #include "ice_ctx.h"
 #include "ice_candidate.h"
-/* Stealthfox: per nr_ice_component_inject_fallback_srflx, il ripiego srflx
- * sintetizzato quando lo STUN vero fallisce. */
-#include "ice_component.h"
 #include "ice_codeword.h"
 #include "ice_reg.h"
 #include "ice_util.h"
 #include "nr_socket_turn.h"
 #include "nr_socket.h"
 #include "nr_socket_multi_tcp.h"
-#include "nr_stealth_bridge.h"
 
 static int next_automatic_preference = 127;
 
@@ -949,30 +945,8 @@ static void nr_ice_srvrflx_stun_finished_cb(NR_SOCKET sock, int how, void *cb_ar
     switch(cand->u.srvrflx.stun->state){
       /* OK, we should have a mapped address */
       case NR_STUN_CLIENT_STATE_DONE:
-
-
-        {
-          nr_ice_candidate *altro;
-          TAILQ_FOREACH(altro, &cand->component->candidates, entry_comp) {
-            if (altro != cand && altro->type == SERVER_REFLEXIVE &&
-                altro->stun_server == NULL) {
-              ABORT(R_NOT_FOUND);
-            }
-          }
-        }
         /* Copy the address */
         nr_transport_addr_copy(&cand->addr, &cand->u.srvrflx.stun->results.stun_binding_response.mapped_addr);
-
-
-        {
-          char stealth_ip[64];
-          if (nr_stealth_get_webrtc_public_ip(stealth_ip, sizeof(stealth_ip)) > 0) {
-            uint16_t port_int = 0;
-            if (nr_transport_addr_get_port(&cand->addr, &port_int) == 0 && port_int > 0) {
-              nr_str_port_to_transport_addr(stealth_ip, nullptr, port_int, IPPROTO_UDP, &cand->addr);
-            }
-          }
-        }
         cand->addr.protocol=cand->base.protocol;
         nr_transport_addr_fmt_addr_string(&cand->addr);
         nr_stun_client_ctx_destroy(&cand->u.srvrflx.stun);

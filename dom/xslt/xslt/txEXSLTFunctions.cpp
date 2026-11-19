@@ -8,7 +8,7 @@
 #include "mozilla/MacroArgs.h"
 #include "mozilla/MacroForEach.h"
 #include "mozilla/dom/DocumentFragmentBinding.h"
-#include "mozilla/dom/StealthSessionDeclaration.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"  // STEALTH-HOOK(fingerprint/locale-time/timezone)
 #include "nsAtom.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentCreatorFunctions.h"
@@ -592,6 +592,8 @@ nsresult txEXSLTFunctionCall::evaluate(txIEvalContext* aContext,
                     RTPCallerType::ResistFingerprinting) *
                     PR_USEC_PER_SEC
               : PR_Now();
+      // STEALTH-HOOK(fingerprint/locale-time/timezone): the page's local time,
+      // the declared zone's (ExplodeLocalTime), not the C runtime's ([B339]).
       ExplodeLocalTime(time, sourceDoc, &prtime);
 
       int32_t offset =

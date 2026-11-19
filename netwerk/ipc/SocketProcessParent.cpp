@@ -266,15 +266,21 @@ SocketProcessParent::AllocPAltServiceParent() {
 already_AddRefed<PProxyConfigLookupParent>
 SocketProcessParent::AllocPProxyConfigLookupParent(
     nsIURI* aURI, const uint32_t& aProxyResolveFlags,
-    const bool& aIsTRRServiceChannel) {
+    const bool& aIsTRRServiceChannel,
+    const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+    const Maybe<OriginAttributes>& aOriginAttributes) {  // STEALTH-HOOK(network/doh)
   RefPtr<ProxyConfigLookupParent> actor = new ProxyConfigLookupParent(
-      aURI, aProxyResolveFlags, aIsTRRServiceChannel);
+      aURI, aProxyResolveFlags, aIsTRRServiceChannel,
+      aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      aOriginAttributes);  // STEALTH-HOOK(network/doh)
   return actor.forget();
 }
 
 mozilla::ipc::IPCResult SocketProcessParent::RecvPProxyConfigLookupConstructor(
     PProxyConfigLookupParent* aActor, nsIURI* aURI,
-    const uint32_t& aProxyResolveFlags, const bool& aIsTRRServiceChannel) {
+    const uint32_t& aProxyResolveFlags, const bool& aIsTRRServiceChannel,
+    const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+    const Maybe<OriginAttributes>& aOriginAttributes) {  // STEALTH-HOOK(network/doh)
   mozilla::ipc::ActorCast<ProxyConfigLookupParent>(aActor)->DoProxyLookup();
   return IPC_OK();
 }

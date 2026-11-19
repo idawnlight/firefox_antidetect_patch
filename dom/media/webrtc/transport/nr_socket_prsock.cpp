@@ -154,8 +154,9 @@ nrappkit copyright:
 #include "nr_socket_local.h"
 #include "nr_socket_proxy_config.h"
 #include "nr_socket_prsock.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "nr_socket_tcp.h"
+#include "nr_stealth_network.h"    // STEALTH-HOOK(fingerprint/webrtc/declared-network)
+#include "nr_stealth_proxy_udp.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "simpletokenbucket.h"
 #include "stun_hint.h"
 #include "test_nr_socket.h"
@@ -551,6 +552,13 @@ abort:
 }
 
 // nr_socket APIs (as member functions)
+// STEALTH-HOOK(fingerprint/webrtc/declared-network): the declared host sockets of this process (R3). Every NrSocket
+// lives on the socket transport thread, so no lock.
+static mozilla::StealthOwnPorts& StealthOwnPortsOfThisProcess() {
+  static mozilla::StealthOwnPorts sOwn;
+  return sOwn;
+}
+
 int NrSocket::create(nr_transport_addr* addr) {
   int r, _status;
 
@@ -576,6 +584,7 @@ int NrSocket::create(nr_transport_addr* addr) {
               naddr.raw.family, PR_GetError());
         ABORT(R_INTERNAL);
       }
+      if (StealthUdpProxyAttachRefused(fd_, mProxyConfig)) ABORT(R_INTERNAL);  // STEALTH-HOOK(network/proxy-udp)
       break;
     case IPPROTO_TCP:
       // TODO: Rewrite this to use WebrtcTcpSocket.
@@ -626,8 +635,24 @@ int NrSocket::create(nr_transport_addr* addr) {
       ABORT(R_INTERNAL);
   }
 
-  status = PR_Bind(fd_, &naddr);
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): R3. The address of a candidate is declared, not the host's: the
+  // kernel socket is bound to the wildcard of the candidate's family on the candidate's port, and the socket reports
+  // the declared address with the port it is bound to. Nothing the host owns reaches the page.
+  {
+    uint16_t port = 0;
+    PRNetAddr bindaddr = naddr;
+    if (!nr_stealth_addr_is_wildcard_ip(addr) && !nr_transport_addr_is_loopback(addr)) {
+      if (nr_transport_addr_get_port(addr, &port) ||
+          PR_SetNetAddr(PR_IpAddrAny, naddr.raw.family, port, &bindaddr) != PR_SUCCESS) {
+        ABORT(R_INTERNAL);
+      }
+    }
+    status = StealthBind(fd_, &bindaddr) ? PR_SUCCESS : PR_FAILURE;
+  }
   if (status != PR_SUCCESS) {
+    // A port that is not available: another socket holds it, or the system keeps it (Windows reserves ranges of the dynamic
+    // range and answers "access denied"). The caller takes the next one (nr_socket_local_create), as the kernel would.
+    if (PR_GetError() == PR_ADDRESS_IN_USE_ERROR || PR_GetError() == PR_NO_ACCESS_RIGHTS_ERROR) ABORT(R_ALREADY);
     r_log(LOG_GENERIC, LOG_CRIT, "Couldn't bind socket to address %s",
           addr->as_string);
     ABORT(R_INTERNAL);
@@ -645,8 +670,13 @@ int NrSocket::create(nr_transport_addr* addr) {
       ABORT(R_INTERNAL);
     }
 
-    if ((r = nr_praddr_to_transport_addr(&naddr, &my_addr_, addr->protocol, 1)))
+    if (nr_stealth_addr_is_wildcard_ip(addr)) {
+      if ((r = nr_praddr_to_transport_addr(&naddr, &my_addr_, addr->protocol, 1)))
+        ABORT(r);
+    } else if ((r = nr_transport_addr_set_port(&my_addr_, PR_ntohs(PR_NetAddrInetPort(&naddr))))) {
+      // STEALTH-HOOK(fingerprint/webrtc/declared-network): the declared address keeps, the kernel's port is taken.
       ABORT(r);
+    }
   }
 
   // Set nonblocking
@@ -664,11 +694,21 @@ int NrSocket::create(nr_transport_addr* addr) {
   if (!NS_SUCCEEDED(rv)) ABORT(R_INTERNAL);
 
   // Finally, register with the STS
+  if (addr->protocol == IPPROTO_UDP && StealthTakeFailNextSocketAttachForTests()) ABORT(R_INTERNAL);  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
   rv = stservice->AttachSocket(fd_, this);
   if (!NS_SUCCEEDED(rv)) {
     r_log(LOG_GENERIC, LOG_CRIT, "Couldn't attach socket to STS, rv=%u",
           static_cast<unsigned>(rv));
     ABORT(R_INTERNAL);
+  }
+
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): a declared UDP host socket is one of ours (R3). Registered as the last
+  // step: a create() that aborts above leaves nothing in the set (the destructor of a socket that was never closed does not
+  // remove it).
+  if (addr->protocol == IPPROTO_UDP && !nr_stealth_addr_is_wildcard_ip(&my_addr_) &&
+      !nr_transport_addr_is_loopback(&my_addr_) &&
+      !nr_transport_addr_get_port(&my_addr_, &stealth_own_port_)) {
+    StealthOwnPortsOfThisProcess().Add(my_addr_.ip_version, stealth_own_port_);
   }
 
   _status = 0;
@@ -730,43 +770,6 @@ static int ShouldDrop(size_t len) {
 }
 
 // This should be called on the STS thread.
-
-
-static bool StealthUscitaUdpDirettaVietata(const nr_transport_addr* to) {
-  if (!mozilla::StaticPrefs::zoom_stealth_webrtc_no_direct_udp()) {
-    return false;
-  }
-  if (!to) {
-    return false;
-  }
-  if (to->ip_version == NR_IPV4) {
-    uint32_t a = ntohl(to->u.addr4.sin_addr.s_addr);
-    uint8_t o1 = (a >> 24) & 0xFF;
-    uint8_t o2 = (a >> 16) & 0xFF;
-    if (a == 0) return false;
-    if (o1 == 127) return false;                          /* loopback */
-    if (o1 == 10) return false;                           /* 10/8 */
-    if (o1 == 172 && o2 >= 16 && o2 <= 31) return false;  /* 172.16/12 */
-    if (o1 == 192 && o2 == 168) return false;             /* 192.168/16 */
-    if (o1 == 169 && o2 == 254) return false;             /* link-local */
-    if (o1 >= 224 && o1 <= 239) return false;             /* multicast, mDNS */
-    return true;
-  }
-  if (to->ip_version == NR_IPV6) {
-    const uint8_t* b = to->u.addr6.sin6_addr.s6_addr;
-    if (b[0] == 0xFF) return false;                       /* multicast */
-    if ((b[0] & 0xFE) == 0xFC) return false;              /* fc00::/7 */
-    if (b[0] == 0xFE && (b[1] & 0xC0) == 0x80) return false; /* fe80::/10 */
-    bool loopback = true;
-    for (int k = 0; k < 15; ++k) {
-      if (b[k] != 0) { loopback = false; break; }
-    }
-    if (loopback && b[15] == 1) return false;
-    return true;
-  }
-  return false;
-}
-
 int NrSocket::sendto(const void* msg, size_t len, int flags,
                      const nr_transport_addr* to) {
   ASSERT_ON_THREAD(ststhread_);
@@ -774,11 +777,12 @@ int NrSocket::sendto(const void* msg, size_t len, int flags,
   PRNetAddr naddr;
   int32_t status;
 
-  if (StealthUscitaUdpDirettaVietata(to)) {
-    r_log(LOG_GENERIC, LOG_INFO,
-          "stealth: UDP diretto rifiutato verso %s (dietro proxy)",
-          to->as_string);
-    ABORT(R_REJECTED);
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): to another socket of this browser at our declared address,
+  // the datagram goes on the kernel's loopback (R3).
+  nr_transport_addr own_peer;
+  if (!nr_transport_addr_copy(&own_peer, to) &&
+      nr_stealth_own_peer_to_kernel(&my_addr_, StealthOwnPortsOfThisProcess(), &own_peer)) {
+    to = &own_peer;
   }
 
   if ((r = nr_transport_addr_to_praddr(to, &naddr))) ABORT(r);
@@ -833,6 +837,8 @@ int NrSocket::recvfrom(void* buf, size_t maxlen, size_t* len, int flags,
 
   if ((r = nr_praddr_to_transport_addr(&nfrom, from, my_addr_.protocol, 0)))
     ABORT(r);
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): from another socket of this browser, the peer is our declared address (R3).
+  (void)nr_stealth_own_peer_from_kernel(&my_addr_, StealthOwnPortsOfThisProcess(), from);
 
   // r_log(LOG_GENERIC,LOG_DEBUG,"Read %d bytes from %s",*len,addr->as_string);
   mozilla::profiler_count_bandwidth_read_bytes(status);
@@ -850,6 +856,10 @@ int NrSocket::getaddr(nr_transport_addr* addrp) {
 // Close the socket so that the STS will detach and then kill it
 void NrSocket::close() {
   ASSERT_ON_THREAD(ststhread_);
+  if (stealth_own_port_) {  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
+    StealthOwnPortsOfThisProcess().Remove(my_addr_.ip_version, stealth_own_port_);
+    stealth_own_port_ = 0;
+  }
   mCondition = NS_BASE_STREAM_CLOSED;
   cancel(NR_ASYNC_WAIT_READ);
   cancel(NR_ASYNC_WAIT_WRITE);
@@ -1316,10 +1326,6 @@ int NrUdpSocketIpc::sendto(const void* msg, size_t len, int flags,
                            const nr_transport_addr* to) {
   ASSERT_ON_THREAD(sts_thread_);
 
-  if (StealthUscitaUdpDirettaVietata(to)) {
-    return R_REJECTED;
-  }
-
   ReentrantMonitorAutoEnter mon(monitor_);
 
   // If send err happened before, simply return the error.
@@ -1648,17 +1654,20 @@ int NrSocketBase::CreateSocket(
   // create IPC bridge for content process
   if (XRE_IsParentProcess()) {
     // TODO: Make NrTcpSocket work on the parent process
-    *sock = new NrSocket();
+    *sock = new NrSocket(config);  // STEALTH-HOOK(network/proxy-udp)
   } else if (XRE_IsSocketProcess()) {
     if (addr->protocol == IPPROTO_TCP) {
       *sock = new NrTcpSocket(config);
     } else {
-      *sock = new NrSocket();
+      *sock = new NrSocket(config);  // STEALTH-HOOK(network/proxy-udp)
     }
   } else {
     if (addr->protocol == IPPROTO_TCP) {
       *sock = new NrTcpSocket(config);
     } else {
+      // The UDP sockets of a PeerConnection are made in the socket process, where the proxy of the PeerConnection is
+      // known and the layer is put on them; here (the content process) they would go out direct, around any proxy.
+      if (config) ABORT(R_REJECTED);  // STEALTH-HOOK(network/proxy-udp)
       *sock = new NrUdpSocketIpc();
     }
   }

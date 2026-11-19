@@ -66,6 +66,7 @@ SOURCES += [
     "TestHttpAtom.cpp",
     "TestSOCKSProxyLookup.cpp",
 ]
+include("stealth.build")  # STEALTH-HOOK(network/socks)
 
 if CONFIG["OS_TARGET"] == "WINNT":
     UNIFIED_SOURCES += [

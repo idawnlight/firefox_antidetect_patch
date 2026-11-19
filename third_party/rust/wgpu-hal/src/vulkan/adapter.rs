@@ -1132,6 +1132,7 @@ impl PhysicalDeviceFeatures {
             caps.device_api_version >= vk::API_VERSION_1_3
                 || caps.supports_extension(khr::shader_non_semantic_info::NAME),
         );
+        features.insert(F::EXTERNAL_TEXTURE);
 
         (features, dl_flags)
     }

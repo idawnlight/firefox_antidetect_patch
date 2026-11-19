@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GLContext.h"
+#include "StealthGLMultisample.h"  // STEALTH-HOOK(fingerprint/webgl/multisample)
 
 #include <ctype.h>
 #include <string.h>
@@ -760,6 +761,7 @@ bool GLContext::InitImpl() {
   }
 
   InitFeatures();
+  const bool stealthMultisample = IsSupported(GLFeature::framebuffer_multisample);  // STEALTH-HOOK(fingerprint/webgl/multisample)
 
   ////
 
@@ -795,6 +797,7 @@ bool GLContext::InitImpl() {
       MarkUnsupported(GLFeature::invalidate_framebuffer);
     }
   }
+  if (StealthDeclaredMultisample(stealthMultisample)) mAvailableFeatures[size_t(GLFeature::framebuffer_multisample)] = true;  // STEALTH-HOOK(fingerprint/webgl/multisample)
 
   if (IsExtensionSupported(GLContext::ARB_pixel_buffer_object)) {
     MOZ_ASSERT(

@@ -144,6 +144,7 @@ impl RenderBackendPool {
 
         // Scene builder thread.
         let sb_fonts = fonts.clone();
+        let rb_fonts = fonts.clone();
         let sb_config = frame_builder_config.clone();
         let sb_size_of_ops =
             size_of_op.map(|o| MallocSizeOfOps::new(o, enclosing_size_of_op));
@@ -203,6 +204,7 @@ impl RenderBackendPool {
                 rb_scene_tx,
                 rb_size_of_ops,
                 namespace_alloc_by_client,
+                rb_fonts,
             );
             backend.run();
             drop(backend);

@@ -30,6 +30,7 @@ UNIFIED_SOURCES += [
     "SpeechSynthesisUtterance.cpp",
     "SpeechSynthesisVoice.cpp",
 ]
+UNIFIED_SOURCES += ["StealthSpeechVoice.cpp", "StealthSpeechVoices.cpp"]  # STEALTH-HOOK(fingerprint/media/speech-voices)
 
 UNIFIED_SOURCES += ["test/nsFakeSynthServices.cpp"]
 

@@ -4,9 +4,9 @@
 
 // Needs to be first.
 #include "Navigator.h"
+#include "StealthDeclarationGate.h"
 
 #include "Geolocation.h"
-#include "StealthDeclarationGate.h"
 #include "base/basictypes.h"
 #include "mozilla/Components.h"
 #include "mozilla/ContentBlockingNotifier.h"
@@ -14,7 +14,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_beacon.h"
 #include "mozilla/StaticPrefs_dom.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BodyExtractor.h"
 #include "mozilla/dom/FetchBinding.h"
 #include "mozilla/dom/File.h"
@@ -44,6 +43,7 @@
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_pdfjs.h"
 #include "mozilla/StaticPrefs_privacy.h"
+#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/StorageAccess.h"
 #include "mozilla/dom/AudioSession.h"
@@ -691,9 +691,10 @@ bool Navigator::GlobalPrivacyControl() {
 }
 
 uint64_t Navigator::HardwareConcurrency() {
-  const int32_t declared = StaticPrefs::zoom_stealth_hw_concurrency();
-  if (declared > 0) {
-    return uint64_t(declared);
+  // STEALTH-HOOK(fingerprint/hardware/profile)
+  {
+    int32_t hwc = StaticPrefs::zoom_stealth_hw_concurrency();
+    if (hwc > 0) return uint64_t(hwc);
   }
 
   workerinternals::RuntimeService* rts =
@@ -905,10 +906,11 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
     return bc->Top()->GetMaxTouchPointsOverride();
   }
 
+  // STEALTH-HOOK(fingerprint/hardware/profile)
   if (aCallerType != CallerType::System &&
       mozilla::gfx::StealthEngineActive()) {
     mozilla::gfx::StealthAssertDeclarationsComplete();
-    return uint32_t(StaticPrefs::zoom_stealth_max_touch_points());
+    return uint32_t(mozilla::StaticPrefs::zoom_stealth_max_touch_points());
   }
 
   // The maxTouchPoints is going to reveal the detail of users' hardware. So,

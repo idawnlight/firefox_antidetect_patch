@@ -6,6 +6,7 @@
 #include "TLSTransportLayer.h"
 
 #include "HttpLog.h"
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "nsISocketProvider.h"
 #include "nsITLSSocketControl.h"
 #include "nsQueryObject.h"
@@ -449,7 +450,7 @@ bool TLSTransportLayer::Init(const char* aTLSHost, int32_t aTLSPort) {
   mFD->secret = reinterpret_cast<PRFilePrivate*>(this);
 
   return NS_SUCCEEDED(provider->AddToSocket(
-      PR_AF_INET, aTLSHost, aTLSPort, nullptr, OriginAttributes(), 0, 0, mFD,
+      PR_AF_INET, aTLSHost, aTLSPort, nullptr, StealthTransportContext(mSocketTransport), 0, 0, mFD,  // STEALTH-HOOK(network/doh)
       getter_AddRefs(mTLSSocketControl)));
 }
 

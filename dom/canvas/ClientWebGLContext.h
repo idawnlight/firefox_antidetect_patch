@@ -743,6 +743,8 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
   friend class webgl::ObjectJS;
   friend class webgl::ProgramKeepAlive;
   friend class webgl::ShaderKeepAlive;
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  friend struct StealthWebGLReadback;
 
   // ----------------------------- Lifetime and DOM ---------------------------
  public:
@@ -1122,20 +1124,10 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
 
  private:
   RefPtr<gfx::DataSourceSurface> BackBufferSnapshot();
-  // Nothing() on failure; otherwise what the read wrote: the part of the
-  // requested rectangle inside the framebuffer, and the row stride.
-  [[nodiscard]] Maybe<webgl::ReadPixelsResult> DoReadPixels(
-      const webgl::ReadPixelsDesc&, Span<uint8_t>) const;
-  // The canvas noise on what a page's readPixels wrote into aDest
-  // (gfx::StealthProjectPixels on the framebuffer's stored pixels).
-  void StealthProjectReadPixels(const webgl::ReadPixelsDesc& aDesc,
-                                Span<uint8_t> aDest,
-                                const webgl::ReadPixelsResult& aWritten) const;
-  // The same for a readPixels into a PIXEL_PACK_BUFFER, after the host wrote
-  // it.
-  void StealthProjectReadPixelsPbo(const webgl::ReadPixelsDesc& aDesc,
-                                   uint64_t aOffset) const;
-  Maybe<double> BufferParameter(GLenum target, GLenum pname) const;
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  [[nodiscard]] bool DoReadPixels(
+      const webgl::ReadPixelsDesc&, Span<uint8_t>,
+      webgl::ReadPixelsResult* aWritten = nullptr) const;
 
   RefPtr<dom::HTMLCanvasElement::SurfaceSnapshotPromise>
   BackBufferSnapshotAsync();

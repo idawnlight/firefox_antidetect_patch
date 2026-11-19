@@ -111,10 +111,12 @@ EXTRA_JS_MODULES += [
     "pings/UntrustedModulesPing.sys.mjs",
     "TelemetryStartup.sys.mjs",
 ]
+EXTRA_JS_MODULES += ["app/StealthPingsender.sys.mjs"]  # STEALTH-HOOK(stillborn/telemetry)
 
 EXTRA_JS_MODULES.backgroundtasks += [
     "pings/BackgroundTask_pingsender.sys.mjs",
 ]
+EXTRA_JS_MODULES.backgroundtasks += ["pings/StealthPingsenderRoute.sys.mjs"]  # STEALTH-HOOK(stillborn/telemetry)
 
 if CONFIG["OS_ARCH"] == "WINNT":
     EXTRA_JS_MODULES += [

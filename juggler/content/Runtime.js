@@ -12,12 +12,55 @@ if (!this.Debugger) {
   addDebuggerToGlobal(Components.utils.getGlobalForObject(globalThis));
 }
 
+// ⛔ AN ID NAMES ONE OBJECT FOR THE WHOLE SESSION, NOT FOR ONE PROCESS.
+//
+// Every other id Juggler hands out is a UUID (Helper.generateId); these were
+// a counter, and this file is loaded once per content process and once per
+// worker, so every process counted id-1, id-2... from the start. A page that
+// moves to another process - a document served with
+// Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy and the one
+// after it, measured 2026-10-24 - had its new worlds named exactly as the old
+// ones, in the same order: the utility world was id-8 in both, and a client
+// still holding the old id-8 and an object of it (id-10) was answered by the
+// new id-8 with "Cannot find object with id = id-10". A context id or an
+// object id from a process that is gone can now only be unknown, which the
+// engine already answers as such ("Failed to find execution context",
+// "Cannot find object"); it can no longer name something else, and an
+// element handle kept across the move can no longer reach a different node.
+//
+// Math.random, not Services or crypto: this file must load in a worker too
+// (see the note at the top), and two draws give about 80 bits, so two
+// processes of one session never share a prefix.
 let idPrefix = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 let lastId = 0;
 function generateId() {
   return 'id-' + idPrefix + '-' + (++lastId);
 }
 
+// Stealth: JSON stringify helper source, re-evaluated on debugger re-attach.
+//
+// ⛔ SI LEGGE E SI RISCRIVE IL DESCRITTORE, MAI LA PROPRIETA'. MISURATO, NON
+// SUPPOSTO. La versione precedente faceva:
+//     const oldToJSON = Date.prototype?.toJSON;   // LETTURA   -> chiama il getter
+//     Date.prototype.toJSON = undefined;          // SCRITTURA -> chiama il setter
+//     ... Date.prototype.toJSON = oldToJSON;      // SCRITTURA -> chiama il setter
+// Se la PAGINA ha ridefinito `Date.prototype.toJSON` come accessore, quelle tre
+// operazioni entrano nel suo codice. La trappola sta in due righe:
+//     Object.defineProperty(Date.prototype, 'toJSON', {get(){...}, set(v){...}})
+// Misura 2026-08-19: registra `get, set:undefined, set:function` per OGNI
+// `evaluate` che ritorna un valore e ZERO per una che non serializza; sei scatti
+// dopo la prima, dodici dopo la seconda. Si accumula a ogni giro.
+//
+// `getOwnPropertyDescriptor` non invoca il getter e `defineProperty` non invoca
+// il setter, quindi nessuna delle tre operazioni tocca piu' il codice della
+// pagina. Il comportamento non cambia: durante la serializzazione `toJSON` e'
+// una proprieta' dato con valore `undefined` come prima, e alla fine il
+// descrittore originale torna identico, accessore compreso.
+//
+// Le tre native si catturano al momento della `bind`, cosi' un aggancio
+// installato DOPO non le intercetta. Residuo dichiarato: una pagina che
+// agganci `Object.defineProperty` PRIMA ci vedrebbe comunque - e' un aggancio
+// molto piu' invasivo, che rompe siti veri, e non e' stato misurato.
 const _STEALTH_JSON_STRINGIFY_SRC = `((stringify, getDesc, defProp, object) => {
   const DESC_VUOTO = {value: undefined, writable: true, enumerable: false, configurable: true};
   const dDate = getDesc(Date.prototype, 'toJSON');
@@ -118,8 +161,10 @@ class Runtime {
       throw new Error('Failed to find execution context with id = ' + executionContextId);
     const exceptionDetails = {};
     let result = await executionContext.evaluateScript(expression, exceptionDetails);
-    if (!result)
+    if (!result) {
+      executionContext.throwIfItsWindowLeft();
       return {exceptionDetails};
+    }
     if (returnByValue)
       result = executionContext.ensureSerializedToValue(result);
     return {result};
@@ -131,8 +176,10 @@ class Runtime {
       throw new Error('Failed to find execution context with id = ' + executionContextId);
     const exceptionDetails = {};
     let result = await executionContext.evaluateFunction(functionDeclaration, args, exceptionDetails);
-    if (!result)
+    if (!result) {
+      executionContext.throwIfItsWindowLeft();
       return {exceptionDetails};
+    }
     if (returnByValue)
       result = executionContext.ensureSerializedToValue(result);
     return {result};
@@ -268,10 +315,35 @@ class Runtime {
     });
   }
 
+  // A runtime that is disposed keeps nothing of the documents it served: its contexts hold their windows (and
+  // their remote objects hold the page's objects), and the debugger holds its debuggees until it is told otherwise.
   dispose() {
-    for (const tearDown of this._eventListeners)
-      tearDown.call(null);
-    this._eventListeners = [];
+    let failure = null;
+    // Every listener is removed, even when one refuses: each of them holds this runtime, and with it the contexts.
+    for (const tearDown of this._eventListeners) {
+      try {
+        tearDown.call(null);
+      } catch (e) {
+        failure = failure || { error: e };
+      }
+    }
+    try {
+      this._eventListeners = [];
+      for (const context of [...this._executionContexts.values()]) {
+        try {
+          this.destroyExecutionContext(context);
+        } catch (e) {
+          dump('Runtime.dispose: a context failed to be destroyed: ' + e.message + '\n');
+        }
+      }
+      this._executionContexts.clear();
+      this._windowToExecutionContext.clear();
+      this._pendingPromises.clear();
+      this._debugger.removeAllDebuggees();
+    } finally {
+      if (failure)
+        throw failure.error;
+    }
   }
 
   async _awaitPromise(executionContext, obj, exceptionDetails = {}) {
@@ -293,6 +365,23 @@ class Runtime {
     this._pendingPromises.set(promiseID, {resolve: null, reject, executionContext, exceptionDetails});
 
     const rawPromise = obj.unsafeDereference();
+    // NIENTE `Cu.waiveXrays` QUI, ED E' LA DIFFERENZA FRA UN `then` NATIVO E
+    // QUELLO DELLA PAGINA.
+    //
+    // Qui c'era `Cu.waiveXrays(rawPromise).then(...)`. Il waiver toglie l'Xray,
+    // quindi `.then` si risolveva sulla catena di prototipi VERA del sito: se
+    // una pagina rimpiazza `Promise.prototype.then`, il suo codice veniva
+    // eseguito e poteva CONTARE. Misurato il 2026-08-23 con
+    // `tests/gates/observable_crossings.py`: una `page.evaluate` asincrona
+    // faceva scattare la trappola **1 volta su 1**, ed era l'unico
+    // attraversamento rimasto dell'intero flusso.
+    //
+    // Senza waiver, `rawPromise` resta dietro l'Xray e `.then` risolve al
+    // metodo NATIVO, che il sito non puo' sviare. Il comportamento non cambia:
+    // `Promise.prototype.then` opera sullo slot interno, non sul prototipo.
+    // Verificato su 7 casi - valore, ritardo, oggetto, promise gia' risolta,
+    // catena di await, fetch, e il RIFIUTO col messaggio intatto - 7 su 7, e il
+    // gate torna a zero attraversamenti.
     rawPromise.then(
       () => {
         this._pendingPromises.delete(promiseID);
@@ -335,7 +424,14 @@ class Runtime {
         this._pendingPromises.delete(promiseID);
       }
     }
-    this._debugger.removeDebuggee(destroyedContext._contextGlobal);
+    // The debuggee is removed by the Debugger.Object that addDebuggee gave, not by the global it was given. The
+    // global of the page's own world is its WindowProxy, and a WindowProxy follows the frame: once the frame has
+    // gone to another process (an iframe of another site) the proxy here is a remote one, no longer a global object,
+    // and `removeDebuggee(proxy)` throws "argument is not a global object" while the debuggee stays registered. The
+    // throw stopped everything that destroyed the frame's contexts: the commit of the document that replaces the
+    // page the frame was in (the navigation to the same address, whose document stays in this process, then never
+    // told its document: it neither committed nor aborted) and the detach of the frame.
+    this._debugger.removeDebuggee(destroyedContext._debuggee);
     if (destroyedContext._serializationGlobal)
       this._debugger.removeDebuggee(destroyedContext._serializationGlobal);
     this._executionContexts.delete(destroyedContext._id);
@@ -351,12 +447,59 @@ class ExecutionContext {
     this._domWindow = domWindow;
     this._contextGlobal = contextGlobal;
     this._debuggee = runtime._debugger.addDebuggee(contextGlobal);
+    // ⛔ DOVE SI SERIALIZZA E' UNA DECISIONE, NON UN DETTAGLIO.
+    //
+    // Il valore di ritorno di `evaluate` veniva serializzato NEL REALM DELLA
+    // PAGINA, e `JSON.stringify` legge `toJSON` su ogni valore che tocca: se il
+    // sito ha messo un accessore su `Object.prototype.toJSON`, quelle letture
+    // sono sue e le puo' CONTARE. Misurato il 2026-08-23 su un flusso normale:
+    // click, `page.title()`, `page.content()`, i locator e una `evaluate` che
+    // torna un numero fanno **zero** attraversamenti; una `evaluate` che torna
+    // `{a:1, b:[1,2,3]}` ne fa **sei** su `toJSON` piu' **due** su
+    // `Object.defineProperty`. Erano l'unico attraversamento osservabile
+    // dell'intero flusso.
+    //
+    // I due `defineProperty` erano gia' un residuo DICHIARATO nel commento di
+    // `_STEALTH_JSON_STRINGIFY_SRC` ("una pagina che agganci Object.defineProperty
+    // PRIMA ci vedrebbe comunque - non e' stato misurato"). Adesso e' misurato.
+    //
+    // Il rimedio non e' spostare `evaluate`: e' serializzare in un global che
+    // NON e' quello del sito. Da li' un oggetto della pagina si legge attraverso
+    // un Xray, che non espone la catena dei prototipi, quindi
+    // `Object.prototype.toJSON` del sito non esiste per chi serializza e il
+    // getter non parte. `wantXrays` qui non e' una scelta: e' il meccanismo.
+    //
+    // Nei worker `serializationGlobal` e' assente e si ricade sul global del
+    // contesto, che nei worker e' gia' l'unico che c'e'.
+    // ⛔ SI COSTRUISCE ALLA PRIMA SERIALIZZAZIONE, NON A OGNI FRAME.
+    //
+    // Prima il global arrivava gia' costruito, perche' era un ARGOMENTO: quindi
+    // una sandbox in piu' nasceva per ogni frame di ogni documento, anche dove
+    // nessuno serializzava mai niente. Su una pagina con cinquanta iframe sono
+    // cinquanta global pagati per nulla. Adesso arriva una FABBRICA e si chiama
+    // al primo uso vero.
+    //
+    // `_ensureJsonStringify` era gia' pigra per una ragione diversa e piu'
+    // stretta - non toccare gli intrinseci prima del primo script della pagina -
+    // ma la sandbox sotto di lei non lo era, quindi meta' del costo restava.
+    // ⛔ E' SEMPRE UNA FABBRICA, mai un global gia' costruito. La prima stesura
+    // accettava tutti e due e distingueva con `typeof === 'function'`: un
+    // parametro che significa due cose diverse a seconda del tipo e' esattamente
+    // cio' che questo progetto ha gia' pagato una volta - `push_range` che
+    // tornava uno o tre token senza dirlo - e prima o poi qualcuno lo legge
+    // nell'altro senso. I worker non ne passano nessuna e ricadono sul proprio
+    // global, che li' e' l'unico che esista.
     this._fabbricaSerializzazione = serializationGlobal || null;
     this._serializationGlobal = null;
     this._serializationDebuggeeCache = null;
     this._remoteObjects = new Map();
     this._id = generateId();
     this._auxData = auxData;
+    // STEALTHFOX: do NOT run any code in the page realm before the page's own
+    // scripts. Building this JSON-stringify helper eagerly would touch page-realm
+    // intrinsics (JSON / Date.prototype / Array.prototype) before the first page
+    // script, an observable difference from a never-automated page. It is only
+    // needed at serialization time (always post-page); build it lazily on first use.
     this._jsonStringifyObject = null;
   }
 
@@ -395,6 +538,30 @@ class ExecutionContext {
 
   _isIsolatedWorldContext() {
     return !!this._auxData.name;
+  }
+
+  // An evaluation that raised in a world whose window has since left (the iframe was removed, or went to another
+  // process) did not raise in the page: the engine's own read of the window found a cross-origin proxy or a closed
+  // window ("Permission denied to access property "document" on cross-origin object", the first thing the injected
+  // script reads of its window). That is not an exception of the page, to be returned as one: it is the context being
+  // destroyed, the answer of every other command aimed at a context that went. The check runs only after an
+  // exception, so a successful evaluation costs nothing and the page sees nothing of it.
+  throwIfItsWindowLeft() {
+    if (this._windowLeft())
+      throw new Error('Execution context was destroyed!');
+  }
+
+  _windowLeft() {
+    const window = this._domWindow;
+    if (!window)
+      return false;
+    try {
+      if (Cu.isRemoteProxy(window) || Cu.isDeadWrapper(window) || window.closed)
+        return true;
+      return !window.document;
+    } catch (e) {
+      return true;
+    }
   }
 
   async evaluateScript(script, exceptionDetails = {}) {
@@ -473,14 +640,38 @@ class ExecutionContext {
 
   addBinding(name, script) {
     Cu.exportFunction((...args) => {
+      let payload = args[0];
+      // A FUNCTION IS NOT A MESSAGE: it is the page-side end of the binding, which the script of the binding hands over so
+      // that the client can answer a call later without a name on the page's window. It is kept as an object of this
+      // context (the client calls it with Runtime.callFunction and the objectId) and the event carries only its id.
+      // Anything else is the message, as before.
+      if (typeof payload === 'function')
+        payload = { bindingEnd: this.rawValueToRemoteObject(payload).objectId };
       emitEvent(this._runtime.events.onBindingCalled, {
         executionContextId: this._id,
         name,
-        payload: args[0],
+        payload,
       });
     }, this._contextGlobal, {
       defineAs: name,
     });
+    // STEALTHFOX: non enumerabile.
+    //
+    // exportFunction crea la proprieta' ENUMERABILE, quindi finiva dentro
+    // for..in e Object.keys(window): la scansione piu' economica che un sito
+    // possa fare. Qui passa il TRASPORTO interno di Playwright, non il nome
+    // che l'utente ha scelto (quello lo crea il controller iniettato dal lato
+    // JavaScript), quindi nasconderlo non cambia nessuna API.
+    //
+    // Resta visibile a getOwnPropertyNames, e non puo' essere altrimenti: la
+    // pagina deve poterla chiamare. Misurato il 2026-08-24: un lancio normale
+    // non arriva mai qui, ci arriva solo chi chiama expose_function.
+    // ⛔ SENZA L'XRAY. La prima stesura leggeva il descrittore dal global
+    // avvolto, e l'Xray non lascia toccare la proprieta' sottostante: misurato,
+    // il controller diventava non enumerabile (quello lo definisce il JS
+    // iniettato, dal lato contenuto) e il canale restava dentro Object.keys.
+    // Il waiver serve a operare sull'oggetto vero, e vale solo qui: la
+    // proprieta' l'abbiamo appena creata noi, non e' del sito.
     try {
       const nudo = Cu.waiveXrays(this._contextGlobal);
       const descr = Object.getOwnPropertyDescriptor(nudo, name);

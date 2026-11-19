@@ -9,6 +9,7 @@
 #include "MessageEventRunnable.h"
 #include "RuntimeService.h"
 #include "ScriptLoader.h"
+#include "StealthWorkerDeclaration.h"  // STEALTH-HOOK(fingerprint/locale-time/workers)
 #include "WorkerCSPEventListener.h"
 #include "WorkerDebugger.h"
 #include "WorkerDebuggerManager.h"
@@ -94,7 +95,6 @@
 #include "mozilla/extensions/ExtensionBrowser.h"  // extensions::Create{AndDispatchInitWorkerContext,WorkerLoaded,WorkerDestroyed}Runnable
 #include "mozilla/extensions/WebExtensionPolicy.h"
 #include "mozilla/glean/DomUseCounterMetrics.h"
-#include "mozilla/intl/StealthSessionPrefs.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/net/CookieJarSettings.h"
@@ -2976,16 +2976,8 @@ WorkerPrivate::WorkerPrivate(
   } else {
     AssertIsOnMainThread();
 
-    nsAutoCString language(mLoadInfo.mLanguageOverrideLocale);
-    intl::OrSessionLanguage(language);
-    intl::OrSessionTimezone(mLoadInfo.mTimezoneOverride);
-    if (!language.IsEmpty()) {
-      if (mLoadInfo.mLanguageOverride.IsEmpty()) {
-        Navigator::GetAcceptLanguages(mLoadInfo.mLanguageOverride, &language);
-      }
-      intl::PrimaryLanguageTag(language, mLoadInfo.mLanguageOverrideLocale);
-    }
-
+    // STEALTH-HOOK(fingerprint/locale-time/workers)
+    DeclareWorkerLanguageAndZone(mLoadInfo);
     RuntimeService::GetDefaultJSSettings(mJSSettings);
 
     {
@@ -6361,9 +6353,7 @@ void WorkerPrivate::UpdateContextOptionsInternal(
 void WorkerPrivate::UpdateLanguageOverrideInternal(
     const nsCString& aLanguageOverride,
     const nsTArray<nsString>& aResolvedLanguages) {
-  nsAutoCString primaryLocale;
-  intl::PrimaryLanguageTag(aLanguageOverride, primaryLocale);
-  mLoadInfo.mLanguageOverrideLocale = primaryLocale;
+  mLoadInfo.mLanguageOverrideLocale = aLanguageOverride;
   if (aLanguageOverride.IsEmpty()) {
     mLoadInfo.mLanguageOverride.Clear();
   } else {
@@ -6379,7 +6369,8 @@ void WorkerPrivate::UpdateLanguageOverrideInternal(
         if (aLanguageOverride.IsEmpty()) {
           JS::SetRealmLocaleOverride(realm, nullptr);
         } else {
-          JS::SetRealmLocaleOverride(realm, primaryLocale.get());
+          // STEALTH-HOOK(fingerprint/locale-time/workers)
+          SetWorkerRealmLocale(realm, aLanguageOverride);
         }
       }
     }
@@ -6425,7 +6416,8 @@ void WorkerPrivate::UpdateTimezoneOverrideInternal(JSContext* aCx,
 
 void WorkerPrivate::UpdateLanguagesInternal(
     const nsTArray<nsString>& aLanguages) {
-  if (!mLoadInfo.mLanguageOverride.IsEmpty()) {
+  // STEALTH-HOOK(fingerprint/locale-time/workers)
+  if (WorkerFollowsOwnerLanguage(mLoadInfo)) {
     return;
   }
   WorkerGlobalScope* globalScope = GlobalScope();

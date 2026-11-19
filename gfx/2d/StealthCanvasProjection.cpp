@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+#include "DrawEventRecorder.h"
+#include "RecordedEventImpl.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/StealthRefuse.h"
 #include "nsTArray.h"
@@ -64,15 +66,26 @@ inline uint32_t Canonical(const uint8_t* aPx, const Layout& aL) {
 inline int64_t Dist2(uint32_t a, uint32_t b) {
   int64_t s = 0;
   for (int shift = 0; shift < 32; shift += 8) {
-    const int64_t d =
-        int64_t((a >> shift) & 0xffu) - int64_t((b >> shift) & 0xffu);
+    const int64_t d = int64_t((a >> shift) & 0xffu) - int64_t((b >> shift) & 0xffu);
     s += d * d;
   }
   return s;
 }
 
-// Test whether the canonical colors lie within aTol of one segment.
-// Use integer arithmetic so all processes and architectures make the same choice.
+// Do these colours all lie on ONE straight segment, between the two of them
+// farthest apart, within aTol channel units? That is what a pixel looks like
+// when it is a blend of two colours: text (the ink over the background at a
+// coverage level, at ANY contrast), the antialiased edge between two fills, a
+// two-stop gradient. A real machine differs from another there in WHICH blend
+// a pixel gets, never by a third colour, and a touched pixel would be a level
+// that rasteriser does not produce (an 18th grey in DirectWrite text).
+//
+// Integer arithmetic only, so the content process, the GPU process and a
+// worker, on Windows and on Linux, decide every pixel the same way: a float
+// compared with a threshold could split them. The farthest pair is the first
+// found in a fixed order; the distance from a colour r to the segment p-q is
+// tested as |r-p|^2 * L - t^2 <= tol^2 * L, with t = (r-p).(q-p) and L = |q-p|^2,
+// clamped to the end points.
 bool OnOneSegment(const uint32_t (&aColours)[9], int64_t aTol) {
   int64_t len = -1;
   int pi = 0;
@@ -96,21 +109,19 @@ bool OnOneSegment(const uint32_t (&aColours)[9], int64_t aTol) {
   for (uint32_t r : aColours) {
     int64_t t = 0;
     for (int shift = 0; shift < 32; shift += 8) {
-      const int64_t w =
-          int64_t((r >> shift) & 0xffu) - int64_t((p >> shift) & 0xffu);
-      const int64_t v =
-          int64_t((q >> shift) & 0xffu) - int64_t((p >> shift) & 0xffu);
+      const int64_t w = int64_t((r >> shift) & 0xffu) - int64_t((p >> shift) & 0xffu);
+      const int64_t v = int64_t((q >> shift) & 0xffu) - int64_t((p >> shift) & 0xffu);
       t += w * v;
     }
-    bool near;
+    bool nearSegment;
     if (t <= 0) {
-      near = Dist2(r, p) <= tol2;
+      nearSegment = Dist2(r, p) <= tol2;
     } else if (t >= len) {
-      near = Dist2(r, q) <= tol2;
+      nearSegment = Dist2(r, q) <= tol2;
     } else {
-      near = Dist2(r, p) * len - t * t <= tol2 * len;
+      nearSegment = Dist2(r, p) * len - t * t <= tol2 * len;
     }
-    if (!near) {
+    if (!nearSegment) {
       return false;
     }
   }
@@ -180,10 +191,16 @@ bool StealthProjectPixels(const uint8_t* aSrc, int32_t aSrcStride,
       if (c == up[i] && c == down[i] && c == mid[i - 1] && c == mid[i + 1]) {
         continue;
       }
-      // Require a third independent color in the 3x3 neighborhood.
-      // Two-color blends, including antialiased text edges, remain unchanged.
-      const uint32_t around9[9] = {up[i - 1],   up[i],   up[i + 1],
-                                   mid[i - 1],  c,       mid[i + 1],
+      // And not a blend of TWO colours: the 3x3 neighbourhood must hold a third,
+      // independent one (a shadow over a fill and the background, an emoji, the
+      // junction of three shapes). Text at any contrast and the edge between two
+      // fills are left exactly as drawn. This replaced a band on the step to the
+      // neighbours (zoom.stealth.canvas.edge_step), which no step value could
+      // make separate low-contrast coloured text from a gradient: a commercial
+      // fingerprinting service's own rgba(102,204,0,0.2) line has the steps of
+      // a gradient on retail too.
+      const uint32_t around9[9] = {up[i - 1],  up[i],  up[i + 1],
+                                   mid[i - 1], c,      mid[i + 1],
                                    down[i - 1], down[i], down[i + 1]};
       if (OnOneSegment(around9, tolerance)) {
         continue;
@@ -191,12 +208,17 @@ bool StealthProjectPixels(const uint8_t* aSrc, int32_t aSrcStride,
       // The 3x3 neighbourhood through a SUM: independent of row order and of
       // which neighbour is which, so a flipped or re-laid-out copy of the same
       // pixels gets the same key.
-      const uint32_t around =
-          Mix(up[i - 1]) + Mix(up[i]) + Mix(up[i + 1]) + Mix(mid[i - 1]) +
-          Mix(mid[i + 1]) + Mix(down[i - 1]) + Mix(down[i]) + Mix(down[i + 1]);
-      const uint32_t key = Mix(seed ^ Mix(c * 0x9e3779b1u + 0x632be5abu) ^
-                               (around * 0x27d4eb2fu));
-      // Use the hash low bit for each selected channel.
+      const uint32_t around = Mix(up[i - 1]) + Mix(up[i]) + Mix(up[i + 1]) +
+                              Mix(mid[i - 1]) + Mix(mid[i + 1]) +
+                              Mix(down[i - 1]) + Mix(down[i]) +
+                              Mix(down[i + 1]);
+      const uint32_t key =
+          Mix(seed ^ Mix(c * 0x9e3779b1u + 0x632be5abu) ^ (around * 0x27d4eb2fu));
+      // The LOW bit of the key. db967d50 took the top one; a version with
+      // zoom.stealth.canvas.edge_share chose WHICH edges to touch from the top
+      // eight bits, and the bit written had to stay independent of that choice,
+      // so it moved down. edge_share is gone, and both bits of Mix are uniform;
+      // the low one stays because the measured builds of 2026-10-19 used it.
       uint8_t bit = uint8_t(key & 1u);
       const uint8_t r0 = uint8_t(c >> 24);
       const uint8_t g0 = uint8_t(c >> 16);
@@ -205,9 +227,18 @@ bool StealthProjectPixels(const uint8_t* aSrc, int32_t aSrcStride,
           ((r0 | 1u) > alpha || (g0 | 1u) > alpha || (b0 | 1u) > alpha)) {
         bit = 0;  // a premultiplied channel never exceeds its alpha
       }
-      // Change only channels distinct from all eight neighbors. With canonical
-      // values two units apart, the low bit cannot reverse their ordering or create
-      // a new local extremum. Preserve premultiplied channel <= alpha.
+      // WHICH channels carry the bit: only one whose value differs from that
+      // channel in all eight neighbours. Values that differ are two apart once
+      // the low bit is cleared, so a bit of noise on either side cannot swap
+      // or level them, and every difference between neighbours keeps the sign
+      // the drawing gave it: no new local extremum in any direction. The bit
+      // on all three channels at once turned a channel constant across a shape
+      // (the 0 of a red-green WebGL gradient) into isolated 1s, and a slow
+      // gradient into +-1 spikes, the high-frequency signature that a page
+      // reading back its own render can count (test_fingerprint_surface.py of
+      // the wrapper, 117 spikes against 0). A channel left out keeps the drawn
+      // value, low bit included. Channels equal to each other decide together,
+      // so a grey stays grey.
       const uint8_t ch[3] = {r0, g0, b0};
       bool apart[3];
       for (int k = 0; k < 3; ++k) {
@@ -274,6 +305,39 @@ already_AddRefed<DataSourceSurface> StealthProjectedRegion(
   StealthProjectPixels(src.GetData(), src.GetStride(), size, format, aRect,
                        dst.GetData(), dst.GetStride(), aPremultiplied, aNoise);
   return out.forget();
+}
+
+// The projected stand-in reads as projected here too.
+already_AddRefed<DataSourceSurface> StealthProjectOriginal(
+    SourceSurface* aOriginal, const IntSize& aSize,
+    const StealthStandIn& aStandIn) {
+  RefPtr<DataSourceSurface> data = aOriginal->GetDataSurface();
+  if (data && aStandIn.noise) {
+    return StealthProjectedRegion(data, IntRect(IntPoint(), aSize),
+                                  aStandIn.premultiplied, aStandIn.noise);
+  }
+  return data.forget();
+}
+
+// Since 157 a canvas recording wraps its snapshots in a surface whose
+// GetType() is CANVAS_RECORDING (gfx/layers/ipc/CanvasChild.cpp); what it
+// wraps is what GetUnderlyingType() answers. Those are the surfaces this was
+// written for, so the test is on the underlying type: a plain RECORDING
+// surface answers RECORDING there too.
+bool StealthCanProjectRecording(SourceSurface* aSurface,
+                                const StealthCanvasNoise& aNoise) {
+  return aSurface && aSurface->GetUnderlyingType() == SurfaceType::RECORDING &&
+         aNoise;
+}
+
+void StealthRecordProjection(const DrawTargetRecording* aDT,
+                             DrawEventRecorderPrivate* aRecorder,
+                             SourceSurface* aSurface, const void* aStandIn,
+                             bool aPremultiplied,
+                             const StealthCanvasNoise& aNoise) {
+  aRecorder->RecordEvent(
+      aDT, RecordedStealthProjectSurface(aSurface, aStandIn, aPremultiplied,
+                                         aNoise));
 }
 
 }  // namespace gfx

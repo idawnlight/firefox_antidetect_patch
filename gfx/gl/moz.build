@@ -138,6 +138,7 @@ UNIFIED_SOURCES += [
 SOURCES += [
     "GLScreenBuffer.cpp",
 ]
+UNIFIED_SOURCES += ["StealthGLMultisample.cpp"]  # STEALTH-HOOK(fingerprint/webgl/multisample)
 
 TEST_DIRS += [
     "gtest",

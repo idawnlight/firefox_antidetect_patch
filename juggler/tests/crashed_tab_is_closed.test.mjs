@@ -23,7 +23,8 @@ const code = rel => fs.readFileSync(path.join(JUGGLER, rel), 'utf8')
 
 test('the crash observer closes the tab after disposing its target', () => {
   const registry = code('TargetRegistry.js');
-  const observer = registry.slice(0, registry.indexOf("'oop-frameloader-crashed'"));
+  const start = registry.indexOf('_onFrameLoaderCrashed(frameLoader, data) {');
+  const observer = registry.slice(start, registry.indexOf('\n  }\n', start));
   const tail = observer.slice(observer.lastIndexOf('target.emit(PageTarget.Events.Crashed'));
   // dispose() first: it takes the target out of _browserToTarget, so the
   // TabClose that removeTab fires finds nothing to dispose a second time.
@@ -39,4 +40,15 @@ test('only a browser that does not survive its last window keeps the tab', () =>
   // The flag is Juggler's -silent, which holds the browser in the
   // last-window-closing survival area.
   assert.match(code('components/Juggler.js'), /new TargetRegistry\(\{ survivesLastWindow: this\._silent \}\)/);
+});
+
+test('disposing a target leaves the window, the tab and the browser that closeCrashedTab reads right after', () => {
+  const registry = code('TargetRegistry.js');
+  const start = registry.indexOf('export class PageTarget');
+  const body = registry.slice(registry.indexOf('  dispose() {', start));
+  const dispose = body.slice(0, body.indexOf('\n  }\n') + 4);
+  assert.doesNotMatch(dispose, /this\._(?:gBrowser|tab|window|linkedBrowser)\s*=/);
+  // What closeCrashedTab reads is what dispose must not have taken away.
+  const crashed = registry.slice(registry.indexOf('closeCrashedTab() {'));
+  assert.match(crashed.slice(0, crashed.indexOf('\n  }\n')), /this\._gBrowser[\s\S]*this\._tab/);
 });

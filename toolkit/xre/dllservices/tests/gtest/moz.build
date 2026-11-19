@@ -10,6 +10,7 @@ UNIFIED_SOURCES += [
     "TestModuleFileValidation.cpp",
     "TestUntrustedModules.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthOwnBinaries.cpp"]  # STEALTH-HOOK(platform/untrusted-modules)
 
 LOCAL_INCLUDES += [
     "/toolkit/components/telemetry/other",

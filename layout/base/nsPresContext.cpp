@@ -1465,6 +1465,7 @@ void nsPresContext::SetOverrideDPPX(float aDPPX) {
 }
 
 void nsPresContext::UpdateInnerSizeSpoofedForRFP() {
+  // STEALTH-HOOK(fingerprint/screen-window/screen): see FEATURE.md
   if ((!mDocument->ShouldResistFingerprinting(RFPTarget::WindowOuterSize) &&
        !mozilla::gfx::StealthEngineActive()) ||
       !mDocument->GetBrowsingContext() ||

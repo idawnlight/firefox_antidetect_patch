@@ -22,7 +22,6 @@
 #include "nsIChannel.h"
 #include "nsIConsoleService.h"
 #include "nsIContentSecurityPolicy.h"
-#include "nsIDocShell.h"
 #include "nsICryptoHash.h"
 #include "nsIScriptError.h"
 #include "nsIStringBundle.h"
@@ -129,21 +128,13 @@ bool CSP_ShouldURIInheritCSP(nsIURI* aURI) {
          aURI->SchemeIs("filesystem") || aURI->SchemeIs("javascript");
 }
 
-bool CSP_IsBypassedFor(const mozilla::dom::Document& aDoc) {
-  nsIDocShell* docShell = aDoc.GetDocShell();
-  if (!docShell) {
-    return false;
-  }
-  bool bypass = false;
-  return NS_SUCCEEDED(docShell->GetBypassCSPEnabled(&bypass)) && bypass;
-}
-
 void CSP_ApplyMetaCSPToDoc(mozilla::dom::Document& aDoc,
                            const nsAString& aPolicyStr) {
   if (aDoc.IsLoadedAsData()) {
     return;
   }
 
+  // STEALTH-HOOK(automation/bypass-csp)
   if (CSP_IsBypassedFor(aDoc)) {
     return;
   }

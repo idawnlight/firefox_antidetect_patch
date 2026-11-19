@@ -14,6 +14,10 @@ class FontData final {
   // caller MUST NOT delete it or assume anything further about its lifetime.
   FontData(const uint8_t*&& aData, uint32_t aLength)
       : mData(aData), mLength(aLength) {}
+  // STEALTH-HOOK(fingerprint/fonts/bundle): bytes lent by the bundle cache.
+  enum class Borrowed { Yes };
+  FontData(const uint8_t* aData, uint32_t aLength, Borrowed)
+      : mData(aData), mLength(aLength), mBorrowed(true) {}
 
   FontData() = delete;
   FontData(const FontData& aOther) = delete;
@@ -25,10 +29,15 @@ class FontData final {
 
  private:
   // Private destructor: this should only be destroyed by Release().
-  ~FontData() { free(const_cast<uint8_t*>(mData)); }
+  ~FontData() {
+    if (!mBorrowed) {  // STEALTH-HOOK(fingerprint/fonts/bundle)
+      free(const_cast<uint8_t*>(mData));
+    }
+  }
 
   const uint8_t* const mData;
   uint32_t const mLength;
+  bool const mBorrowed = false;  // STEALTH-HOOK(fingerprint/fonts/bundle)
 };
 
 #endif  // GFX_FONT_DATA_H

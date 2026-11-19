@@ -15,12 +15,6 @@ IPDL_SOURCES += [
     "PWindowsUtils.ipdl",
 ]
 
-LOCAL_INCLUDES += [
-    "/dom/system/windows/location",
-]
-
-DIRS += ["location"]
-
 include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"

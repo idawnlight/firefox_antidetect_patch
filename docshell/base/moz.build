@@ -99,6 +99,8 @@ UNIFIED_SOURCES += [
     "SerializedLoadContext.cpp",
     "WindowContext.cpp",
 ]
+UNIFIED_SOURCES += ["StealthDocShellAttrs.cpp"]  # STEALTH-HOOK(automation/docshell-attrs)
+UNIFIED_SOURCES += ["StealthNavigation.cpp"]  # STEALTH-HOOK(automation/navigation)
 
 TEST_DIRS += ["test/gtest"]
 

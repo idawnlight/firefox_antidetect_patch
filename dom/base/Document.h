@@ -4531,6 +4531,7 @@ class Document : public nsINode,
   }
 
  private:
+  friend class StealthDocumentAccess;  // STEALTH-HOOK(fingerprint/locale-time/timezone)
   void RecomputeLanguageFromCharset();
   bool GetSHEntryHasUserInteraction();
 

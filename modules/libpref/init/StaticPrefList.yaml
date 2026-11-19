@@ -6309,7 +6309,7 @@
 #if defined(XP_WIN) || defined(XP_MACOSX)
   value: true
 #else
-  value: false
+  value: true  # STEALTH-HOOK(fingerprint/webgpu/adapter-declaration): Windows' value on every OS
 #endif
   mirror: once
 
@@ -10604,16 +10604,6 @@
 - name: javascript.options.other_processes_disable_jit
   type: bool
   value: false
-  mirror: always
-
-- name: juggler.locale.override
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: juggler.timezone.override
-  type: DataMutexString
-  value: ""
   mirror: always
 
 #---------------------------------------------------------------------------
@@ -16223,7 +16213,7 @@
 #     PROXYCONFIG_SYSTEM   = 5
 - name: network.proxy.type
   type: RelaxedAtomicUint32
-  value: 5
+  value: 0  # STEALTH-HOOK(network/proxy): direct, the host's proxy settings are never read
   mirror: always
 
 # Whether to use WPAD while configuring proxy with system settings
@@ -16462,7 +16452,7 @@
 # Single TRR request timeout, in milliseconds
 - name: network.trr.request_timeout_ms
   type: RelaxedAtomicUint32
-  value: 1500
+  value: 30000  # STEALTH-HOOK(network/doh): the TRR-only timeout; a proxied lookup is TRR_ONLY per request in global mode 0
   mirror: always
 
 # Single TRR request timeout, in milliseconds for mode 3
@@ -16616,7 +16606,7 @@
 # soon after startup or when the pref is flipped.
 - name: network.trr.exclude-etc-hosts
   type: RelaxedAtomicBool
-  value: true
+  value: false  # STEALTH-HOOK(network/doh): the host's hosts file is never read, not even at start-up
   mirror: always
 
 # Whether to add padding in the doh dns queries (rfc 7830)
@@ -21900,251 +21890,6 @@
 - name: zoom.minPercent
   type: uint32_t
   value: 20
-  mirror: always
-
-- name: zoom.stealth.fpp.hw_seed
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.width
-  type: int32_t
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.height
-  type: int32_t
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.audio.sample_rate
-  type: int32_t
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.media.enumeration_ms
-  type: uint32_t
-  value: 0
-  mirror: always
-
-- name: zoom.stealth.audio.fp_noise
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-
-- name: zoom.stealth.audio.output_latency_ms
-  type: int32_t
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.audio.max_channel_count
-  type: int32_t
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.hw_concurrency
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.dns.no_local_resolution
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-- name: zoom.stealth.webrtc.no_direct_udp
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-- name: zoom.stealth.max_touch_points
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.widget.occlusion_tracking.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-
-- name: zoom.stealth.focus.ignore_os_deactivation
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-- name: zoom.stealth.screen.taskbar_px
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.color_depth
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.pointer.primary
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.pointer.all
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.frame_border
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.maximized_ui
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.popup_ui
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.popup_position
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.avail_device_width
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.screen.avail_device_height
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.webgl.renderer
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl.vendor
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl.shader_output_language
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.text.freetype_hintstyle
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.text.freetype_antialias
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.webgl.extensions
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl2.extensions
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl.int_params
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl.float_params
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl.int2_params
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.webgl.shader_precisions
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.font.fontlist
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.font.system_ui
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.canvas.substitute_pixels
-  type: RelaxedAtomicBool
-  value: false
-  mirror: always
-
-- name: zoom.stealth.canvas.edge_tolerance
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.voices.list
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.branding.archive
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.text.coverage_ladder
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.text.system_quality
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.fonts.generics
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.fonts.manifest
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.media.decode_support
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.media.decoding_info
-  type: DataMutexString
-  value: ""
-  mirror: always
-
-- name: zoom.stealth.storage.quota_mb
-  type: RelaxedAtomicInt32
-  value: -1
-  mirror: always
-
-- name: zoom.stealth.webrtc.host_ip
-  type: DataMutexString
-  value: ""
   mirror: always
 
 #---------------------------------------------------------------------------

@@ -7,6 +7,8 @@
 // Avoid Components.*, ChromeUtils and global const variables.
 
 var SIMPLE_CHANNEL_MESSAGE_NAME = 'juggler:simplechannel';
+// What a document restored from the back-forward cache sends to its parent actor (JugglerFrameChild).
+var SIMPLE_CHANNEL_BECAME_CURRENT_MESSAGE_NAME = 'juggler:became-current';
 // How many channel ends this load of the file has made: one part of each end's
 // identity (see `_uid`).
 var SIMPLE_CHANNEL_INSTANCES = 0;
@@ -27,12 +29,21 @@ var SimpleChannel = class SimpleChannel {
     // Set by detachFromPeer, cleared by the READY that attaches this end again.
     this._detached = false;
     this._onReattached = null;
+    this._onReady = null;
     this._paused = false;
     this._disposed = false;
 
     // The answers given to the other end, kept until it acknowledges them, keyed
     // by the requesting end's identity AND its request number (see `_answerKey`).
     this._bufferedResponses = new Map();
+    // The identity of THIS end, unique per instance, and it has to be the channel
+    // that makes it so: every end numbers its requests from 1, so an end that
+    // shared its identity with an earlier one had its requests answered from the
+    // earlier one's answers and never dispatched. `uid` is only the caller's
+    // label; content/main.js gave 'process-<pid>' to every page channel of a
+    // process, and a page's "main world created" announcement was lost that way
+    // (B286). The counter separates the ends of one process, the random part
+    // separates processes that reuse a pid.
     this._uid = `${uid}#${++SIMPLE_CHANNEL_INSTANCES}.${Math.random().toString(36).slice(2, 10)}`;
     this._connectedToUID = undefined;
   }
@@ -41,7 +52,16 @@ var SimpleChannel = class SimpleChannel {
     this.resetTransport();
     this._name = actor.actorName;
     const oldReceiveMessage = actor.receiveMessage;
-    actor.receiveMessage = message => this._onMessage(message.data);
+    actor.receiveMessage = message => {
+      // A restored document asking to be bound again (JugglerFrameChild, on its pageshow) is the actor's to answer
+      // (JugglerFrameParent.receiveMessage), whether this channel is bound to the actor or not. A root whose parent
+      // frame is in another process keeps its actor bound through its stay in the cache (no other document takes
+      // its place, as it does for the top), so the request came to this end, which took it for a channel message
+      // and the root was never bound again.
+      if (message.name === SIMPLE_CHANNEL_BECAME_CURRENT_MESSAGE_NAME)
+        return oldReceiveMessage.call(actor, message);
+      return this._onMessage(message.data);
+    };
     this.setTransport({
       sendMessage: obj => actor.sendAsyncMessage(SIMPLE_CHANNEL_MESSAGE_NAME, obj),
       dispose: () => actor.receiveMessage = oldReceiveMessage,
@@ -59,6 +79,15 @@ var SimpleChannel = class SimpleChannel {
 
   setTransport(transport) {
     this.transport = transport;
+    // connection handshake:
+    // 1. There are two channel ends in different processes.
+    // 2. Both ends start in the `ready = false` state, meaning that they will
+    //    not send any messages over transport.
+    // 3. Once channel end is created, it sends { ack: `READY` } message to the other end.
+    // 4. Eventually, at least one of the ends receives { ack: `READY` } message and responds with
+    //    { ack: `READY_ACK` }. We assume at least one of the ends will receive { ack: "READY" } event from the other, since
+    //    channel ends have a "parent-child" relation, i.e. one end is always created before the other one.
+    // 5. Once channel end receives either { ack: `READY` } or { ack: `READY_ACK` }, it transitions to `ready` state.
     this.transport.sendMessage({ ack: 'READY', uid: this._uid });
   }
 
@@ -94,6 +123,24 @@ var SimpleChannel = class SimpleChannel {
       return;
     this._ready = false;
     this._detached = true;
+    // What was said to the peer of before is not said again to the peer of
+    // after: the READY that comes replays only what waited while detached
+    // (`sent` false). A "worker ended" said before the cache, whose answer
+    // never came back, was replayed after the restore and ended the worker
+    // the restore had just announced again with the same id. The caller of a
+    // request that waited for an answer is told the peer went away; an answer
+    // that arrives late finds no request and is ignored.
+    for (const [messageId, callback] of this._pendingMessages) {
+      if (!callback.sent)
+        continue;
+      this._pendingMessages.delete(messageId);
+      callback.reject(new Error(`Failed "${callback.methodName}": the other end of channel "${this._name}" went away before it answered.`));
+    }
+  }
+
+  // Attached to a peer and sending: what a document that goes into the cache can still say.
+  isReady() {
+    return this._ready;
   }
 
   /**
@@ -106,11 +153,37 @@ var SimpleChannel = class SimpleChannel {
     this._onReattached = callback;
   }
 
+  /**
+   * `callback` runs at every passage of this end to ready: when it meets its
+   * first peer, and again at each READY of another peer (a second actor, a
+   * document restored from the cache), just before the end is ready: what it
+   * says waits in the queue behind what waited already, and goes out after it.
+   * The content end reads there the state the client
+   * declared: it is written into the shared data, and a message to a root with
+   * no actor is never sent (the parent binds a root one hop after its agents
+   * were born), so an end born before the declaration has to ask. The callback
+   * must be idempotent: it runs once per peer.
+   */
+  onReady(callback) {
+    this._onReady = callback;
+  }
+
   _markAsReady() {
     if (this._ready)
       return;
+    // The ready hook runs BEFORE the end is ready: what it says is queued behind what already waited (the agents
+    // said their start at birth: the contexts cleared, the main one), and goes out after it, in order. Said after
+    // the passage to ready it would go out first, and the "cleared" that follows would make the client forget it.
+    if (this._onReady) {
+      // A hook that fails must not keep the queue from going out.
+      try {
+        this._onReady();
+      } catch (e) {
+        dump(`WARNING: the onReady hook of channel "${this._name}" failed: ${e && e.message}\n`);
+      }
+    }
     this._ready = true;
-    // Snapshot first: what the hook sends goes out as it is sent, and must not
+    // Snapshot first: what the reattachment hook sends goes out as it is sent, and must not
     // be sent a second time by the replay below.
     const queued = [...this._pendingMessages.values()];
     if (this._detached) {
@@ -118,8 +191,10 @@ var SimpleChannel = class SimpleChannel {
       if (this._onReattached)
         this._onReattached();
     }
-    for (const { message } of queued)
-      this.transport.sendMessage(message);
+    for (const callback of queued) {
+      callback.sent = true;
+      this.transport.sendMessage(callback.message);
+    }
   }
 
   dispose() {
@@ -183,16 +258,28 @@ var SimpleChannel = class SimpleChannel {
       throw new Error(`ERROR: channel ${this._name} is already disposed! Cannot send "${methodName}" to "${namespace}"`);
     const id = ++this._messageId;
     const message = {requestId: id, uid: this._uid, methodName, params, namespace};
+    // `sent`: it has gone out to the peer this end is attached to (see detachFromPeer).
+    const sent = this._ready;
     const promise = new Promise((resolve, reject) => {
-      this._pendingMessages.set(id, {connectorId, resolve, reject, methodName, namespace, message});
+      this._pendingMessages.set(id, {connectorId, resolve, reject, methodName, namespace, message, sent});
     });
-    if (this._ready)
+    if (sent)
       this.transport.sendMessage(message);
     return promise;
   }
 
   _onMessage(data) {
     if (data?.ack === 'READY') {
+      // The "READY" and "READY_ACK" messages are a part of initialization sequence.
+      // This sequence happens when a new SimpleChannel instance is getting
+      // initialized on the other end, or when a new transport is assigned to
+      // communicate between 2 SimpleChannel instances.
+      //
+      // The answers kept for the double-dispatch issue are NOT cleared here: they
+      // are keyed by the requesting end, so a new end cannot meet an old end's
+      // answer, and an old end that comes back (a document restored from the
+      // back-forward cache) still finds its own. Clearing them on a change of
+      // peer was what left an old end to be dispatched twice.
       this._connectedToUID = data.uid;
       this.transport.sendMessage({ ack: 'READY_ACK', uid: this._uid });
       this._markAsReady();

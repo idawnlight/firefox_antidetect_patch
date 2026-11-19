@@ -1947,32 +1947,29 @@ impl ResourceCache {
     pub fn clear_namespace(&mut self, namespace: IdNamespace) {
         self.clear_images(|k| k.0 == namespace);
 
-        // First clear out any non-shared resources associated with the namespace.
-        self.resources.fonts.instances.clear_namespace(namespace);
-        let deleted_keys = self.resources.fonts.templates.clear_namespace(namespace);
-        self.glyph_rasterizer.delete_fonts(&deleted_keys);
+        // The shared font resources are cleared by SharedFontResources::clear_namespace, which a
+        // namespace whose window left first is cleared through as well (RenderBackend::clear_namespace);
+        // what is left here is what only this window has.
+        let cleared = self.resources.fonts.clear_namespace(namespace);
+        self.glyph_rasterizer.delete_fonts(&cleared.local_font_keys);
         self.cached_glyphs.clear_namespace(namespace);
         if let Some(handler) = &mut self.blob_image_handler {
             handler.clear_namespace(namespace);
         }
 
         // Check for any shared instance keys that were remapped from the namespace.
-        let shared_instance_keys = self.resources.fonts.instance_keys.clear_namespace(namespace);
-        if !shared_instance_keys.is_empty() {
-            self.resources.fonts.instances.delete_font_instances(&shared_instance_keys);
-            self.cached_glyphs.delete_font_instances(&shared_instance_keys, &mut self.glyph_rasterizer);
+        if !cleared.shared_instance_keys.is_empty() {
+            self.cached_glyphs.delete_font_instances(&cleared.shared_instance_keys, &mut self.glyph_rasterizer);
             // Blob font instances are not shared across namespaces, so there is no
             // need to call the handler for them individually.
         }
 
         // Finally check for any shared font keys that were remapped from the namespace.
-        let shared_keys = self.resources.fonts.font_keys.clear_namespace(namespace);
-        if !shared_keys.is_empty() {
-            self.glyph_rasterizer.delete_fonts(&shared_keys);
-            self.resources.fonts.templates.delete_fonts(&shared_keys);
-            self.cached_glyphs.delete_fonts(&shared_keys);
+        if !cleared.shared_font_keys.is_empty() {
+            self.glyph_rasterizer.delete_fonts(&cleared.shared_font_keys);
+            self.cached_glyphs.delete_fonts(&cleared.shared_font_keys);
             if let Some(handler) = &mut self.blob_image_handler {
-                for &key in &shared_keys {
+                for &key in &cleared.shared_font_keys {
                     handler.delete_font(key);
                 }
             }

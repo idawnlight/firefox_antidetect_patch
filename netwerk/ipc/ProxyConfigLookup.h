@@ -8,6 +8,9 @@
 #include <functional>
 
 #include "nsCOMPtr.h"
+#include "mozilla/Maybe.h"  // STEALTH-HOOK(network/proxy-udp)
+#include "mozilla/OriginAttributes.h"  // STEALTH-HOOK(network/doh)
+#include "mozilla/net/NeckoChannelParams.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "nsIProtocolProxyCallback.h"
 
 class nsIURI;
@@ -25,12 +28,16 @@ class ProxyConfigLookup final : public nsIProtocolProxyCallback {
   static nsresult Create(
       std::function<void(nsIProxyInfo*, nsresult)>&& aCallback, nsIURI* aURI,
       uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel = false,
-      nsICancelable** aLookupCancellable = nullptr);
+      nsICancelable** aLookupCancellable = nullptr,
+      const Maybe<LoadInfoArgs>& aLoadInfo = Nothing(),  // STEALTH-HOOK(network/proxy-udp)
+      const Maybe<OriginAttributes>& aOriginAttributes = Nothing());  // STEALTH-HOOK(network/doh)
 
  private:
   explicit ProxyConfigLookup(
       std::function<void(nsIProxyInfo*, nsresult)>&& aCallback, nsIURI* aURI,
-      uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel);
+      uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel,
+      const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      const Maybe<OriginAttributes>& aOriginAttributes);  // STEALTH-HOOK(network/doh)
   virtual ~ProxyConfigLookup();
   nsresult DoProxyResolve(nsICancelable** aLookupCancellable);
 
@@ -38,6 +45,8 @@ class ProxyConfigLookup final : public nsIProtocolProxyCallback {
   nsCOMPtr<nsIURI> mURI;
   uint32_t mProxyResolveFlags;
   bool mIsTRRServiceChannel;
+  Maybe<LoadInfoArgs> mLoadInfo;  // STEALTH-HOOK(network/proxy-udp)
+  Maybe<OriginAttributes> mOriginAttributes;  // STEALTH-HOOK(network/doh)
 };
 
 }  // namespace net

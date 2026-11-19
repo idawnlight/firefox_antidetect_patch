@@ -17,7 +17,6 @@
 #include "MediaChangeMonitor.h"
 #include "MediaInfo.h"
 #include "PDMFactorySupport.h"
-#include "StealthMediaDeclaration.h"
 #include "VPXDecoder.h"
 #include "VideoUtils.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -32,6 +31,7 @@
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/UtilityMediaServiceParent.h"
 #include "mozilla/layers/ImageBridgeChild.h"
+#include "StealthMediaDeclaration.h"
 #include "nsIXULRuntime.h"  // for BrowserTabsRemoteAutostart
 #include "nsPrintfCString.h"
 
@@ -490,20 +490,10 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
 DecodeSupportSet PDMFactory::Supports(
     const SupportDecoderParams& aParams,
     DecoderDoctorDiagnostics* aDiagnostics) const {
-  {
-    bool sw = false, hw = false;
-    if (StealthDeclaredDecodeSupport(aParams.MimeType(), sw, hw)) {
-      DecodeSupportSet declared{};
-      if (sw) {
-        declared += DecodeSupport::SoftwareDecode;
-      }
-      if (hw) {
-        declared += DecodeSupport::HardwareDecode;
-      }
-      return declared;
-    }
+  // STEALTH-HOOK(fingerprint/media/decode-declaration)
+  if (auto declared = StealthDeclaredDecodeSupportSet(aParams.MimeType())) {
+    return *declared;
   }
-
   if (mEMEPDM) {
     return mEMEPDM->Supports(aParams, aDiagnostics);
   }
@@ -521,18 +511,10 @@ DecodeSupportSet PDMFactory::Supports(
 
 RefPtr<PDMSupportsDecoderPromise> PDMFactory::SupportsAsync(
     const SupportDecoderParams& aParams) const {
-  bool sw = false, hw = false;
-  if (StealthDeclaredDecodeSupport(aParams.MimeType(), sw, hw)) {
-    DecodeSupportSet declared{};
-    if (sw) {
-      declared += DecodeSupport::SoftwareDecode;
-    }
-    if (hw) {
-      declared += DecodeSupport::HardwareDecode;
-    }
-    return PDMSupportsDecoderPromise::CreateAndResolve(declared, __func__);
+  // STEALTH-HOOK(fingerprint/media/decode-declaration)
+  if (auto declared = StealthDeclaredDecodeSupportSet(aParams.MimeType())) {
+    return PDMSupportsDecoderPromise::CreateAndResolve(*declared, __func__);
   }
-
   if (mEMEPDM) {
     return mEMEPDM->SupportsAsync(aParams);
   }

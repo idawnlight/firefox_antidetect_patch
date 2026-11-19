@@ -54,15 +54,15 @@ EXPORTS.mozilla.gfx += [
     "SourceSurfaceCairo.h",
     "SourceSurfaceRawData.h",
     "StackArray.h",
-    "StealthCanvasProjection.h",
-    "StealthGlyphCoverage.h",
-    "StealthRefuse.h",
     "Swizzle.h",
     "Tools.h",
     "Triangle.h",
     "Types.h",
     "UserData.h",
 ]
+EXPORTS.mozilla.gfx += ["StealthCanvasProjection.h"]  # STEALTH-HOOK(fingerprint/canvas/noise-projection)
+EXPORTS.mozilla.gfx += ["StealthGlyphCoverage.h"]  # STEALTH-HOOK(fingerprint/fonts/metrics)
+EXPORTS.mozilla.gfx += ["StealthRefuse.h"]  # STEALTH-HOOK(platform/declaration-gate)
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("cocoa", "uikit"):
     EXPORTS.mozilla.gfx += [
@@ -196,11 +196,11 @@ UNIFIED_SOURCES += [
     "SourceSurfaceCairo.cpp",
     "SourceSurfaceRawData.cpp",
     "SourceSurfaceSkia.cpp",
-    "StealthCanvasProjection.cpp",
-    "StealthGlyphCoverage.cpp",
     "Swizzle.cpp",
     "Types.cpp",
 ]
+UNIFIED_SOURCES += ["StealthCanvasProjection.cpp"]  # STEALTH-HOOK(fingerprint/canvas/noise-projection)
+UNIFIED_SOURCES += ["StealthGlyphCoverage.cpp"]  # STEALTH-HOOK(fingerprint/fonts/metrics)
 
 SOURCES += [
     "InlineTranslator.cpp",

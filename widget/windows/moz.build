@@ -152,6 +152,7 @@ SOURCES += [
     "InputDeviceUtils.cpp",
     "TSFUtils.cpp",
 ]
+SOURCES += ["StealthFullscreenWin.cpp"]  # STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 # Needs winrt exceptions since we're calling into the
 # Windows App SDK.

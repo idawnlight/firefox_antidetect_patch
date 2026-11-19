@@ -15,11 +15,11 @@ EXPORTS.mozilla.net += [
     "MozSrcProtocolHandler.h",
     "PageThumbProtocolHandler.h",
     "RemoteStreamGetter.h",
-    "StealthBranding.h",
     "SubstitutingJARURI.h",
     "SubstitutingProtocolHandler.h",
     "SubstitutingURL.h",
 ]
+EXPORTS.mozilla.net += ["StealthBranding.h"]  # STEALTH-HOOK(fingerprint/js-surface/branding)
 
 EXPORTS += [
     "nsResProtocolHandler.h",
@@ -32,9 +32,9 @@ UNIFIED_SOURCES += [
     "nsResProtocolHandler.cpp",
     "PageThumbProtocolHandler.cpp",
     "RemoteStreamGetter.cpp",
-    "StealthBranding.cpp",
     "SubstitutingProtocolHandler.cpp",
 ]
+UNIFIED_SOURCES += ["StealthBranding.cpp"]  # STEALTH-HOOK(fingerprint/js-surface/branding)
 
 include("/ipc/chromium/chromium-config.mozbuild")
 

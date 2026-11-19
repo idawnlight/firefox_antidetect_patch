@@ -13,7 +13,9 @@ namespace net {
 // static
 bool ProxyConfigLookupChild::Create(
     nsIURI* aURI, uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel,
-    std::function<void(nsIProxyInfo*, nsresult)>&& aCallback) {
+    std::function<void(nsIProxyInfo*, nsresult)>&& aCallback,
+    const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+    const Maybe<OriginAttributes>& aOriginAttributes) {  // STEALTH-HOOK(network/doh)
   SocketProcessChild* socketChild = SocketProcessChild::GetSingleton();
   if (!socketChild) {
     return false;
@@ -22,7 +24,9 @@ bool ProxyConfigLookupChild::Create(
   RefPtr<ProxyConfigLookupChild> child =
       new ProxyConfigLookupChild(std::move(aCallback));
   return socketChild->SendPProxyConfigLookupConstructor(
-      child, aURI, aProxyResolveFlags, aIsTRRServiceChannel);
+      child, aURI, aProxyResolveFlags, aIsTRRServiceChannel,
+      aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      aOriginAttributes);  // STEALTH-HOOK(network/doh)
 }
 
 ProxyConfigLookupChild::ProxyConfigLookupChild(

@@ -3180,6 +3180,7 @@ already_AddRefed<gfxFont> gfxFontGroup::FindFallbackFaceForChar(
 
   // If async fallback is enabled, and the family isn't fully initialized yet,
   // just start the async cmap loading and return.
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
   if (!aFamily->IsFullyInitialized() && pfl->MayDeferCmapLoading()) {
     pfl->StartCmapLoadingFromFamily(aFamily - list->Families());
     return nullptr;

@@ -749,6 +749,7 @@ void SandboxBrokerPolicyFactory::InitContentPolicy() {
   AddDynamicPathList(policy, "security.sandbox.content.read_path_whitelist",
                      rdonly);
 
+  // STEALTH-HOOK(fingerprint/js-surface/branding)
   if (nsCOMPtr<nsIFile> branding =
           mozilla::net::StealthBrandingDeclaredArchive()) {
     nsAutoCString brandingPath;

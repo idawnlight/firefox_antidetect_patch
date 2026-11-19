@@ -906,6 +906,7 @@ class WebGLContext : public VRefCounted, public SupportsWeakPtr {
 
   mutable GLenum mWebGLError = 0;
 
+  // STEALTH-HOOK(fingerprint/webgl/shader-language)
   std::unique_ptr<webgl::ShaderValidator> CreateShaderValidator(
       GLenum shaderType, bool aPerLaPagina = false) const;
 

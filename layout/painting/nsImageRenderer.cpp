@@ -13,6 +13,7 @@
 #endif
 #include "ImageOps.h"
 #include "ImageRegion.h"
+#include "StealthSurfaceFlags.h"  // STEALTH-HOOK(fingerprint/canvas/as-drawn)
 #include "gfxContext.h"
 #include "gfxDrawable.h"
 #include "mozilla/ISVGDisplayableFrame.h"
@@ -217,9 +218,8 @@ bool nsImageRenderer::PrepareImage() {
             mForFrame->FirstContinuation(), mImage->AsElement().AsAtom());
     // If the referenced element is an <img>, <canvas>, or <video> element,
     // prefer SurfaceFromElement as it's more reliable.
-    // -moz-element SHOWS the element, like the screen: a canvas as drawn.
     mImageElementSurface = nsLayoutUtils::SurfaceFromElement(
-        paintElement, nsLayoutUtils::SFE_AS_DRAWN);
+        paintElement, kStealthSfeAsDrawn);
 
     if (!mImageElementSurface.GetSourceSurface()) {
       nsIFrame* paintServerFrame =

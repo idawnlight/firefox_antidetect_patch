@@ -13,6 +13,8 @@
 #include "MediaTrackConstraints.h"
 #include "MediaTrackGraph.h"
 #include "MediaTrackListener.h"
+// STEALTH-HOOK(fingerprint/media/enumeration)
+#include "StealthMediaEnumeration.h"
 #include "Tracing.h"
 #include "VideoStreamTrack.h"
 #include "VideoUtils.h"
@@ -24,7 +26,6 @@
 #include "mozilla/PermissionDelegateHandler.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticPrefs_media.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
@@ -2151,16 +2152,10 @@ bool MediaManager::EnumerationParams::HasFakeMics() const {
 bool MediaManager::EnumerationParams::RealDeviceRequested() const {
   auto isReal = [](const auto& aDev) { return aDev.mType == DeviceType::Real; };
   return mVideo.map(isReal).valueOr(false) ||
-         mAudio.map(isReal).valueOr(false) || HostSpeakersRequested();
-}
-
-static bool HostSpeakersMayBeAsked() {
-  return StaticPrefs::zoom_stealth_media_enumeration_ms() == 0;
-}
-
-bool MediaManager::EnumerationParams::HostSpeakersRequested() const {
-  return mFlags.contains(EnumerationFlag::EnumerateAudioOutputs) &&
-         HostSpeakersMayBeAsked();
+         mAudio.map(isReal).valueOr(false) ||
+         // STEALTH-HOOK(fingerprint/media/enumeration)
+         StealthHostSpeakersRequested(
+             mFlags.contains(EnumerationFlag::EnumerateAudioOutputs));
 }
 
 MediaSourceEnum MediaManager::EnumerationParams::VideoInputType() const {
@@ -2270,7 +2265,9 @@ MediaManager::MaybeRequestPermissionAndEnumerateRawDevices(
 
   const bool hasVideo = aParams.mVideo.isSome();
   const bool hasAudio = aParams.mAudio.isSome();
-  const bool hasAudioOutput = aParams.HostSpeakersRequested();
+  // STEALTH-HOOK(fingerprint/media/enumeration)
+  const bool hasAudioOutput = StealthHostSpeakersRequested(
+      aParams.mFlags.contains(EnumerationFlag::EnumerateAudioOutputs));
   const bool hasFakeCams = aParams.HasFakeCams();
   const bool hasFakeMics = aParams.HasFakeMics();
   // True if at least one of video input or audio input is a real device
@@ -2418,7 +2415,9 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
                     video->mForcedDeviceName.get());
     devices->AppendElements(std::move(videos));
   }
-  if (aParams.HostSpeakersRequested()) {
+  // STEALTH-HOOK(fingerprint/media/enumeration)
+  if (StealthHostSpeakersRequested(
+          aParams.mFlags.contains(EnumerationFlag::EnumerateAudioOutputs))) {
     MediaDeviceSet outputs;
     MOZ_ASSERT(realBackend);
     realBackend->EnumerateDevices(MediaSourceEnum::Other,
@@ -2446,7 +2445,8 @@ MediaManager::EnumerateRawDevices(EnumerationParams aParams) {
       GetMediaDevices(videoBackend, MediaSourceEnum::Microphone, audios,
                       aParams.mVideo->mForcedMicrophoneName.get());
     }
-    if (videoBackend == realBackend && HostSpeakersMayBeAsked()) {
+    // STEALTH-HOOK(fingerprint/media/enumeration)
+    if (videoBackend == realBackend && StealthHostSpeakersMayBeAsked()) {
       // When using the real backend for video, there could also be
       // speakers to correlate with. There are no fake speakers.
       if (speakers.isSome()) {
@@ -2494,15 +2494,8 @@ RefPtr<ConstDeviceSetPromise> MediaManager::GetPhysicalDevices() {
                 mPhysicalDevices = std::move(aDevices);
               }
             };
-            if (uint32_t ms =
-                    StaticPrefs::zoom_stealth_media_enumeration_ms()) {
-              NS_DelayedDispatchToCurrentThread(
-                  NS_NewRunnableFunction("MediaManager::DeclaredEnumeration",
-                                         std::move(resolve)),
-                  ms);
-              return;
-            }
-            resolve();
+            // STEALTH-HOOK(fingerprint/media/enumeration)
+            StealthDeclaredEnumeration(std::move(resolve));
           },
           [](RefPtr<MediaMgrError>&& reason) {
             MOZ_ASSERT_UNREACHABLE(

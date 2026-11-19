@@ -59,10 +59,6 @@ EXPORTS += [
     "gfxUtils.h",
     "SharedFontList.h",
     "SoftwareVsyncSource.h",
-    # STEALTH: exported because dom/canvas reads the coverage ladder from
-    # it (the alpha-quantisation hook in CanvasRenderingContext2D).
-    "StealthBundleFontList.h",
-    "StealthDeclarationGate.h",
     "ThebesRLBoxTypes.h",
     "VsyncSource.h",
 ]
@@ -234,13 +230,6 @@ UNIFIED_SOURCES += [
     "VsyncSource.cpp",
 ]
 
-# Our uniform bundle-only font-list builder. Non-unified: it defines a few
-# short-named file-static helpers that could collide in a unified blob.
-SOURCES += [
-    "StealthBundleFontList.cpp",
-    "StealthDeclarationGate.cpp",
-]
-
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     UNIFIED_SOURCES += [
         "gfxMacPlatformFontList.mm",
@@ -269,6 +258,10 @@ USE_LIBS += [
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
+include("StealthDeclarationGate.mozbuild")  # STEALTH-HOOK(platform/declaration-gate)
+include("StealthBundleFontList.mozbuild")  # STEALTH-HOOK(fingerprint/fonts/bundle)
+include("StealthFcFontList.mozbuild")  # STEALTH-HOOK(fingerprint/fonts/font-list)
+include("StealthDesignMetrics.mozbuild")  # STEALTH-HOOK(fingerprint/fonts/metrics)
 
 FINAL_LIBRARY = "xul"
 

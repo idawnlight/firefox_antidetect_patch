@@ -61,8 +61,7 @@ void nsChromeRegistryContent::RegisterPackage(const ChromePackage& aPackage) {
     if (NS_FAILED(rv)) return;
   }
 
-  // STEALTH: the content process resolves branding URIs itself, so it needs to
-  // know where the branding directory is too. StealthBranding.h.
+  // STEALTH-HOOK(fingerprint/js-surface/branding)
   if (content) {
     mozilla::net::StealthBrandingRegisterPackage(aPackage.package, content);
   }

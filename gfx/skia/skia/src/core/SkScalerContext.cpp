@@ -42,8 +42,7 @@
 #include "src/core/SkWriteBuffer.h"
 #include "src/utils/SkFloatUtils.h"
 #include "src/utils/SkMatrix22.h"
-// STEALTH: Gecko-owned, and deliberately the only Mozilla header here - it
-// declares one free function and includes nothing itself. See getImage().
+// STEALTH-HOOK(fingerprint/fonts/metrics)
 #include "mozilla/gfx/StealthGlyphCoverage.h"
 
 #include <algorithm>
@@ -656,6 +655,7 @@ void SkScalerContext::getImage(const SkGlyph& origGlyph) {
         }
     }
 
+    // STEALTH-HOOK(fingerprint/fonts/metrics)
     if (unfilteredGlyph->maskFormat() == SkMask::kA8_Format) {
         mozilla::gfx::StealthQuantiseGlyphCoverage(
                 static_cast<uint8_t*>(unfilteredGlyph->fImage),

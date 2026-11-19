@@ -283,18 +283,22 @@ def assert_juggler_provenance(tree: Path) -> None:
 
     if omni.exists():
         layout = "omni.ja"
-        with zipfile.ZipFile(omni) as zf:
-            names = set(zf.namelist())
-            if not any(n.startswith(JUGGLER_DIR_REL + "/") for n in names):
-                raise SystemExit(f"validate_release: omni.ja has no {JUGGLER_DIR_REL}/ - "
-                                 "Playwright cannot drive this build")
-            marked = 0
-            for entry in JUGGLER_ENTRIES:
-                if entry not in names:
-                    raise SystemExit(f"validate_release: juggler entry missing from omni.ja: "
-                                     f"{entry}")
-                if any(m in zf.read(entry) for m in JUGGLER_MARKERS):
-                    marked += 1
+        # Mozilla's reader, not zipfile: a PGO build packs omni.ja in the
+        # optimized layout the retail has (central directory first), which
+        # zipfile refuses with "Bad magic number for central directory".
+        import stock_parity
+        jar = stock_parity.open_jar(omni.read_bytes(), str(omni))
+        names = set(jar.entries)
+        if not any(n.startswith(JUGGLER_DIR_REL + "/") for n in names):
+            raise SystemExit(f"validate_release: omni.ja has no {JUGGLER_DIR_REL}/ - "
+                             "Playwright cannot drive this build")
+        marked = 0
+        for entry in JUGGLER_ENTRIES:
+            if entry not in names:
+                raise SystemExit(f"validate_release: juggler entry missing from omni.ja: "
+                                 f"{entry}")
+            if any(m in jar[entry].read() for m in JUGGLER_MARKERS):
+                marked += 1
     elif (root / JUGGLER_DIR_REL).is_dir():
         layout = "unpacked tree"
         marked = 0
@@ -412,67 +416,109 @@ def assert_windows_runtime_is_shipped(tree: Path) -> None:
     print("    every imported DLL is shipped or provided by Windows OK")
 
 
-UPDATER_FILES = (
-    "updater.exe", "updater", "updater.ini", "update-settings.ini",
-    "maintenanceservice.exe", "maintenanceservice_installer.exe", "updateagent",
-)
-UPDATER_MODULES = (
-    "UpdateService.sys.mjs", "UpdateListener.sys.mjs", "UpdateServiceStub.sys.mjs",
-    "AppUpdater.sys.mjs", "BackgroundUpdate.sys.mjs",
-)
+#: The retail's update settings: the MAR channel a release accepts.
+RETAIL_MAR_CHANNELS = b"ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-release"
+#: The calls that keep an answer of the update server from being acted on, as
+#: UpdateService.sys.mjs carries them (toolkit/mozapps/update/StealthUpdate.sys.mjs).
+UPDATE_REFUSALS = (b"StealthUpdate.noneOffered(", b"StealthUpdate.refusesDownload(")
 
 
-def assert_no_updater(tree: Path) -> None:
-    """No update machinery may be inside a shipped archive.
+def assert_updater_is_retails(tree: Path) -> None:
+    """The update machinery is the retail's, and it never acts on an answer.
 
-    It is not switched off by a pref or by a policy: the build OPTIONS were
-    removed from build/moz.configure/update-programs.configure on 2026-08-31, so
-    MOZ_UPDATER is never set and toolkit/mozapps/update never enters the build.
+    Since 2026-10-30 build/moz.configure/update-programs.configure is Mozilla's
+    file: the updater is compiled and packaged as in a release, and the update
+    check goes out as official Firefox sends it. Three facts make that safe and
+    the same as the retail, and each is a BUILD fact a rebase or a mozconfig can
+    undo in silence, the browser still starting:
 
-    That makes it a BUILD-SYSTEM fact, which is exactly the kind a rebase can
-    undo in silence - one conflict on that file resolved towards upstream and
-    the updater is back, the browser still starts, every JavaScript test still
-    passes, and the only symptom is the badge the owner asked to remove, plus a
-    binary able to overwrite the engine its own seal pins.
+    - the updater binary is in the package (else the build is not the retail's:
+      the check would not even run the same code);
+    - update-settings.ini accepts the retail's MAR channel (Mozilla passes it
+      from its CI environment, we from .mozconfig; without it the file is empty);
+    - UpdateService.sys.mjs carries our refusals, so no offered update is taken
+      and nothing is downloaded: an update would overwrite the engine its seal
+      pins.
 
     Two layouts, the same split the juggler check already handles: the Windows
-    zip packs modules into omni.ja, the Linux tarball carries the loose
-    dist/bin tree.
+    zip packs modules into omni.ja (two of them), the Linux tarball may carry
+    the loose dist/bin tree.
     """
-    import zipfile
-    found: list[str] = []
+    problems: list[str] = []
 
-    for p in tree.rglob("*"):
-        if p.is_file() and p.name in UPDATER_FILES:
-            found.append(str(p.relative_to(tree)))
+    if not any(p.is_file() and p.name in ("updater.exe", "updater")
+               for p in tree.rglob("updater*")):
+        problems.append("no updater binary in the package (MOZ_UPDATER off?)")
 
-    # BOTH scans, always. The first draft did the loose one only when there was
-    # no omni.ja, and looked at the ROOT omni.ja alone - which a real Windows
-    # package immediately falsified: it ships two (omni.ja and
-    # browser/omni.ja), and toolkit/mozapps/update modules can land in either.
-    # A package can also carry an archive and loose modules at once.
+    settings = [p for p in tree.rglob("update-settings.ini") if p.is_file()]
+    if not settings:
+        problems.append("no update-settings.ini")
+    elif not all(RETAIL_MAR_CHANNELS in p.read_bytes() for p in settings):
+        problems.append("update-settings.ini does not accept the retail's MAR "
+                        "channel (MAR_CHANNEL_ID / ACCEPTED_MAR_CHANNEL_IDS in .mozconfig)")
+
+    # BOTH scans, always: a real Windows package ships two archives (omni.ja and
+    # browser/omni.ja), and a package can carry an archive and loose modules at
+    # once.
+    services: list[tuple[str, bytes]] = []
     for omni in sorted(tree.rglob("omni.ja")):
         rel = str(omni.relative_to(tree))
-        with zipfile.ZipFile(omni) as zf:
-            for n in zf.namelist():
-                if n.rsplit("/", 1)[-1] in UPDATER_MODULES:
-                    found.append(rel + "!" + n)
+        import stock_parity  # Mozilla's reader: optimized jars too
+        jar = stock_parity.open_jar(omni.read_bytes(), rel)
+        for n in jar.entries:
+            if n.rsplit("/", 1)[-1] == "UpdateService.sys.mjs":
+                services.append((rel + "!" + n, jar[n].read()))
+    for p in tree.rglob("UpdateService.sys.mjs"):
+        if p.is_file():
+            services.append((str(p.relative_to(tree)), p.read_bytes()))
+    if not services:
+        problems.append("no UpdateService.sys.mjs in the package")
+    for where, body in services:
+        missing = [c.decode() for c in UPDATE_REFUSALS if c not in body]
+        if missing:
+            problems.append(f"{where} lacks {', '.join(missing)}: an offered "
+                            "update would be downloaded and applied")
 
-    for p in tree.rglob("*.sys.mjs"):
-        if p.name in UPDATER_MODULES:
-            found.append(str(p.relative_to(tree)))
-
-    if found:
+    if problems:
         raise ValidationError(
-            "the update machinery is back in this build: "
-            + ", ".join(sorted(found)[:8])
-            + ". It is removed at the BUILD level - build/moz.configure/"
-              "update-programs.configure declares no --enable-updater at all - "
-              "so this means a rebase restored that file, or a mozconfig "
-              "re-added the option. Do not publish it: it brings back the "
-              "'Update available' badge and a binary that can overwrite the "
-              "engine its seal pins.")
-    print("    no updater in the package (files and modules both absent)")
+            "the update machinery is not the retail's with our refusals: "
+            + "; ".join(problems) + ". Do not publish it.")
+    print("    updater as the retail, offered updates refused OK")
+
+
+def _build_id(ini: Path) -> str:
+    for line in ini.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("BuildID="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def assert_build_ids_agree(tree: Path) -> None:
+    """application.ini and platform.ini carry the same BuildID.
+
+    They are generated from the same buildid.h, and a retail build always has
+    one BuildID in both (157.0.1: 20261005135250 in each, on every platform).
+    The first 157 candidates did not: from 157 the build graph generates
+    buildid.h twice in one `mach build` (export, and again near the end), and
+    without MOZ_BUILD_DATE each generation takes the clock, so application.ini
+    said 13:25 and platform.ini 15:11 (run 40329304164), invisible_core's seal
+    check refused the launch (platform.ini's BuildID is not the sealed one), and
+    the package was not the retail's in a file every crash report and update
+    check carries. MOZ_BUILD_DATE is now fixed once per run (.mozconfig,
+    release.yml); this refuses an archive in which it was not.
+    """
+    app, platform = tree / "application.ini", tree / "platform.ini"
+    missing = [p.name for p in (app, platform) if not p.is_file()]
+    if missing:
+        raise ValidationError(f"{', '.join(missing)} missing at the package root")
+    a, p = _build_id(app), _build_id(platform)
+    if not a or a != p:
+        raise ValidationError(
+            f"application.ini BuildID {a or '<none>'} != platform.ini BuildID "
+            f"{p or '<none>'}: buildid.h was generated more than once in this build "
+            f"without one MOZ_BUILD_DATE. Do not publish it: the seal check refuses "
+            f"the launch, and the retail has one BuildID in both.")
+    print(f"    one BuildID in application.ini and platform.ini ({a})")
 
 
 def smoke_linux(extracted: Path) -> None:
@@ -540,11 +586,12 @@ def validate_linux_tarball(archive: Path) -> None:
         td = Path(td)
         extract_tar(archive, td)
         check_critical_files(td, CRITICAL_LINUX)
+        assert_build_ids_agree(td)
         print("  [3/4] path-leak check, every file and nested member...")
         check_no_leaks_tree(td)
         assert_juggler_provenance(td)
         assert_page_surface_is_stock(td)
-        assert_no_updater(td)
+        assert_updater_is_retails(td)
 
         print("  [4/4] smoke (firefox --version)...")
         smoke_linux(td)
@@ -560,12 +607,13 @@ def validate_windows_zip(archive: Path) -> None:
         td = Path(td)
         extract_zip(archive, td)
         check_critical_files(td, CRITICAL_WIN)
+        assert_build_ids_agree(td)
         print("  [2/4] path-leak check, every file and nested member...")
         check_no_leaks_tree(td)
         assert_juggler_provenance(td)
         assert_page_surface_is_stock(td)
         assert_windows_runtime_is_shipped(td)
-        assert_no_updater(td)
+        assert_updater_is_retails(td)
 
         print("  [3/4] no-symlinks check (zip cannot store them, but verify)...")
         for p in td.rglob("*"):
@@ -580,7 +628,7 @@ def validate_windows_zip(archive: Path) -> None:
 
 
 def _selftest() -> int:
-    """Known-bad inputs for assert_no_updater, and the near-misses that must NOT fire.
+    """Known-bad inputs for assert_updater_is_retails, and the near-misses that must NOT fire.
 
     A check that has only ever printed its OK line is not a gate. This one is
     cheap to exercise because it is a pure function of a directory: no archive,
@@ -610,36 +658,54 @@ def _selftest() -> int:
                     zf.writestr(m, "x")
         return d
 
+    refusing = b"x = StealthUpdate.noneOffered(u); if (StealthUpdate.refusesDownload()) {}"
+    settings_ok = b"[Settings]\n" + RETAIL_MAR_CHANNELS + b"\n"
+
+    def updtree(binary="updater.exe", settings=settings_ok, service=refusing,
+                where="omni"):
+        """A package with the update machinery; each argument breaks one fact."""
+        d = tree()
+        if binary:
+            (d / binary).write_bytes(b"x")
+        if settings is not None:
+            (d / "update-settings.ini").write_bytes(settings)
+        if service is not None:
+            member = "modules/UpdateService.sys.mjs"
+            if where == "loose":
+                (d / member).write_bytes(service)
+            else:
+                jar = d / ("browser/omni.ja" if where == "nested" else "omni.ja")
+                jar.parent.mkdir(exist_ok=True)
+                with zipfile.ZipFile(jar, "w") as zf:
+                    zf.writestr(member, service)
+        return d
+
     #: (name, factory, must_raise)
     cases = [
-        ("a clean tree", lambda: tree(), False),
-        ("updater.exe at the root", lambda: tree("updater.exe"), True),
-        ("a bare linux updater", lambda: tree("updater"), True),
-        ("updater.ini", lambda: tree("updater.ini"), True),
-        ("update-settings.ini", lambda: tree("update-settings.ini"), True),
-        ("the maintenance service", lambda: tree("maintenanceservice.exe"), True),
-        ("the loose UpdateListener module",
-         lambda: tree("modules/UpdateListener.sys.mjs"), True),
-        ("UpdateService packed INSIDE omni.ja",
-         lambda: tree(omni_members=("modules/UpdateService.sys.mjs",)), True),
-        # A real Windows package ships two archives, and the first draft of this
-        # check read only the one at the root.
-        ("BackgroundUpdate inside the NESTED browser/omni.ja",
-         lambda: tree(nested_omni=("modules/BackgroundUpdate.sys.mjs",)), True),
-        ("a loose module BESIDE a clean omni.ja",
-         lambda: tree("modules/AppUpdater.sys.mjs",
-                      omni_members=("modules/AppConstants.sys.mjs",)), True),
-        # The omni.ja arm must not be blind to what sits beside it, and the
-        # loose arm must not fire on a build that legitimately has an omni.ja.
-        ("an omni.ja with nothing of ours in it",
-         lambda: tree(omni_members=("modules/AppConstants.sys.mjs",)), False),
-        # Near-misses. A gate that refuses everything is as useless as one that
-        # passes everything.
-        ("a file merely NAMED like an update", lambda: tree("updates.txt"), False),
-        ("a directory called updater", lambda: tree("updater/keep.txt"), False),
+        ("the retail's updater, refusals inside omni.ja", lambda: updtree(), False),
+        ("the linux layout: a bare updater, loose modules",
+         lambda: updtree(binary="updater", where="loose"), False),
+        # A real Windows package ships two archives; the module can be in either.
+        ("UpdateService inside the NESTED browser/omni.ja",
+         lambda: updtree(where="nested"), False),
+        ("a tree with no update machinery at all", lambda: tree(), True),
+        ("no updater binary", lambda: updtree(binary=None), True),
+        ("a file merely NAMED like the updater",
+         lambda: updtree(binary="updater.txt"), True),
+        ("no update-settings.ini", lambda: updtree(settings=None), True),
+        ("update-settings.ini with an empty channel",
+         lambda: updtree(settings=b"[Settings]\nACCEPTED_MAR_CHANNEL_IDS=\n"), True),
+        ("no UpdateService module", lambda: updtree(service=None), True),
+        ("Mozilla's UpdateService, without our refusals",
+         lambda: updtree(service=b"updates = this.#parseUpdates(request);"), True),
+        ("only one of the two refusals",
+         lambda: updtree(service=b"StealthUpdate.noneOffered(u)"), True),
+        ("a loose Mozilla UpdateService BESIDE a refusing omni.ja",
+         lambda: (lambda d: ((d / "modules/UpdateService.sys.mjs").write_bytes(b"x"), d)[1])(
+             updtree()), True),
     ]
 
-    cases = [(name, factory, must_raise, assert_no_updater)
+    cases = [(name, factory, must_raise, assert_updater_is_retails)
              for name, factory, must_raise in cases]
 
     leak = b"built in /home/feder/ff-build\n" * 20
@@ -674,6 +740,67 @@ def _selftest() -> int:
     cases += [(name, factory, must_raise, check_no_leaks_tree)
               for name, factory, must_raise in leaks]
 
+    def inis(app_id, platform_id):
+        d = tree()
+        if app_id is not None:
+            (d / "application.ini").write_text(f"[App]\nVersion=157.0.1\nBuildID={app_id}\n")
+        if platform_id is not None:
+            (d / "platform.ini").write_text(f"[Build]\nBuildID={platform_id}\nMilestone=157.0.1\n")
+        return d
+
+    build_ids = [
+        ("one BuildID in both", lambda: inis("20261005135250", "20261005135250"), False),
+        # The first 157 candidates (run 40329304164).
+        ("application.ini and platform.ini from two generations of buildid.h",
+         lambda: inis("20261026132525", "20261026151134"), True),
+        ("platform.ini without a BuildID", lambda: inis("20261005135250", ""), True),
+        ("no platform.ini at all", lambda: inis("20261005135250", None), True),
+    ]
+    cases += [(name, factory, must_raise, assert_build_ids_agree)
+              for name, factory, must_raise in build_ids]
+
+    # A PGO build packs omni.ja in Mozilla's optimized layout (central directory
+    # first, as the retail's), which zipfile refuses: the first PGO candidate
+    # (run 40446702889) failed here with "Bad magic number for central
+    # directory" on a Juggler that was there.
+    import stock_parity  # noqa: F401  (puts mozpack on the path)
+    from mozpack.mozjar import JarWriter
+
+    def omni(members: dict, optimized: bool):
+        d = tree()
+        if optimized:
+            # A preload list is what makes the layout optimized: a PGO build
+            # passes the jarlog, and the archive opens with the central
+            # directory and the preloaded members first.
+            with JarWriter(file=str(d / "omni.ja")) as jar:
+                for name, body in members.items():
+                    jar.add(name, body)
+                jar.preload(list(members)[:1])
+        else:
+            with zipfile.ZipFile(d / "omni.ja", "w") as zf:
+                for name, body in members.items():
+                    zf.writestr(name, body)
+        return d
+
+    juggler = {e: b"// stealthfox" for e in JUGGLER_ENTRIES}
+
+    def provenance(d):
+        try:
+            assert_juggler_provenance(d)
+        except SystemExit as exc:
+            raise ValidationError(str(exc))
+
+    cases += [
+        ("the Juggler in a plain omni.ja", lambda: omni(juggler, False), False, provenance),
+        ("the Juggler in an OPTIMIZED omni.ja (a PGO build, the retail's layout)",
+         lambda: omni(juggler, True), False, provenance),
+        ("an optimized omni.ja without the Juggler",
+         lambda: omni({"modules/AppConstants.sys.mjs": b"x"}, True), True, provenance),
+        ("Mozilla's UpdateService packed inside an OPTIMIZED omni.ja",
+         lambda: omni({"modules/UpdateService.sys.mjs": b"x"}, True), True,
+         assert_updater_is_retails),
+    ]
+
     bad = 0
     for name, factory, must_raise, check in cases:
         d = factory()
@@ -705,7 +832,7 @@ def _selftest() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true",
-                    help="run the known-bad inputs for the no-updater and the "
+                    help="run the known-bad inputs for the updater and the "
                          "page-surface checks and exit")
     ap.add_argument("tag", nargs="?", help="release tag, e.g. firefox-4 (resolves to release/binary/<tag>/)")
     ap.add_argument("--linux", type=Path, help="explicit path to the Linux tar.gz (overrides tag)")

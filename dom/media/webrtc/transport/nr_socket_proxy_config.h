@@ -7,10 +7,13 @@
 
 #include <memory>
 
+#include "mozilla/RefPtr.h"
+
 namespace mozilla {
 namespace net {
 class WebrtcProxyConfig;
-}
+class PcUdpProxy;
+}  // namespace net
 
 class NrSocketProxyConfig {
  public:
@@ -25,6 +28,10 @@ class NrSocketProxyConfig {
 
   const net::WebrtcProxyConfig& GetConfig() const;
   bool GetForceProxy() const;
+
+  // The proxy the UDP of this PeerConnection leaves by (what Firefox answers for its document), asked when the config
+  // is made; null where no UDP socket of the PeerConnection is made (a content process).
+  RefPtr<net::PcUdpProxy> UdpProxy() const;
 
  private:
   // dom::ProxyConfig includes stuff that conflicts with nICEr includes.

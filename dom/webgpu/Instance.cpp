@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "Adapter.h"
+#include "StealthWebGPUDeclaration.h"  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
 #include "ipc/WebGPUChild.h"
 #include "ipc/WebGPUTypes.h"
 #include "js/Value.h"
@@ -222,9 +223,15 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
     power_preference = ffi::WGPUPowerPreference_None;
   }
 
+  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
+  if (StealthWebGPUNoAdapter()) {
+    promise->MaybeResolve(JS::NullValue());
+    return promise.forget();
+  }
   RawId adapter_id = ffi::wgpu_client_request_adapter(
       child->GetClient(), power_preference, aOptions.mForceFallbackAdapter);
 
+  StealthWebGPUNoteRequest(this, adapter_id, aOptions.mForceFallbackAdapter);  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
   child->EnqueueRequestAdapterPromise(
       PendingRequestAdapterPromise{promise, this, adapter_id});
 

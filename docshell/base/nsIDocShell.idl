@@ -685,9 +685,9 @@ interface nsIDocShell : nsIDocShellTreeItem
    */
   void synchronizeLayoutHistoryState();
 
+  // STEALTH-HOOK(automation/docshell-attrs): see FEATURE.md
   attribute boolean fileInputInterceptionEnabled;
   attribute boolean bypassCSPEnabled;
-
 
   /**
    * This attempts to save any applicable layout history state (like

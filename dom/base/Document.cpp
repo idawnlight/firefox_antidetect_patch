@@ -257,7 +257,7 @@
 #include "mozilla/dom/SpeculationRuleSet.h"
 #include "mozilla/dom/SpeculationRules.h"
 #include "mozilla/dom/SpeculationRulesManager.h"
-#include "mozilla/dom/StealthSessionDeclaration.h"
+#include "mozilla/dom/StealthSessionDeclaration.h"  // STEALTH-HOOK(fingerprint/locale-time/timezone)
 #include "mozilla/dom/StyleSheetApplicableStateChangeEvent.h"
 #include "mozilla/dom/StyleSheetApplicableStateChangeEventBinding.h"
 #include "mozilla/dom/StyleSheetList.h"
@@ -4097,10 +4097,8 @@ nsresult Document::InitCSP(nsIChannel* aChannel) {
     }
   }
 
-  if (CSP_IsBypassedFor(*this)) {
-    return NS_OK;
-  }
-
+  // STEALTH-HOOK(automation/bypass-csp)
+  if (CSP_IsBypassedFor(*this)) return NS_OK;
   nsAutoCString tCspHeaderValue, tCspROHeaderValue;
 
   nsCOMPtr<nsIHttpChannel> httpChannel;
@@ -4621,6 +4619,7 @@ void Document::SetDocumentURI(nsIURI* aURI) {
   }
 }
 
+// STEALTH-HOOK(fingerprint/locale-time/timezone)
 static void GetFormattedTimeString(PRTime aTime, const Document& aDocument,
                                    nsAString& aFormattedTimeString) {
   PRExplodedTime prtime;
@@ -8564,6 +8563,7 @@ void Document::SetContainer(nsDocShell* aContainer) {
 
   mInChromeDocShell =
       aContainer && aContainer->GetBrowsingContext()->IsChrome();
+  if (aContainer) RefreshDocumentLanguage(this);  // STEALTH-HOOK(fingerprint/locale-time/timezone): the context is known now
 
   NotifyActivityChanged();
 
@@ -21379,6 +21379,7 @@ const LangGroupFontPrefs* Document::GetFontPrefsForLang(
 
 void Document::RecomputeLanguageFromCharset() {
   nsAtom* language = mozilla::intl::EncodingToLang::Lookup(mCharacterSet);
+  language = DocumentCharsetLanguage(this, language);  // STEALTH-HOOK(fingerprint/locale-time/timezone)
 
   if (language == mLanguageFromCharset) {
     return;

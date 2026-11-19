@@ -20,6 +20,8 @@ include("/tools/fuzzing/libfuzzer-config.mozbuild")
 if CONFIG["FUZZING_INTERFACES"]:
     TEST_DIRS += ["fuzztest"]
 
+TEST_DIRS += ["test/gtest"]  # STEALTH-HOOK(fingerprint/webrtc/declared-network)
+
 LICENSED_UNDER += ["libjingle"]
 LICENSED_UNDER["libjingle"].paths = [
     "sigslot.h",

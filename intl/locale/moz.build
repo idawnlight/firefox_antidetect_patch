@@ -39,8 +39,8 @@ EXPORTS.mozilla.intl += [
     "MozLocaleBindings.h",
     "OSPreferences.h",
     "Quotes.h",
-    "StealthSessionPrefs.h",
 ]
+EXPORTS.mozilla.intl += ["StealthSessionPrefs.h"]  # STEALTH-HOOK(fingerprint/locale-time/session-declaration)
 
 UNIFIED_SOURCES += [
     "AppCollator.cpp",
@@ -51,8 +51,8 @@ UNIFIED_SOURCES += [
     "nsUConvPropertySearch.cpp",
     "OSPreferences.cpp",
     "Quotes.cpp",
-    "StealthSessionPrefs.cpp",
 ]
+UNIFIED_SOURCES += ["StealthSessionPrefs.cpp"]  # STEALTH-HOOK(fingerprint/locale-time/session-declaration)
 
 MOZ_SRC_FILES += [
     "LangPackMatcher.sys.mjs",

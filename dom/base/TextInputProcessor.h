@@ -243,6 +243,7 @@ class TextInputProcessor final : public nsITextInputProcessor,
   RefPtr<ModifierKeyDataArray> mModifierKeyDataArray;
 
   bool mForTests;
+  struct { double mLatencyMs = 0; uint64_t mPageId = 0; } mStealthKeyBirth;  // STEALTH-HOOK(fingerprint/input/event-birth) shape of StealthKeyBirth
 };
 
 // See nsITextInputProcessorListener documentation in

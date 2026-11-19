@@ -90,9 +90,10 @@ class InterceptedHttpChannel final
   nsString mStatusHost;
   Atomic<bool> mCallingStatusAndProgress;
   bool mInterceptionReset{false};
-
+  // STEALTH-HOOK(automation/network-interception)
   bool mInterceptAfterServiceWorkerResets{false};
   bool mServiceWorkerResetBypass{true};
+  nsresult StealthInterceptAgain(bool aBypass);
 
   /**
    *  InterceptionTimeStamps is used to record the time stamps of the

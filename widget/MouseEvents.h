@@ -239,7 +239,7 @@ class WidgetMouseEventBase : public WidgetInputEvent {
   // Possible values a in MouseEvent
   uint16_t mInputSource;
 
-  // Correlates input dispatch with the content-process acknowledgement.
+  // STEALTH-HOOK(automation/input): B217, see FEATURE.md
   uint32_t mJugglerEventId = 0;
 
   bool IsLeftButtonPressed() const {

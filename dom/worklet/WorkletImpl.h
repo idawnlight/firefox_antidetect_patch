@@ -35,6 +35,8 @@ class WorkletLoadInfo {
 
   uint64_t OuterWindowID() const { return mOuterWindowID; }
   uint64_t InnerWindowID() const { return mInnerWindowID; }
+
+  // STEALTH-HOOK(fingerprint/locale-time/workers)
   const nsCString& Language() const { return mLanguage; }
   const nsString& Timezone() const { return mTimezone; }
 

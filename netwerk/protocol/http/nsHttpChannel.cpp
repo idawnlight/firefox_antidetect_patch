@@ -71,6 +71,7 @@
 #include "mozilla/net/OpaqueResponseUtils.h"
 #include "mozilla/net/SFVService.h"
 #include "mozilla/net/SocketProcessParent.h"
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "mozilla/net/TRRService.h"
 #include "mozilla/net/URLPatternGlue.h"
 #include "mozilla/net/urlpattern_glue.h"
@@ -8057,6 +8058,7 @@ void nsHttpChannel::AsyncOpenFinal(TimeStamp aTimeStamp) {
 
 void nsHttpChannel::MaybeResolveProxyAndBeginConnect() {
   nsresult rv;
+  nsresult proxyRv = NS_OK;  // STEALTH-HOOK(network/doh)
 
   // The common case for HTTP channels is to begin proxy resolution and return
   // at this point. The only time we know mProxyInfo already is if we're
@@ -8071,10 +8073,11 @@ void nsHttpChannel::MaybeResolveProxyAndBeginConnect() {
     if (pps2 && pps2->IsEffectivelyDirect()) {
       mozilla::glean::networking::proxy_fast_path_used.Add(1);
       MaybeStartDNSPrefetch();
-    } else if (NS_SUCCEEDED(ResolveProxy())) {
+    } else if (NS_SUCCEEDED(proxyRv = ResolveProxy())) {  // STEALTH-HOOK(network/doh)
       return;
     }
   }
+  if (StealthTRRFailClosed(this, proxyRv, StealthProxyIsMandatory(LoadIsTRRServiceChannel(), mLoadInfo.get()), mCanceled)) { return; }  // STEALTH-HOOK(network/doh)
 
   if (!gHttpHandler->Active()) {
     LOG(
@@ -8851,6 +8854,7 @@ nsHttpChannel::OnProxyAvailable(nsICancelable* request, nsIChannel* channel,
   // proxy info.  That is a non-fatal error assuming it wasn't because the
   // request was canceled.  We just failover to DIRECT when proxy resolution
   // fails (failure can mean that the PAC URL could not be loaded).
+  if (StealthTRRFailClosed(this, StealthTRRProxyAnswer(status, pi, LoadIsTRRServiceChannel()), StealthProxyIsMandatory(LoadIsTRRServiceChannel(), mLoadInfo.get()), mCanceled)) { return NS_OK; }  // STEALTH-HOOK(network/doh)
 
   if (NS_SUCCEEDED(status)) {
     mProxyInfo = pi;

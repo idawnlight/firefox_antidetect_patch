@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "HttpBaseChannel.h"
-#include "mozilla/Preferences.h"
 #include "HttpLog.h"
 #include "LoadInfo.h"
 #include "ReferrerInfo.h"
@@ -6766,15 +6765,12 @@ void HttpBaseChannel::MaybeFlushConsoleReports() {
 void HttpBaseChannel::DoDiagnosticAssertWhenOnStopNotCalledOnDestroy() {}
 
 bool HttpBaseChannel::Http3Allowed() const {
-  bool socksUdpEnabled = mozilla::Preferences::GetBool(
-      "network.proxy.socks_remote_udp", false);
+  // STEALTH-HOOK(network/proxy-udp)
   bool allowedProxyInfo =
-      mProxyInfo
-          ? (static_cast<nsProxyInfo*>(mProxyInfo.get())->IsDirect() ||
-             static_cast<nsProxyInfo*>(mProxyInfo.get())->IsHttp3Proxy() ||
-             (socksUdpEnabled &&
-              static_cast<nsProxyInfo*>(mProxyInfo.get())->IsSOCKS()))
-          : true;
+      mProxyInfo ? (static_cast<nsProxyInfo*>(mProxyInfo.get())->IsDirect() ||
+                    static_cast<nsProxyInfo*>(mProxyInfo.get())->IsHttp3Proxy() ||
+                    static_cast<nsProxyInfo*>(mProxyInfo.get())->IsSOCKS5())
+                 : true;
   // TODO: When mUpgradeProtocolCallback is not null, we should allow HTTP/3 for
   // connect-udp.
   return !mUpgradeProtocolCallback && allowedProxyInfo &&

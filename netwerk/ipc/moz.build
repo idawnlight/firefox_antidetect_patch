@@ -30,6 +30,8 @@ EXPORTS.mozilla.net += [
     "SocketProcessHost.h",
     "SocketProcessImpl.h",
     "SocketProcessParent.h",
+    "StealthDocumentChannel.h",  # STEALTH-HOOK(network/proxy-udp)
+    "StealthTRRContext.h",  # STEALTH-HOOK(network/doh)
 ]
 
 UNIFIED_SOURCES += [
@@ -57,6 +59,8 @@ UNIFIED_SOURCES += [
     "SocketProcessHost.cpp",
     "SocketProcessImpl.cpp",
     "SocketProcessParent.cpp",
+    "StealthDocumentChannel.cpp",  # STEALTH-HOOK(network/proxy-udp)
+    "StealthTRRContext.cpp",  # STEALTH-HOOK(network/doh)
 ]
 
 SOURCES += [

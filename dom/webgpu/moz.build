@@ -58,6 +58,8 @@ h_and_cpp = [
 ]
 EXPORTS.mozilla.webgpu += [x + ".h" for x in h_and_cpp]
 UNIFIED_SOURCES += [x + ".cpp" for x in h_and_cpp]
+EXPORTS.mozilla.webgpu += ["StealthWebGPUDeclaration.h"]  # STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
+SOURCES += ["StealthWebGPUDeclaration.cpp"]  # STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
 
 IPDL_SOURCES += [
     "ipc/PWebGPU.ipdl",

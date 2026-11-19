@@ -5,6 +5,7 @@
 #include "nsProtocolProxyService.h"
 
 #include "SimpleChannel.h"
+#include "StealthSocksCredentials.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/CondVar.h"
 #include "mozilla/Logging.h"
@@ -1079,16 +1080,9 @@ void nsProtocolProxyService::PrefsChanged(nsIPrefBranch* prefBranch,
     }
   }
 
-  if (!pref || !strcmp(pref, PROXY_PREF("socks_username"))) {
-    proxy_GetStringPref(prefBranch, PROXY_PREF("socks_username"),
-                        mSOCKSProxyUsername);
-  }
-
-  if (!pref || !strcmp(pref, PROXY_PREF("socks_password"))) {
-    proxy_GetStringPref(prefBranch, PROXY_PREF("socks_password"),
-                        mSOCKSProxyPassword);
-  }
-
+  // STEALTH-HOOK(network/socks)
+  StealthSocksPrefsChanged(prefBranch, pref, mSOCKSProxyUsername,
+                           mSOCKSProxyPassword);
   if (!pref || !strcmp(pref, PROXY_PREF("socks_remote_dns"))) {
     proxy_GetBoolPref(prefBranch, PROXY_PREF("socks_remote_dns"),
                       mSOCKS4ProxyRemoteDNS);
@@ -2326,6 +2320,7 @@ nsresult nsProtocolProxyService::Resolve_Internal(nsIChannel* channel,
   }
 
   if (type) {
+    // STEALTH-HOOK(network/socks)
     rv = NewProxyInfo_Internal(type, *host, port, ""_ns, mSOCKSProxyUsername,
                                mSOCKSProxyPassword, ""_ns, ""_ns, proxyFlags,
                                UINT32_MAX, nullptr, flags, result);

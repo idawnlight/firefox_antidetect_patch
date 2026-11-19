@@ -2047,6 +2047,17 @@ impl BlockContext<'_> {
             crate::Expression::Load { pointer } => {
                 self.write_checked_load(pointer, block, AccessTypeAdjustment::None, result_type_id)?
             }
+            // External textures are expanded into several parameters, which
+            // are accessed through `get_external_texture_plane_id` and
+            // `get_external_texture_params_id`, like external texture globals.
+            crate::Expression::FunctionArgument(_)
+                if self.fun_info[expr_handle]
+                    .ty
+                    .inner_with(&self.ir_module.types)
+                    .is_external_image() =>
+            {
+                0
+            }
             crate::Expression::FunctionArgument(index) => self.function.parameter_id(index),
             crate::Expression::CallResult(_)
             | crate::Expression::AtomicResult { .. }
@@ -3514,6 +3525,54 @@ impl BlockContext<'_> {
         Instruction::composite_construct(result_type_id, id, &parts)
     }
 
+    /// Push the SPIR-V arguments for an external texture `Call` argument.
+    ///
+    /// An external texture is a single logical argument, but is passed as three
+    /// plane textures followed by the parameters buffer. See
+    /// [`Writer::write_external_texture_function_parameters`] for the callee
+    /// side.
+    ///
+    /// [`Writer::write_external_texture_function_parameters`]: super::Writer::write_external_texture_function_parameters
+    fn push_external_texture_call_arguments(
+        &mut self,
+        argument: Handle<crate::Expression>,
+    ) -> Result<(), Error> {
+        match self.ir_function.expressions[argument] {
+            crate::Expression::GlobalVariable(handle) => {
+                let external_texture = &self.writer.external_textures[&handle];
+                let plane_ids = [
+                    external_texture.planes[0].var_id,
+                    external_texture.planes[1].var_id,
+                    external_texture.planes[2].var_id,
+                ];
+                // The parameters are passed by value. The function prelude has
+                // already loaded them from the std140-compatible uniform buffer
+                // and converted them to the regular parameters type.
+                let params_id = external_texture.params.handle_id;
+                if params_id == 0 {
+                    return Err(Error::Validation(
+                        "external texture global passed to a function that doesn't use it",
+                    ));
+                }
+
+                // The planes are passed as pointers, like any texture global.
+                self.temp_list.extend_from_slice(&plane_ids);
+                self.temp_list.push(params_id);
+            }
+            crate::Expression::FunctionArgument(index) => {
+                // The external texture argument was itself expanded into four
+                // consecutive parameters, which we forward directly.
+                let offset = self.function.parameter_offsets[index as usize] as usize;
+                for parameter in &self.function.parameters[offset..offset + 4] {
+                    self.temp_list
+                        .push(parameter.instruction.result_id.unwrap());
+                }
+            }
+            _ => return Err(Error::Validation("unexpected external texture expression")),
+        }
+        Ok(())
+    }
+
     /// Generate one or more SPIR-V blocks for `naga_block`.
     ///
     /// Use `label_id` as the label for the SPIR-V entry point block.
@@ -3935,7 +3994,18 @@ impl BlockContext<'_> {
                     let id = self.gen_id();
                     self.temp_list.clear();
                     for &argument in arguments {
-                        self.temp_list.push(self.cached[argument]);
+                        if self.fun_info[argument]
+                            .ty
+                            .inner_with(&self.ir_module.types)
+                            .is_external_image()
+                        {
+                            // An external texture is a single logical argument,
+                            // but is passed as four SPIR-V arguments: three
+                            // planes and a parameters buffer.
+                            self.push_external_texture_call_arguments(argument)?;
+                        } else {
+                            self.temp_list.push(self.cached[argument]);
+                        }
                     }
 
                     let type_id = match result {

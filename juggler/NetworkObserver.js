@@ -7,6 +7,8 @@
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
 const { ChannelEventSinkFactory } = ChromeUtils.importESModule("resource://gre/modules/juggler/ChannelEventSink.sys.mjs");
+const { say } = ChromeUtils.importESModule('resource://gre/modules/juggler/Say.js');
+const { sayWhenHeldTooLong } = ChromeUtils.importESModule('resource://gre/modules/juggler/EarlyProxyHold.js');
 const { newProxyInfoFor } = ChromeUtils.importESModule('resource://gre/modules/juggler/SessionRoute.js');
 
 
@@ -16,6 +18,9 @@ const Cu = Components.utils;
 const Cr = Components.results;
 const Cm = Components.manager;
 const CC = Components.Constructor;
+// Stealthfox 2026-08-30: rimessi con la copia dei corpi. Servono a leggere i
+// byte che arrivano e a rimetterne una copia identica nel flusso, cosi' il
+// consumatore vero non si accorge di niente.
 const BinaryInputStream = CC('@mozilla.org/binaryinputstream;1', 'nsIBinaryInputStream', 'setInputStream');
 const BinaryOutputStream = CC('@mozilla.org/binaryoutputstream;1', 'nsIBinaryOutputStream', 'setOutputStream');
 const StorageStream = CC('@mozilla.org/storagestream;1', 'nsIStorageStream', 'init');
@@ -23,6 +28,10 @@ const helper = new Helper();
 
 // Cap response storage with 100Mb per tracked tab.
 const MAX_RESPONSE_STORAGE_SIZE = 100 * 1024 * 1024;
+// A response whose body was dropped stays as a small marker, so that Network.getResponseBody says "evicted" and
+// not "not found"; the markers of a tab are capped by number.
+const MAX_RESPONSE_STORAGE_ENTRIES = 2000;
+const MAX_NAVIGATION_STARTS = 100;
 
 const pageNetworkSymbol = Symbol('PageNetwork');
 
@@ -42,6 +51,11 @@ export class PageNetwork {
     helper.decorateAsEventEmitter(this);
     this._target = target;
     this._extraHTTPHeaders = null;
+    // Stealthfox 2026-08-30: rimesso. Costa memoria - fino a 100 MB per tab,
+    // 10 MB per singola risposta, con sfratto - e sono i limiti di upstream,
+    // non inventati qui. Il prezzo si paga perche' senza questo
+    // response.text() rifiuta, e i trace e gli HAR escono con i corpi vuoti
+    // senza dirlo a nessuno.
     this._responseStorage = new ResponseStorage(MAX_RESPONSE_STORAGE_SIZE, MAX_RESPONSE_STORAGE_SIZE / 10);
     this._requestInterceptionEnabled = false;
     // This is requestId => NetworkRequest map, only contains requests that are
@@ -51,6 +65,13 @@ export class PageNetwork {
 
   setExtraHTTPHeaders(headers) {
     this._extraHTTPHeaders = headers;
+  }
+
+  // The main frame committed a navigation: the bodies of the documents it left are not readable any more, as in
+  // Chromium (InspectorNetworkAgent::DidCommitLoad clears every loader but the one that committed). Without it a
+  // tab keeps up to MAX_RESPONSE_STORAGE_SIZE of bodies of pages nobody can ask about.
+  onMainFrameNavigationCommitted(navigationId) {
+    this._responseStorage?.evictBeforeNavigation(navigationId);
   }
 
   getResponseBody(requestId) {
@@ -70,11 +91,21 @@ export class PageNetwork {
     this._requestInterceptionEnabled = true;
   }
 
+  // The answer always means interception is off and nothing is held: every
+  // held request is let go on its own, and one whose channel can no longer be
+  // resumed (the page or the network dropped it meanwhile) neither fails the
+  // command nor keeps the others held.
   disableRequestInterception() {
     this._requestInterceptionEnabled = false;
-    for (const intercepted of this._interceptedRequests.values())
-      intercepted.resume();
+    const held = [...this._interceptedRequests.values()];
     this._interceptedRequests.clear();
+    for (const intercepted of held) {
+      try {
+        intercepted.resume();
+      } catch (e) {
+        intercepted._interceptedChannel = undefined;
+      }
+    }
   }
 
   resumeInterceptedRequest(requestId, url, method, headers, postData) {
@@ -104,13 +135,17 @@ class NetworkRequest {
     this.httpChannel = httpChannel;
 
     const loadInfo = this.httpChannel.loadInfo;
-    const browsingContext = loadInfo?.frameBrowsingContext || loadInfo?.workerAssociatedBrowsingContext || loadInfo?.browsingContext;
+    // A request the parent makes for a page (a fetch with keepalive, which FetchService runs in the parent process) has no
+    // browsingContext in its loadInfo: Gecko names the page in `associatedBrowsingContext`. Without it the request belonged to
+    // no page, and the client heard no `request` event for it (stock Playwright's Firefox reports it).
+    const browsingContext = loadInfo?.frameBrowsingContext || loadInfo?.workerAssociatedBrowsingContext || loadInfo?.associatedBrowsingContext || loadInfo?.browsingContext;
 
     this._frameId = helper.browsingContextToFrameId(browsingContext);
 
     this.requestId = httpChannel.channelId + '';
     this.navigationId = httpChannel.isMainDocumentChannel && loadInfo ? helper.toProtocolNavigationId(loadInfo.jugglerLoadIdentifier) : undefined;
 
+    // Stealthfox 2026-08-30: rimesso con la lettura dei corpi.
     this._responseBodyChunks = [];
     // Set by NetworkObserver._onServiceWorkerResponse when a service worker
     // answered this request; read once, when the response is reported.
@@ -126,6 +161,16 @@ class NetworkRequest {
       // use onStopRequest, but that will only happen after the last redirect has finished.
       redirectedFrom._sendOnRequestFinished();
     }
+    // In case of proxy auth, we get two requests with the same channel:
+    // - one is pre-auth
+    // - second is with auth header.
+    //
+    // In this case, we create this NetworkRequest object with a `redirectedFrom`
+    // object, and they both share the same httpChannel.
+    //
+    // Since we want to maintain _channelToRequest map without clashes,
+    // we must call `_sendOnRequestFinished` **before** we update it with a new object
+    // here.
     if (this._networkObserver._channelToRequest.has(this.httpChannel))
       throw new Error(`Internal Error: invariant is broken for _channelToRequest map`);
     this._networkObserver._channelToRequest.set(this.httpChannel, this);
@@ -216,6 +261,7 @@ class NetworkRequest {
     // but inherits notificationCallbacks and the listener,
     // and should be used instead of an old channel.
     this._networkObserver._channelToRequest.delete(this.httpChannel);
+    this._replacedChannel = this.httpChannel;
     this.httpChannel = newChannel;
     this._networkObserver._channelToRequest.set(this.httpChannel, this);
   }
@@ -332,6 +378,16 @@ class NetworkRequest {
       return false;
     }
 
+    // ⛔ THE ORDER THE REQUEST WOULD HAVE GONE OUT IN, taken here because this
+    // is the last moment it exists. Interception swaps this channel for an
+    // InterceptedHttpChannel and resuming swaps that for a new nsHttpChannel;
+    // each swap re-creates the standard headers first, copies the rest after
+    // them minus Connection, Cookie and Content-Length, and adds those back
+    // later at the end. Measured on HTTP/1.1 with route.continue_(): Connection
+    // and Cookie after the Sec-Fetch-* group, and on a POST Referer after
+    // Content-Length - an order this browser never sends without a route.
+    // Only for our own interception: a service worker that lets a request
+    // through resets it the same way in a stock Firefox, so that order is real.
     this._wireHeaderOrder = requestHeaders(channel);
     return true;
   }
@@ -381,6 +437,10 @@ class NetworkRequest {
     // we do not get onResponse normally, but we do get nsIStreamListener notifications.
     this._sendOnResponse(false);
 
+    // Stealthfox 2026-08-30: la copia e' TORNATA. Dal 2026-08-24 al 2026-08-30
+    // qui c'era un pass-through diretto, perche' con Network.getResponseBody
+    // tolto il corpo non lo leggeva piu' nessuno. Lo leggeva: response.text(),
+    // e anche i trace e gli HAR, che pero' non protestavano.
     const iStream = new BinaryInputStream(aInputStream);
     const sStream = new StorageStream(8192, aCount, null);
     const oStream = new BinaryOutputStream(sStream.getOutputStream(0));
@@ -417,8 +477,14 @@ class NetworkRequest {
     // Turns out webcompat shims might redirect to
     // SimpleChannel, so we get requests from a different channel.
     // See https://github.com/microsoft/playwright/issues/9418#issuecomment-944836244
-    if (aRequest !== this.httpChannel)
+    if (aRequest !== this.httpChannel) {
+      // A resumed request is replaced by an internal redirect. When the channel it replaced is cancelled (a beacon whose document
+      // went away) before the replacement ever started, the replacement never reaches http-on-modify-request and nothing else
+      // ends the request: the client waited for it for ever. Playwright's own Firefox reports it failed, here as the channel says.
+      if (aRequest === this._replacedChannel && aStatusCode !== 0 && this._expectingResumedRequest)
+        this._sendOnRequestFailed(aStatusCode);
       return;
+    }
     try {
       this._originalListener.onStopRequest(aRequest, aStatusCode);
     } catch (e) {
@@ -429,6 +495,7 @@ class NetworkRequest {
       // For requests with internal redirect (e.g. intercepted by Service Worker),
       // we do not get onResponse normally, but we do get nsIRequestObserver notifications.
       this._sendOnResponse(false);
+      // Stealthfox 2026-08-30: rimesso.
       const body = this._responseBodyChunks.join('');
       const pageNetwork = this._pageNetwork;
       if (pageNetwork)
@@ -482,6 +549,8 @@ class NetworkRequest {
     const pageNetwork = this._pageNetwork;
     if (!pageNetwork)
       return;
+    if (this.navigationId && !this.redirectedFromId)
+      pageNetwork._responseStorage?.noteNavigationStart(this.navigationId);
     const loadInfo = this.httpChannel.loadInfo;
     const causeType = loadInfo?.externalContentPolicyType || Ci.nsIContentPolicy.TYPE_OTHER;
     const internalCauseType = loadInfo?.internalContentPolicyType || Ci.nsIContentPolicy.TYPE_OTHER;
@@ -491,6 +560,12 @@ class NetworkRequest {
       isIntercepted,
       requestId: this.requestId,
       redirectedFrom: this.redirectedFromId,
+      // The body of every request that has one, as upstream sends it. From
+      // 2026-08-24 (B170) it was not read, and from 2026-10-03 only while
+      // interception was on, to save a copy of each upload: `request.post_data`
+      // then answered None for every POST of a page with no route, as if the
+      // form had been empty, and nothing said so (B303 E15). The reader leaves
+      // the upload intact and skips bodies over 10 MB.
       postData: readRequestPostData(this.httpChannel),
       headers: requestHeaders(this.httpChannel),
       method: this.httpChannel.requestMethod,
@@ -547,6 +622,9 @@ class NetworkRequest {
 
     pageNetwork.emit(PageNetwork.Events.Response, {
       requestId: this.requestId,
+      // The certificate that served it, as upstream reports it. From
+      // 2026-08-24 (B170) this was always null, which a script read as "not
+      // over TLS" (B303 E15).
       securityDetails: getSecurityDetails(this.httpChannel),
       fromCache,
       headers,
@@ -555,6 +633,8 @@ class NetworkRequest {
       status,
       statusText,
       timing,
+      // Whether a service worker answered it. From 2026-08-24 (B170) this was
+      // always false (B303 E15).
       fromServiceWorker: this._fulfilledByServiceWorker,
     }, this._frameId);
   }
@@ -562,12 +642,35 @@ class NetworkRequest {
   _sendOnRequestFailed(error) {
     const pageNetwork = this._pageNetwork;
     if (pageNetwork) {
+      // `navigationId` is not part of what the client is told (PageHandler takes it off): it is how the parent ends the
+      // navigation of a document request that was CUT (NS_BINDING_ABORTED), and of no other failure. Any other error
+      // (a connection that drops half way through the body, a partial transfer) can come after the document appeared in
+      // its process, whose message is still on its way: the parent would end a navigation that committed. The content
+      // process sees those ends in order with the documents it inserts and tells them. A cut after the document leaves
+      // the process that holds it on the channel of that message, so it comes after it. A redirect hop does not come
+      // here, it finishes (_sendOnRequestFinished): what fails is the last request of the navigation.
       pageNetwork.emit(PageNetwork.Events.RequestFailed, {
         requestId: this.requestId,
         errorCode: helper.getNetworkErrorStatusText(error),
+        navigationId: error === Cr.NS_BINDING_ABORTED ? this.navigationId : undefined,
       }, this._frameId);
     }
+    this._ended();
+  }
+
+  // A request that ends while it is held (the page cancelled it, a navigation
+  // or the tab took it) is no longer held: a command for it then fails with
+  // "Cannot find request", and disableRequestInterception does not resume a
+  // channel that is gone.
+  _ended() {
+    const pageNetwork = this._pageNetwork;
+    if (pageNetwork?._interceptedRequests.get(this.requestId) === this)
+      pageNetwork._interceptedRequests.delete(this.requestId);
+    this._interceptedChannel = undefined;
     this._networkObserver._channelToRequest.delete(this.httpChannel);
+    // A redirect that was expected of this request and never came (the new channel did not reach
+    // http-on-modify-request) would keep it, with its channel and load info, for as long as the browser lives.
+    this._networkObserver._forgetExpectedRedirects(this);
   }
 
   _sendOnRequestFinished() {
@@ -591,12 +694,15 @@ class NetworkRequest {
         protocolVersion,
       }, this._frameId);
     }
-    this._networkObserver._channelToRequest.delete(this.httpChannel);
+    this._ended();
   }
 }
 
 export class NetworkObserver {
-  constructor(targetRegistry) {
+  // `earlyHold` is the filter Juggler registered at command-line-startup
+  // (EarlyProxyHold.js): adopted, never registered a second time, and the
+  // channels it already holds stay held.
+  constructor(targetRegistry, earlyHold = null) {
     helper.decorateAsEventEmitter(this);
 
     this._targetRegistry = targetRegistry;
@@ -604,21 +710,30 @@ export class NetworkObserver {
     this._channelToRequest = new Map();  // http channel -> network request
     this._expectedRedirect = new Map();  // expected redirect channel id (string) -> network request
 
-    const protocolProxyService = Cc['@mozilla.org/network/protocol-proxy-service;1'].getService();
+    // PENDING until the first command (Browser.setBrowserProxy or
+    // Browser.setNoBrowserProxy) has decided the road of the session: the
+    // channels asked before wait here, unanswered, so nothing leaves the host
+    // before the client said how it must leave. DoH lookups come through the
+    // same filter (the stand-in channel of ProxyConfigLookup) and wait too.
+    this._earlyHold = earlyHold;
+    this._waitingSaid = false;
+    this._pendingProxyFilters = earlyHold ? earlyHold.pending : [];
     this._channelProxyFilter = {
       QueryInterface: ChromeUtils.generateQI([Ci.nsIProtocolProxyChannelFilter]),
       applyFilter: (channel, defaultProxyInfo, proxyFilter) => {
-        const proxy = this._targetRegistry.getProxyInfo(channel);
-        if (!proxy) {
-          proxyFilter.onProxyFilterResult(defaultProxyInfo);
+        if (!this._targetRegistry.browserProxyDecided) {
+          this._pendingProxyFilters.push({ channel, defaultProxyInfo, proxyFilter });
+          this._noteHeld();
           return;
         }
-        if (this._targetRegistry.shouldBustHTTPAuthCacheForProxy(proxy))
-          Services.obs.notifyObservers(null, "net:clear-active-logins");
-        proxyFilter.onProxyFilterResult(newProxyInfoFor(proxy));
+        this._answerProxyFilter(channel, defaultProxyInfo, proxyFilter);
       },
     };
-    protocolProxyService.registerChannelFilter(this._channelProxyFilter, 0 /* position */);
+    this._targetRegistry.onBrowserProxyDecided(() => this._answerPendingProxyFilters());
+    if (earlyHold)
+      earlyHold.adopt(this._channelProxyFilter.applyFilter);
+    else
+      Cc['@mozilla.org/network/protocol-proxy-service;1'].getService().registerChannelFilter(this._channelProxyFilter, 0 /* position */);
 
     // Register self as ChannelEventSink to track redirects.
     ChannelEventSinkFactory.getService().registerCollector({
@@ -634,6 +749,60 @@ export class NetworkObserver {
       // synthesized response reaches http-on-examine-response.
       helper.addObserver(this._onServiceWorkerResponse.bind(this), 'service-worker-synthesized-response'),
     ];
+  }
+
+  // The one line that says why channels wait (see EarlyProxyHold.noteHeld, which
+  // writes it when the hold has the channels; this is the same line for an
+  // observer that registered its own filter).
+  _noteHeld() {
+    if (this._earlyHold) {
+      this._earlyHold.noteHeld();
+      return;
+    }
+    if (this._waitingSaid)
+      return;
+    this._waitingSaid = true;
+    sayWhenHeldTooLong(() => this._pendingProxyFilters.length > 0);
+  }
+
+  // The answer of the filter for one channel, once the session's road is decided.
+  _answerProxyFilter(channel, defaultProxyInfo, proxyFilter) {
+    const proxy = this._targetRegistry.getProxyInfo(channel);
+    if (!proxy) {
+      proxyFilter.onProxyFilterResult(defaultProxyInfo);
+      return;
+    }
+    if (this._targetRegistry.shouldBustHTTPAuthCacheForProxy(proxy))
+      Services.obs.notifyObservers(null, "net:clear-active-logins");
+    // ⛔ AND THE CREDENTIALS ARE NOT DECIDED HERE ANY MORE, because for
+    // seven releases they were decided here WRONGLY and nothing said so.
+    //
+    // The line this replaces passed the username and the password for
+    // every scheme, with a comment claiming "the same two fields carry
+    // HTTP proxy auth". They do not. Gecko refuses them for anything that
+    // is not SOCKS, so with an authenticated HTTP proxy this call threw,
+    // `onProxyFilterResult` was never reached, and necko went on with the
+    // DEFAULT proxy info: DIRECT, over the host's own address, with no
+    // error on the protocol and nothing in the log a client could see.
+    // Reported from the outside as a privacy failure, not caught here.
+    //
+    // `newProxyInfoFor` is now the only place that answers the question,
+    // and it is also called when the proxy is SET, so a proxy this engine
+    // cannot express refuses its command instead of arriving here to fail.
+    proxyFilter.onProxyFilterResult(newProxyInfoFor(proxy));
+  }
+
+  // The decision was made: every channel that waited gets its answer, in the
+  // order it asked. One answer that throws does not leave the others waiting.
+  _answerPendingProxyFilters() {
+    const pending = this._pendingProxyFilters.splice(0);
+    for (const { channel, defaultProxyInfo, proxyFilter } of pending) {
+      try {
+        this._answerProxyFilter(channel, defaultProxyInfo, proxyFilter);
+      } catch (e) {
+        say('Juggler: a proxy answer failed: ' + (e && e.message) + '\n');
+      }
+    }
   }
 
   /**
@@ -682,6 +851,13 @@ export class NetworkObserver {
     }
   }
 
+  _forgetExpectedRedirects(request) {
+    for (const [channelId, expectedFrom] of this._expectedRedirect) {
+      if (expectedFrom === request)
+        this._expectedRedirect.delete(channelId);
+    }
+  }
+
   _onRequest(channel, topic) {
     if (!(channel instanceof Ci.nsIHttpChannel))
       return;
@@ -695,6 +871,8 @@ export class NetworkObserver {
       const serviceWorkerImport = type === Ci.nsIContentPolicy.TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS &&
           requestHeaders(httpChannel).some(header => header.name.toLowerCase() === 'service-worker' && header.value === 'script');
       if (type === Ci.nsIContentPolicy.TYPE_INTERNAL_SERVICE_WORKER || serviceWorkerImport) {
+        // This channel is cancelled before a request is made for it: the redirect that was expected for it is not.
+        this._expectedRedirect.delete(httpChannel.channelId + '');
         httpChannel.cancel(Cr.NS_ERROR_NET_RESET);
         return;
       }
@@ -755,6 +933,11 @@ function overrideRequestHeaders(httpChannel, headers) {
   restoreRequestHeaderOrder(httpChannel, order);
 }
 
+// ⛔ AN EMPTY VALUE IS A HEADER, NOT A REMOVAL. setRequestHeader with '' deletes
+// the header (nsHttpHeaderArray::SetHeader), so every header this function set
+// back with an empty value was dropped: a page's `X-Empty:` went out without a
+// route and vanished with one, through both the order repair and a route's
+// own headers. setEmptyRequestHeader keeps it, as a request without a route does.
 function setRequestHeaders(httpChannel, headers) {
   for (const header of headers) {
     if (header.value === '')
@@ -834,6 +1017,14 @@ function causeTypeToString(causeType) {
   return 'TYPE_OTHER';
 }
 
+// Extra headers are the caller's explicit values and go out verbatim, as
+// upstream. Accept-Language is not special here: the header Firefox derives
+// for the declared language list comes from nsHttpHandler (see the STEALTHFOX
+// note in AddStandardRequestHeaders), and a caller that sets its own
+// Accept-Language asked for exactly that value. This used to replace it with
+// zoom.stealth.http.accept_language, a second copy of the header built by hand
+// in invisible_core, because the Playwright driver sent the `locale` option as
+// a single-tag extra header; the driver that talks to this engine does not.
 function appendExtraHTTPHeaders(httpChannel, headers) {
   if (!headers)
     return;
@@ -958,13 +1149,79 @@ PageNetwork.Events = {
   RequestFailed: Symbol('PageNetwork.Events.RequestFailed'),
 };
 
+// Stealthfox 2026-08-30: RIMESSE, identiche a com'erano prima del 2026-08-24.
+// Erano uscite portando NetworkObserver all'osso, insieme a
+// Network.getResponseBody. La conseguenza l'ha segnalata un utente: senza il
+// corpo delle risposte si perde una delle tre fonti - URL, header, corpo - con
+// cui si riconosce chi protegge un sito. E i trace e gli HAR uscivano con i
+// corpi vuoti senza sollevare niente, che era il difetto peggiore dei due.
+//
+// Il costo e' dichiarato: i limiti sono quelli di upstream, 100 MB per tab e
+// un decimo per singola risposta, con sfratto quando si supera.
 
 class ResponseStorage {
-  constructor(maxTotalSize, maxResponseSize) {
+  constructor(maxTotalSize, maxResponseSize, maxEntries = MAX_RESPONSE_STORAGE_ENTRIES) {
     this._totalSize = 0;
     this._maxResponseSize = maxResponseSize;
     this._maxTotalSize = maxTotalSize;
+    this._maxEntries = maxEntries;
     this._responses = new Map();
+    // What a navigation found stored when its main document was requested: everything before it belongs to the
+    // documents the tab is leaving, everything after to the document that is coming (its sub-resources have no
+    // navigation id of their own).
+    this._sequence = 0;
+    this._navigationStarts = new Map();
+  }
+
+  // The main document of a navigation was requested.
+  noteNavigationStart(navigationId) {
+    this._navigationStarts.set(navigationId, this._sequence);
+    // A navigation that never commits (aborted, replaced) leaves its mark: only the latest ones are kept.
+    for (const id of this._navigationStarts.keys()) {
+      if (this._navigationStarts.size <= MAX_NAVIGATION_STARTS)
+        break;
+      this._navigationStarts.delete(id);
+    }
+  }
+
+  // The documents the main frame left: their bodies go, their entries stay as evicted markers. What stays is what
+  // belongs to the navigation that committed: its own entries, and everything stored since its main document was
+  // requested. A commit without an id (the agent reporting a frame it has just met) says nothing about a
+  // navigation, and evicts nothing.
+  evictBeforeNavigation(navigationId) {
+    if (navigationId === undefined)
+      return;
+    // A restored document (a navigation id of its own, no request) has no start: everything stored is older.
+    const boundary = this._navigationStarts.has(navigationId) ? this._navigationStarts.get(navigationId) : this._sequence;
+    this._navigationStarts.delete(navigationId);
+    for (const response of this._responses.values()) {
+      if (response.evicted)
+        continue;
+      if (response.navigationId === navigationId || response.sequence > boundary)
+        continue;
+      this._totalSize -= response.body.length;
+      response.body = '';
+      response.encodings = [];
+      response.evicted = true;
+    }
+    this._trimEntries();
+  }
+
+  // Over the number of entries, the markers of evicted bodies go first, the oldest first (a Map keeps the order of
+  // insertion); only when every entry still holds a body does the oldest of those go, and its size with it.
+  _trimEntries() {
+    for (const [requestId, response] of this._responses) {
+      if (this._responses.size <= this._maxEntries)
+        return;
+      if (response.evicted)
+        this._responses.delete(requestId);
+    }
+    for (const [requestId, response] of this._responses) {
+      if (this._responses.size <= this._maxEntries)
+        return;
+      this._totalSize -= response.body.length;
+      this._responses.delete(requestId);
+    }
   }
 
   addResponseBody(request, body) {
@@ -972,7 +1229,9 @@ class ResponseStorage {
       this._responses.set(request.requestId, {
         evicted: true,
         body: '',
+        sequence: ++this._sequence,
       });
+      this._trimEntries();
       return;
     }
     let encodings = [];
@@ -981,7 +1240,7 @@ class ResponseStorage {
       const encodingHeader = request.httpChannel.getResponseHeader("Content-Encoding");
       encodings = encodingHeader.split(/\s*\t*,\s*\t*/);
     }
-    this._responses.set(request.requestId, {body, encodings});
+    this._responses.set(request.requestId, {body, encodings, navigationId: request.navigationId, sequence: ++this._sequence});
     this._totalSize += body.length;
     if (this._totalSize > this._maxTotalSize) {
       for (let [requestId, response] of this._responses) {
@@ -992,6 +1251,7 @@ class ResponseStorage {
           break;
       }
     }
+    this._trimEntries();
   }
 
   getBase64EncodedResponse(requestId) {

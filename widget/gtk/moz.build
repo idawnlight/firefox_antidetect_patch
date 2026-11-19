@@ -117,6 +117,7 @@ SOURCES += [
     "nsNativeThemeGTK.cpp",  # conflicts with X11 headers
     "nsWindow.cpp",  # conflicts with X11 headers
 ]
+SOURCES += ["StealthFullscreenGtk.cpp"]  # STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 if CONFIG["MOZ_WAYLAND"]:
     UNIFIED_SOURCES += [

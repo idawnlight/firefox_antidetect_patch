@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxPlatform.h"
+#include "mozilla/webgpu/StealthWebGPUDeclaration.h"  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
 
 #include "GfxDriverInfo.h"
 #include "VRProcessManager.h"
@@ -3210,7 +3211,8 @@ void gfxPlatform::InitWebGPUConfig() {
     featureExternalTexture.Disable(FeatureStatus::Blocklisted, message.get(),
                                    failureId);
   }
-#if !defined(XP_WIN) && !defined(XP_MACOSX)
+  mozilla::webgpu::StealthWebGPUPlatformInit();  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration): Linux's Vulkan driver is ours; external textures are on as on Windows
+#if !defined(XP_WIN) && !defined(XP_MACOSX) && 0
   featureExternalTexture.ForceDisable(
       FeatureStatus::Blocked,
       "WebGPU external textures are not supported on this Operating System",

@@ -5,8 +5,8 @@
 #include "SpeechSynthesis.h"
 
 #include "AutoplayPolicy.h"
+#include "StealthSpeechVoices.h"  // STEALTH-HOOK(fingerprint/media/speech-voices)
 #include "mozilla/Logging.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/SpeechSynthesisBinding.h"
@@ -245,39 +245,9 @@ void SpeechSynthesis::GetVoices(
                                                  RFPTarget::SpeechSynthesis)) {
     return;
   }
-
-  {
-    nsAutoCString voicesPref;
-    {
-      auto lock = mozilla::StaticPrefs::zoom_stealth_voices_list();
-      voicesPref = *lock;
-    }
-    if (!voicesPref.IsEmpty()) {
-      nsISupports* voiceParent = NS_ISUPPORTS_CAST(nsIObserver*, this);
-      int32_t start = 0;
-      while (start < static_cast<int32_t>(voicesPref.Length())) {
-        int32_t comma = voicesPref.FindChar(',', start);
-        if (comma < 0) comma = voicesPref.Length();
-        nsAutoCString entry(Substring(voicesPref, start, comma - start));
-        entry.Trim(" \t\r\n");
-        start = comma + 1;
-        if (entry.IsEmpty()) continue;
-        // Synthetic URI: "stealth-voice:NAME|LANG|D|L" — accessors parse it.
-        nsAutoString uri;
-        uri.AssignLiteral("stealth-voice:");
-        AppendUTF8toUTF16(entry, uri);
-        RefPtr<SpeechSynthesisVoice> voice = mVoiceCache.Get(uri);
-        if (!voice) {
-          voice = new SpeechSynthesisVoice(voiceParent, uri);
-        }
-        aResult.AppendElement(voice);
-      }
-      mVoiceCache.Clear();
-      for (uint32_t i = 0; i < aResult.Length(); i++) {
-        mVoiceCache.InsertOrUpdate(aResult[i]->mUri, RefPtr{aResult[i].get()});
-      }
-      return;
-    }
+  // STEALTH-HOOK(fingerprint/media/speech-voices)
+  if (StealthGetVoices(this, aResult, mVoiceCache)) {
+    return;
   }
 
   nsresult rv = nsSynthVoiceRegistry::GetInstance()->GetVoiceCount(&voiceCount);

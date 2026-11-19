@@ -101,9 +101,4 @@ void nr_ice_component_refresh_consent_now(nr_ice_component *comp);
 void nr_ice_component_disconnected(nr_ice_component *comp);
 void nr_ice_component_dump_state(nr_ice_component *comp, int log_level);
 
-
-
-int nr_ice_component_inject_fallback_srflx(nr_ice_component *component,
-                                           nr_transport_addr *base_addr);
-
 #endif

@@ -105,6 +105,14 @@ class MtransportTest : public ::testing::Test {
 
     NR_reg_init();
 
+    // STEALTH-HOOK(fingerprint/webrtc/declared-network): the interfaces are declared, never read from the host
+    // (nr_stealth_network.h). These tests gather on the declared adapter, as the browser does.
+    std::string declared;
+    GetEnvironment("STEALTHFOX_WEBRTC_NETWORK", declared);
+    if (declared.empty()) {
+      setenv("STEALTHFOX_WEBRTC_NETWORK", "v4=192.168.10.20;v6=0;p6=", 1);
+    }
+
     // Attempt to load env vars used by tests.
     GetEnvironment("TURN_SERVER_ADDRESS", turn_server_);
     GetEnvironment("TURN_SERVER_USER", turn_user_);

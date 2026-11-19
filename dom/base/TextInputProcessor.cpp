@@ -4,6 +4,7 @@
 
 #include "mozilla/TextInputProcessor.h"
 
+#include "StealthInputEventBirth.h"  // STEALTH-HOOK(fingerprint/input/event-birth)
 #include "mozilla/AutoRestore.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/Maybe.h"
@@ -755,6 +756,7 @@ TextInputProcessor::CommitCompositionWith(const nsAString& aCommitString,
                                           bool* aSucceeded) {
   MOZ_RELEASE_ASSERT(aSucceeded, "aSucceeded must not be nullptr");
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+  StealthKeyBirthScope stealthBirth(mStealthKeyBirth);  // STEALTH-HOOK(fingerprint/input/event-birth)
 
   RefPtr<KeyboardEvent> keyEvent;
   if (aDOMKeyEvent) {
@@ -1062,11 +1064,13 @@ nsresult TextInputProcessor::InitEditCommands(
   return NS_OK;
 }
 
+NS_IMETHODIMP TextInputProcessor::SetNextKeyLatency(double aLatencyMs, uint64_t aPageId) { return StealthSetNextKeyLatency(mStealthKeyBirth, aLatencyMs, aPageId, nsContentUtils::IsCallerChrome()); }  // STEALTH-HOOK(fingerprint/input/event-birth)
 NS_IMETHODIMP
 TextInputProcessor::Keydown(Event* aDOMKeyEvent, uint32_t aKeyFlags,
                             uint8_t aOptionalArgc, uint32_t* aConsumedFlags) {
   MOZ_RELEASE_ASSERT(aConsumedFlags, "aConsumedFlags must not be nullptr");
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+  StealthKeyBirthScope stealthBirth(mStealthKeyBirth);  // STEALTH-HOOK(fingerprint/input/event-birth)
   if (!aOptionalArgc) {
     aKeyFlags = 0;
   }
@@ -1098,6 +1102,7 @@ nsresult TextInputProcessor::KeydownInternal(
   WidgetKeyboardEvent keyEvent(aKeyboardEvent);
   keyEvent.mFlags.mIsTrusted = true;
   keyEvent.mMessage = eKeyDown;
+  StealthKeyBirthScope::Stamp(keyEvent);  // STEALTH-HOOK(fingerprint/input/event-birth)
   nsresult rv = PrepareKeyboardEventToDispatch(keyEvent, aKeyFlags);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
@@ -1182,6 +1187,7 @@ TextInputProcessor::Keyup(Event* aDOMKeyEvent, uint32_t aKeyFlags,
                           uint8_t aOptionalArgc, bool* aDoDefault) {
   MOZ_RELEASE_ASSERT(aDoDefault, "aDoDefault must not be nullptr");
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+  StealthKeyBirthScope stealthBirth(mStealthKeyBirth);  // STEALTH-HOOK(fingerprint/input/event-birth)
   if (!aOptionalArgc) {
     aKeyFlags = 0;
   }
@@ -1212,6 +1218,7 @@ nsresult TextInputProcessor::KeyupInternal(
   WidgetKeyboardEvent keyEvent(aKeyboardEvent);
   keyEvent.mFlags.mIsTrusted = true;
   keyEvent.mMessage = eKeyUp;
+  StealthKeyBirthScope::Stamp(keyEvent);  // STEALTH-HOOK(fingerprint/input/event-birth)
   nsresult rv = PrepareKeyboardEventToDispatch(keyEvent, aKeyFlags);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;

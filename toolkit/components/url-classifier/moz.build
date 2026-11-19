@@ -58,6 +58,7 @@ SOURCES += [
 
 EXTRA_JS_MODULES += [
     "SafeBrowsing.sys.mjs",
+    "StealthHashCompleterContext.sys.mjs",  # STEALTH-HOOK(network/doh)
     "UrlClassifierHashCompleter.sys.mjs",
     "UrlClassifierLib.sys.mjs",
     "UrlClassifierListManager.sys.mjs",

@@ -318,6 +318,7 @@ extern void wgpu_parent_swap_chain_drop(
 #ifdef XP_WIN
 extern bool wgpu_parent_get_compositor_device_luid(
     struct WGPUFfiLUID* aOutLuid) {
+  *aOutLuid = {};  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
   auto luid = WebGPUParent::GetCompositorDeviceLuid();
   if (luid.isSome()) {
     *aOutLuid = luid.extract();

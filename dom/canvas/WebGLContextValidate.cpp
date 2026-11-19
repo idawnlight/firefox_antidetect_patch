@@ -9,6 +9,7 @@
 #include "GLSLANG/ShaderLang.h"
 #include "WebGLBuffer.h"
 #include "WebGLContext.h"
+#include "StealthWebGLParams.h"  // STEALTH-HOOK(fingerprint/webgl/parameters)
 #include "WebGLFormats.h"
 #include "WebGLFramebuffer.h"
 #include "WebGLProgram.h"
@@ -257,6 +258,7 @@ static webgl::Limits MakeLimits(const WebGLContext& webgl) {
     gl.GetUIntegerv(LOCAL_GL_MAX_VIEWS_OVR, &limits.maxMultiviewLayers);
   }
 
+  StealthDeclareExtensions(webgl.IsWebGL2(), limits.supportedExtensions);  // STEALTH-HOOK(fingerprint/webgl/parameters)
   return limits;
 }
 
@@ -311,6 +313,8 @@ bool WebGLContext::InitAndValidateGL(FailureReason* const out_failReason) {
                          mStencilWriteMaskFront);
   AssertUintParamCorrect(gl, LOCAL_GL_STENCIL_BACK_WRITEMASK,
                          mStencilWriteMaskBack);
+  // STEALTH-HOOK(fingerprint/webgl/parameters): the masks start at all ones as under ANGLE, not at the driver's stencil bits (Mesa: 255)
+  mStencilValueMaskFront = mStencilValueMaskBack = mStencilWriteMaskFront = mStencilWriteMaskBack = UINT32_MAX;
 
   // Bindings, etc.
 

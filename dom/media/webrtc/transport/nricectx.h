@@ -59,6 +59,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "mozilla/RefPtr.h"
 #include "nricemediastream.h"
 #include "nricestunaddr.h"
+#include "nr_stealth_network.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 #include "nsIEventTarget.h"
 #include "nsTArray.h"
 #include "sigslot.h"
@@ -231,6 +232,13 @@ class NrIceCtx {
     return proxy_config_;
   }
 
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): the next host UDP port of this connection (R3,
+  // nr_stealth_network.h StealthHostPorts).
+  template <typename F>
+  uint16_t TakeHostPort(F aTry) {
+    return host_ports_.NextAvailable(aTry);
+  }
+
   void SetCtxFlags(bool default_route_only);
 
   // Start ICE gathering
@@ -316,6 +324,7 @@ class NrIceCtx {
   RefPtr<TestNat> nat_;
   std::shared_ptr<NrSocketProxyConfig> proxy_config_;
   std::map<std::string, std::string> obfuscated_host_addresses_;
+  StealthHostPorts host_ports_;  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 };
 
 }  // namespace mozilla

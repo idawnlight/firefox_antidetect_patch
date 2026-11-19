@@ -5,6 +5,8 @@
 #include "ProxyConfigLookup.h"
 
 #include "ProxyConfigLookupChild.h"
+#include "mozilla/net/StealthDocumentChannel.h"  // STEALTH-HOOK(network/proxy-udp)
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "mozilla/Components.h"
 #include "nsContentUtils.h"
 #include "nsICancelable.h"
@@ -22,21 +24,29 @@ namespace net {
 nsresult ProxyConfigLookup::Create(
     std::function<void(nsIProxyInfo*, nsresult)>&& aCallback, nsIURI* aURI,
     uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel,
-    nsICancelable** aLookupCancellable) {
+    nsICancelable** aLookupCancellable,
+    const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+    const Maybe<OriginAttributes>& aOriginAttributes) {  // STEALTH-HOOK(network/doh)
   MOZ_ASSERT(NS_IsMainThread());
 
   RefPtr<ProxyConfigLookup> lookUp = new ProxyConfigLookup(
-      std::move(aCallback), aURI, aProxyResolveFlags, aIsTRRServiceChannel);
+      std::move(aCallback), aURI, aProxyResolveFlags, aIsTRRServiceChannel,
+      aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      aOriginAttributes);  // STEALTH-HOOK(network/doh)
   return lookUp->DoProxyResolve(aLookupCancellable);
 }
 
 ProxyConfigLookup::ProxyConfigLookup(
     std::function<void(nsIProxyInfo*, nsresult)>&& aCallback, nsIURI* aURI,
-    uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel)
+    uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel,
+    const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+    const Maybe<OriginAttributes>& aOriginAttributes)  // STEALTH-HOOK(network/doh)
     : mCallback(std::move(aCallback)),
       mURI(aURI),
       mProxyResolveFlags(aProxyResolveFlags),
-      mIsTRRServiceChannel(aIsTRRServiceChannel) {}
+      mIsTRRServiceChannel(aIsTRRServiceChannel),
+      mLoadInfo(aLoadInfo),  // STEALTH-HOOK(network/proxy-udp)
+      mOriginAttributes(aOriginAttributes) {}  // STEALTH-HOOK(network/doh)
 
 ProxyConfigLookup::~ProxyConfigLookup() = default;
 
@@ -47,19 +57,24 @@ nsresult ProxyConfigLookup::DoProxyResolve(nsICancelable** aLookupCancellable) {
         mURI, mProxyResolveFlags, mIsTRRServiceChannel,
         [self](nsIProxyInfo* aProxyinfo, nsresult aResult) {
           self->OnProxyAvailable(nullptr, nullptr, aProxyinfo, aResult);
-        });
+        },
+        mLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+        mOriginAttributes);  // STEALTH-HOOK(network/doh)
     return result ? NS_OK : NS_ERROR_FAILURE;
   }
 
   nsresult rv;
   nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), mURI,
+  rv = mLoadInfo ? StealthNewChannelOfLoadInfo(mURI, mProxyResolveFlags, mLoadInfo.ref(), getter_AddRefs(channel))  // STEALTH-HOOK(network/proxy-udp)
+                 : NS_NewChannel(getter_AddRefs(channel), mURI,
                      nsContentUtils::GetSystemPrincipal(),
                      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER);
   if (NS_FAILED(rv)) {
     return rv;
   }
+  rv = StealthApplyTRRContextToChannel(channel, mOriginAttributes);  // STEALTH-HOOK(network/doh)
+  NS_ENSURE_SUCCESS(rv, rv);  // STEALTH-HOOK(network/doh)
 
   // The real requester is a TRRServiceChannel, which can't be handed to the
   // proxy service because it doesn't live on the main thread. Propagate the

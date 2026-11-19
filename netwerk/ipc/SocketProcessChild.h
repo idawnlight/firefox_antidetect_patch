@@ -128,6 +128,10 @@ class SocketProcessChild final : public PSocketProcessChild {
   mozilla::ipc::IPCResult RecvNotifyObserver(const nsACString& aTopic,
                                              const nsAString& aData);
 
+  // STEALTH-HOOK(network/proxy-udp)
+  mozilla::ipc::IPCResult RecvStealthWarmSocksUdp(const nsACString& aHost, const int32_t& aPort, const nsACString& aUser,
+                                                  const nsACString& aPass);
+
   mozilla::ipc::IPCResult RecvGetSocketData(GetSocketDataResolver&& aResolve);
   mozilla::ipc::IPCResult RecvGetDNSCacheEntries(
       GetDNSCacheEntriesResolver&& aResolve);

@@ -2272,6 +2272,7 @@ class MOZ_STACK_CLASS SandboxOptions : public OptionsBase {
   virtual bool Parse() override;
 
   bool wantXrays;
+  // STEALTH-HOOK(automation/hybrid-xrays)
   bool hybridXrays;
   bool allowWaivers;
   bool wantComponents;
@@ -2573,6 +2574,7 @@ class CompartmentPrivate {
   // reasons.
   bool wantXrays;
 
+  // STEALTH-HOOK(automation/hybrid-xrays)
   bool hybridXrays;
 
   // Controls whether this compartment is allowed to waive Xrays to content

@@ -11,10 +11,10 @@
 #include "AudioNodeTrack.h"
 #include "CubebUtils.h"
 #include "MediaTrackGraph.h"
+#include "StealthAudioNoise.h"  // STEALTH-HOOK(fingerprint/audio/noise)
 #include "Tracing.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_media.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/dom/AudioDestinationNodeBinding.h"
 #include "mozilla/dom/BaseAudioContextBinding.h"
 #include "mozilla/dom/BrowsingContext.h"
@@ -132,28 +132,9 @@ class OfflineDestinationNodeEngine final : public AudioNodeEngine {
           }
         }
       }
-      {
-        int32_t seed = mozilla::StaticPrefs::zoom_stealth_fpp_hw_seed();
-        if (seed > 0 && mozilla::StaticPrefs::zoom_stealth_audio_fp_noise() &&
-            mLength > 200 && !aInput.IsNull() && i < inputChannelCount) {
-          // Scale: ~5e-7 — inaudible but enough to change float sums.
-          float noiseScale = float((uint32_t(seed) % 2001u) + 500u) * 1.0e-9f;
-          for (uint32_t s = 0; s < duration; ++s) {
-            // Skip first 100 samples (CreepJS noise detection check).
-            if (mWriteIndex + s < 100) continue;
-            // Deterministic XOR-hash of (seed, channel, sample_position).
-            uint32_t h = uint32_t(seed);
-            h ^= i * 2654435761u;
-            h ^= (mWriteIndex + s) * 2246822519u;
-            h ^= (h >> 16);
-            h *= 0x45d9f3bu;
-            h ^= (h >> 16);
-            outputData[s] +=
-                (float(int32_t(h & 0xFFFFu) - 0x8000) / float(0x8000)) *
-                noiseScale;
-          }
-        }
-      }
+      // STEALTH-HOOK(fingerprint/audio/noise)
+      StealthAddOfflineAudioNoise(aInput.IsNull(), i, inputChannelCount,
+                                  mWriteIndex, mLength, duration, outputData);
     }
     mWriteIndex += duration;
 

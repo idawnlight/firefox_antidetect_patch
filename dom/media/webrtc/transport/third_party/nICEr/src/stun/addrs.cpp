@@ -34,18 +34,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assert.h>
 #include <string.h>
 
-#ifdef WIN32
-#include "addrs-win32.h"
-#elif defined(BSD) || defined(DARWIN)
-#include "addrs-bsd.h"
-#else
-#include "addrs-netlink.h"
-#endif
-
 #include "stun.h"
 #include "addrs.h"
 #include "util.h"
-#include "nr_stealth_bridge.h"
+#include "nr_stealth_network.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 
 static int
 nr_stun_is_duplicate_addr(nr_local_addr addrs[], int count, nr_local_addr *addr)
@@ -122,14 +114,6 @@ nr_stun_filter_addrs_for_ifname(nr_local_addr src[], const int src_begin, const 
     if (nr_stun_is_duplicate_addr(dest, *dest_index, &src[i])) {
         r_log(NR_LOG_STUN, LOG_WARNING, "Ignoring duplicate addr");
         /* skip src[i], it's a duplicate */
-    }
-    else if (nr_stealth_webrtc_disable_ipv6() &&
-             src[i].addr.ip_version == NR_IPV6) {
-        r_log(NR_LOG_STUN, LOG_WARNING, "Stealth: dropping IPv6 host candidate");
-        /* skip src[i]: stealth IPv6 suppression. The upstream
-         * media.peerconnection.ice.disableIPv6 pref is dead in FF150, so we
-         * drop IPv6 here to stop the real global IPv6 host (and any IPv6 srflx
-         * derived from it) leaking past a TCP-only SOCKS proxy. */
     }
     else if (remove_loopback && nr_transport_addr_is_loopback(&src[i].addr)) {
         r_log(NR_LOG_STUN, LOG_WARNING, "Ignoring loopback addr");
@@ -221,7 +205,8 @@ nr_stun_get_addrs(nr_local_addr addrs[], int maxaddrs, int *count)
        memset(addrs, 0, maxaddrs * sizeof(nr_local_addr));
     }
 
-    _status = stun_getaddrs_filtered(addrs, maxaddrs, count);
+    // STEALTH-HOOK(fingerprint/webrtc/declared-network): the declared adapter, never the host's.
+    _status = nr_stealth_declared_addrs(addrs, maxaddrs, count);
 
     for (i = 0; i < *count; ++i) {
       nr_local_addr_fmt_info_string(addrs+i,typestr,sizeof(typestr));

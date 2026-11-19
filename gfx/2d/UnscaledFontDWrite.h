@@ -19,6 +19,7 @@ class ScaledFontDWrite;
 class UnscaledFontDWrite final : public UnscaledFont {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(UnscaledFontDWrite, override)
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
   UnscaledFontDWrite(const RefPtr<IDWriteFontFace>& aFontFace,
                      const RefPtr<IDWriteFont>& aFont,
                      const std::wstring& aFilePath = std::wstring())
@@ -53,7 +54,7 @@ class UnscaledFontDWrite final : public UnscaledFont {
   RefPtr<IDWriteFontFace> mFontFaceBold;
   RefPtr<IDWriteFont> mFont;
   std::vector<WCHAR> mFontFileName;
-  // Empty for fonts outside the bundle.
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
   std::wstring mPercorsoDichiarato;
 };
 

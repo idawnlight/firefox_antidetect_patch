@@ -31,7 +31,6 @@
 #include "mozilla/IceServerParser.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Sprintf.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/glean/DomMediaWebrtcMetrics.h"
 #include "mozilla/media/MediaUtils.h"
 #include "nsEffectiveTLDService.h"
@@ -116,6 +115,7 @@
 #include "nsURLHelper.h"
 #include "nsXULAppAPI.h"
 #include "transport/nr_socket_proxy_config.h"
+#include "transport/StealthIceResolverContext.h"  // STEALTH-HOOK(network/proxy-udp)
 
 #ifdef XP_WIN
 // We need to undef the MS macro again in case the windows include file
@@ -2656,6 +2656,7 @@ nsresult PeerConnectionImpl::SetConfiguration(
   }
 
   auto proxyConfig = GetProxyConfig();
+  proxyConfig = StealthProxyConfigOf(std::move(proxyConfig), mWindow.get(), mForceProxy);  // STEALTH-HOOK(network/proxy-udp)
   if (proxyConfig) {
     // Note that this could check if PrivacyRequested() is set on the PC and
     // remove "webrtc" from the ALPN list.  But that would only work if the PC
@@ -4820,12 +4821,9 @@ void PeerConnectionImpl::EnsureIceGathering(bool aDefaultRouteOnly,
   // attempt to gather them (as in non-e10s mode), and this will cause a
   // sandboxing exception in e10s mode.
   if (!mStunAddrs.Length() && XRE_IsContentProcess()) {
-    auto stealthHostIp = mozilla::StaticPrefs::zoom_stealth_webrtc_host_ip();
-    if ((*stealthHostIp).IsEmpty()) {
-      CSFLogInfo(LOGTAG, "%s: No STUN addresses returned from parent process",
-                 __FUNCTION__);
-      return;
-    }
+    CSFLogInfo(LOGTAG, "%s: No STUN addresses returned from parent process",
+               __FUNCTION__);
+    return;
   }
 
   mTransportHandler->StartIceGathering(aDefaultRouteOnly,

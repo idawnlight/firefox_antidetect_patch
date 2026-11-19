@@ -274,7 +274,6 @@ EXPORTS.mozilla.dom += [
     "SpeculationRulesManager.h",
     "StaticAtomSet.h",
     "StaticRange.h",
-    "StealthSessionDeclaration.h",
     "StructuredCloneBlob.h",
     "StructuredCloneHolder.h",
     "StructuredCloneTags.h",
@@ -303,6 +302,7 @@ EXPORTS.mozilla.dom += [
     "WindowFeatures.h",
     "WindowProxyHolder.h",
 ]
+EXPORTS.mozilla.dom += ["StealthSessionDeclaration.h"]  # STEALTH-HOOK(fingerprint/locale-time/session-declaration)
 
 if CONFIG["FUZZING"]:
     EXPORTS.mozilla.dom += [
@@ -495,7 +495,6 @@ UNIFIED_SOURCES += [
     "SpeculationRuleSet.cpp",
     "SpeculationRulesManager.cpp",
     "StaticRange.cpp",
-    "StealthSessionDeclaration.cpp",
     "StorageAccessPermissionRequest.cpp",
     "StructuredCloneBlob.cpp",
     "StructuredCloneHolder.cpp",
@@ -525,6 +524,7 @@ UNIFIED_SOURCES += [
     "WindowNamedPropertiesHandler.cpp",
     "XPathGenerator.cpp",
 ]
+UNIFIED_SOURCES += ["StealthSessionDeclaration.cpp"]  # STEALTH-HOOK(fingerprint/locale-time/session-declaration)
 
 if CONFIG["FUZZING"]:
     UNIFIED_SOURCES += [

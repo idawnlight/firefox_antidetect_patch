@@ -117,13 +117,8 @@ nsresult ScriptPreloader::CollectReports(nsIHandleReportCallback* aHandleReport,
                        UNITS_BYTES, mCacheData->nonHeapSizeOfExcludingThis(),
                        "The memory-mapped startup script cache file.");
   }
-
-  MOZ_COLLECT_REPORT(
-      "explicit/script-preloader/non-heap/memmapped-written-cache",
-      KIND_NONHEAP, UNITS_BYTES,
-      mWrittenCacheData.nonHeapSizeOfExcludingThis(),
-      "The cache file this session wrote, mapped read-only and adopted in "
-      "place of the heap copies of the same bytes.");
+  // STEALTH-HOOK(platform/script-cache)
+  ReportWrittenCache(aHandleReport, aData);
 
   return NS_OK;
 }
@@ -596,10 +591,9 @@ Result<Ok, nsresult> ScriptPreloader::InitCache(
   return InitCacheInternal();
 }
 
-template <typename F>
-Result<Ok, nsresult> ScriptPreloader::WalkCacheHeader(AutoMemMap& aMap,
-                                                     F&& aOnScript) {
-  auto size = aMap.size();
+Result<Ok, nsresult> ScriptPreloader::InitCacheInternal(
+    JS::HandleObject scope) {
+  auto size = mCacheData->size();
 
   uint32_t headerSize;
   uint32_t crc;
@@ -607,7 +601,7 @@ Result<Ok, nsresult> ScriptPreloader::WalkCacheHeader(AutoMemMap& aMap,
     return Err(NS_ERROR_UNEXPECTED);
   }
 
-  auto data = aMap.get<uint8_t>();
+  auto data = mCacheData->get<uint8_t>();
   MOZ_RELEASE_ASSERT(JS::IsTranscodingBytecodeAligned(data.get()));
 
   auto end = data + size;
@@ -631,119 +625,64 @@ Result<Ok, nsresult> ScriptPreloader::WalkCacheHeader(AutoMemMap& aMap,
     return Err(NS_ERROR_UNEXPECTED);
   }
 
-  Range<const uint8_t> header(data, data + headerSize);
-  data += headerSize;
-
-  // Reconstruct alignment padding if required.
-  size_t currentOffset = data - aMap.get<uint8_t>();
-  data += JS::AlignTranscodingBytecodeOffset(currentOffset) - currentOffset;
-
-  InputBuffer buf(header);
-
-  size_t offset = 0;
-  while (!buf.finished()) {
-    auto script = MakeUnique<CachedStencil>(*this, buf);
-    MOZ_RELEASE_ASSERT(script);
-
-    auto scriptData = data + script->mOffset;
-    if (!JS::IsTranscodingBytecodeAligned(scriptData.get())) {
-      return Err(NS_ERROR_UNEXPECTED);
-    }
-
-    if (scriptData + script->mSize > end) {
-      return Err(NS_ERROR_UNEXPECTED);
-    }
-
-    // Make sure offsets match what we'd expect based on script ordering and
-    // size, as a basic sanity check.
-    if (script->mOffset != offset) {
-      return Err(NS_ERROR_UNEXPECTED);
-    }
-    offset += script->mSize;
-
-    script->mXDRRange.emplace(scriptData, scriptData + script->mSize);
-
-    MOZ_TRY(aOnScript(std::move(script)));
-  }
-
-  if (buf.error()) {
-    return Err(NS_ERROR_UNEXPECTED);
-  }
-
-  return Ok();
-}
-
-Result<Ok, nsresult> ScriptPreloader::InitCacheInternal(
-    JS::HandleObject scope) {
   {
     auto cleanup = MakeScopeExit([&]() { mScripts.Clear(); });
 
     LinkedList<CachedStencil> scripts;
 
-    MOZ_TRY(WalkCacheHeader(
-        *mCacheData,
-        [&](UniquePtr<CachedStencil>&& script) -> Result<Ok, nsresult> {
-          // Don't pre-decode the script unless it was used in this process type
-          // during the previous session.
-          if (script->mOriginalProcessTypes.contains(CurrentProcessType())) {
-            scripts.insertBack(script.get());
-          } else {
-            script->mReadyToExecute = true;
-          }
+    Range<const uint8_t> header(data, data + headerSize);
+    data += headerSize;
 
-          const auto& cachePath = script->mCachePath;
-          mScripts.InsertOrUpdate(cachePath, std::move(script));
-          return Ok();
-        }));
+    // Reconstruct alignment padding if required.
+    size_t currentOffset = data - mCacheData->get<uint8_t>();
+    data += JS::AlignTranscodingBytecodeOffset(currentOffset) - currentOffset;
+
+    InputBuffer buf(header);
+
+    size_t offset = 0;
+    while (!buf.finished()) {
+      auto script = MakeUnique<CachedStencil>(*this, buf);
+      MOZ_RELEASE_ASSERT(script);
+
+      auto scriptData = data + script->mOffset;
+      if (!JS::IsTranscodingBytecodeAligned(scriptData.get())) {
+        return Err(NS_ERROR_UNEXPECTED);
+      }
+
+      if (scriptData + script->mSize > end) {
+        return Err(NS_ERROR_UNEXPECTED);
+      }
+
+      // Make sure offsets match what we'd expect based on script ordering and
+      // size, as a basic sanity check.
+      if (script->mOffset != offset) {
+        return Err(NS_ERROR_UNEXPECTED);
+      }
+      offset += script->mSize;
+
+      script->mXDRRange.emplace(scriptData, scriptData + script->mSize);
+
+      // Don't pre-decode the script unless it was used in this process type
+      // during the previous session.
+      if (script->mOriginalProcessTypes.contains(CurrentProcessType())) {
+        scripts.insertBack(script.get());
+      } else {
+        script->mReadyToExecute = true;
+      }
+
+      const auto& cachePath = script->mCachePath;
+      mScripts.InsertOrUpdate(cachePath, std::move(script));
+    }
+
+    if (buf.error()) {
+      return Err(NS_ERROR_UNEXPECTED);
+    }
 
     mDecodingScripts = std::move(scripts);
     cleanup.release();
   }
 
   StartDecodeTask(scope);
-  return Ok();
-}
-
-Result<Ok, nsresult> ScriptPreloader::AdoptWrittenCache(nsIFile* aCacheFile) {
-  // Existing mapped ranges must remain valid for this preloader lifetime.
-  if (mWrittenCacheData.initialized()) {
-    return Ok();
-  }
-
-  MOZ_TRY(mWrittenCacheData.init(aCacheFile));
-
-  mMonitor.AssertNotCurrentThreadOwns();
-  MonitorAutoLock mal(mMonitor);
-
-  size_t adoptedCount = 0;
-  size_t borrowedCount = 0;
-  MOZ_TRY(WalkCacheHeader(
-      mWrittenCacheData,
-      [&](UniquePtr<CachedStencil>&& written) -> Result<Ok, nsresult> {
-        auto* live = mScripts.Get(written->mCachePath);
-        if (!live) {
-          return Ok();
-        }
-
-        // Borrowed stencils retain their original backing storage.
-        if (live->mStencil && JS::StencilIsBorrowed(live->mStencil)) {
-          borrowedCount++;
-          return Ok();
-        }
-
-        if (live->mSize != written->mSize) {
-          return Ok();
-        }
-
-        live->AdoptMappedRange(written->Range());
-
-        live->mStencil = nullptr;
-        adoptedCount++;
-        return Ok();
-      }));
-
-  LOG(Info, "Adopted the written cache: %zu scripts, %zu left borrowed\n",
-      adoptedCount, borrowedCount);
   return Ok();
 }
 
@@ -947,12 +886,8 @@ Result<Ok, nsresult> ScriptPreloader::WriteCache() {
   }
 
   MOZ_TRY(cacheFile->MoveTo(nullptr, mBaseName + u".bin"_ns));
-
-  if (auto result = AdoptWrittenCache(cacheFile); result.isErr()) {
-    LOG(Info, "Could not adopt the written cache (0x%" PRIx32 "), keeping the "
-              "heap copies\n",
-        static_cast<uint32_t>(result.unwrapErr()));
-  }
+  // STEALTH-HOOK(platform/script-cache)
+  AdoptWrittenCache(cacheFile);
 
   return Ok();
 }
@@ -1560,3 +1495,4 @@ NS_IMPL_ISUPPORTS(ScriptPreloader, nsIObserver, nsIRunnable, nsIMemoryReporter,
 #undef LOG
 
 }  // namespace mozilla
+#include "StealthScriptCache-inl.h"  // STEALTH-HOOK(platform/script-cache)

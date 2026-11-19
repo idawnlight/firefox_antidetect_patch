@@ -39,7 +39,6 @@
 #include "nsDeviceContext.h"
 #include "nsError.h"
 #include "nsGlobalWindowInner.h"
-#include "nsGlobalWindowOuter.h"
 #include "nsIContent.h"
 #include "nsIContentInlines.h"
 #include "nsIFrame.h"
@@ -48,6 +47,7 @@
 #include "nsPIDOMWindowInlines.h"
 #include "nsPIWindowRoot.h"
 #include "nsRFPService.h"
+#include "StealthScreenCoords.h"  // STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 namespace mozilla::dom {
 
@@ -670,18 +670,14 @@ Maybe<CSSDoublePoint> Event::GetScreenCoords(
   const LayoutDeviceIntPoint topLevelPoint = LayoutDeviceIntPoint::Round(
       guiEvent->mWidget->WidgetToTopLevelWidgetTransform().TransformPoint(
           aWidgetOrScreenRelativePoint));
-  const int32_t auPerDevPx =
-      aPresContext->DeviceContext()->AppUnitsPerDevPixel();
-  nsPoint originShift;
-  if (const auto shift =
-          nsGlobalWindowOuter::StealthContentOriginShift(aPresContext)) {
-    originShift = *shift;
-  }
   const CSSPoint pt = CSSPixel::FromAppUnits(
-      LayoutDevicePixel::ToAppUnits(topLevelPoint, auPerDevPx) +
       LayoutDevicePixel::ToAppUnits(
-          guiEvent->mWidget->TopLevelWidgetToScreenOffset(), auPerDevPx) +
-      originShift);
+          topLevelPoint, aPresContext->DeviceContext()->AppUnitsPerDevPixel()) +
+      LayoutDevicePixel::ToAppUnits(
+          guiEvent->mWidget->TopLevelWidgetToScreenOffset(),
+          aPresContext->DeviceContext()->AppUnitsPerDevPixel()) +
+      // STEALTH-HOOK(fingerprint/screen-window/geometry)
+      StealthScreenOriginShift(aPresContext));
   return Some(CSSDoublePoint(pt.x, pt.y));
 }
 

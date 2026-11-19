@@ -1218,11 +1218,7 @@ class UnifiedSources(BaseSources):
             # so avoid creating extremely long path names.
             unified_prefix = context.relsrcdir
             if len(unified_prefix) > 30:
-                # Stealthfox fix: Mozilla's `[-20:]` truncation causes collisions
-                # in FF 150 libwebrtc (e.g. goog_cc_scream_network_controller_gn
-                # and scream_network_controller_gn both → "etwork_controller_gn").
-                # `[-30:]` gives unique prefixes without lengthening filenames
-                # past mozmake's path-handling threshold (~150 chars relative).
+                # STEALTH-HOOK(platform/build-tools)
                 unified_prefix = unified_prefix[-30:].split("/", 1)[-1]
             unified_prefix = unified_prefix.replace("/", "_")
 

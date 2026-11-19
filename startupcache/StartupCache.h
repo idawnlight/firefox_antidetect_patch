@@ -145,7 +145,6 @@ class StartupCacheListener final : public nsIObserver {
 
 class StartupCache : public nsIMemoryReporter {
   friend class StartupCacheListener;
-  friend class StartupCacheTestAccess;
 
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -158,6 +157,9 @@ class StartupCache : public nsIMemoryReporter {
 
   // Returns a buffer that was previously stored, caller does not take ownership
   nsresult GetBuffer(const char* id, const char** outbuf, uint32_t* length);
+
+  // STEALTH-HOOK(platform/startup-cache): see FEATURE.md
+  static bool WritesMayLowerIOPriority() { return false; }
 
   // Stores a buffer. Caller yields ownership.
   nsresult PutBuffer(const char* id, UniqueFreePtr<char[]>&& inbuf,

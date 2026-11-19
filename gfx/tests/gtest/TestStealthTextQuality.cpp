@@ -3,11 +3,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Verify the declared Windows text quality and ClearType parameters.
+// The Windows text quality and ClearType parameters with the stealth engine on
+// come from the declaration, never from the host ([B362] in the workbench's
+// 70-known-bugs.md). The host is not touched: on a machine with ClearType on
+// (the host answers CLEARTYPE_QUALITY), a declared ANTIALIASED_QUALITY that
+// comes back as declared is the proof that SystemParametersInfo was not asked.
+
+#include "gtest/gtest.h"
 
 #include "gfxDWriteFonts.h"
 #include "gfxPlatform.h"
-#include "gtest/gtest.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/gfx/gfxVars.h"
 

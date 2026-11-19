@@ -375,7 +375,7 @@ def build_aliases(gfx_dir: str) -> list[tuple[str, str]]:
 
     WHY THIS IS DATA AND NOT A LOOKUP. A font name that is not a family can
     still resolve, through Windows' substitute table, and a detector sees the
-    difference: FingerprintJS probes `HELV` and `Small Fonts`, and on the
+    difference: a commercial fingerprinting service probes `HELV` and `Small Fonts`, and on the
     shipped firefox-18 both resolved on Windows and neither on Linux, because
     gfxDWriteFontList reads them from the HOST REGISTRY
     (HKLM\\...\\FontSubstitutes) with no bundle-only gate, and Linux has no
@@ -508,6 +508,8 @@ def build_script_fallback(gfx_dir: str, intl_dir: str) -> dict:
         The first version of this parser did not, and reported LATIN and COMMON
         as offering "Arial" because gfxWindowsPlatform.cpp carries
 
+            // We always append Arial below, so no need to add it here.
+            // aFontList.AppendElement("Arial");
 
         inside those cases. It is the defect CLAUDE.md names as the most
         repeated one in this project - a check written against the comment
@@ -593,6 +595,7 @@ def build_script_fallback(gfx_dir: str, intl_dir: str) -> dict:
 #:   Microsoft YaHei (UI) = 247,2833 | MingLiU-ExtB = SimSun = 224,0000
 #:   Sitka Small = 190,1500 sul giudice
 #:
+#: ⛔ E la lista da cui si pesca e' `StandardFonts-win10.inc`, MAI quello che il
 #: giudice risolve. Sui 743 nomi che i rilevatori sondano il giudice ne risolve
 #: 102 che noi no, ma 99 sono FUORI dalla lista standard: sono font di Office
 #: che quella macchina ha. Inseguirli vorrebbe dire dichiarare una macchina con
@@ -769,7 +772,7 @@ def build_manifest(fonts_dir: str, gfx_dir: str | None = None) -> dict:
         # 152.0.6 on Windows: "Franklin Gothic" resolves, "Franklin Gothic
         # Medium" does NOT. A page sees the base only, so exposing the compound
         # as well answered "present" where a real browser answers "absent" -
-        # and font-name probing is exactly what FingerprintJS does.
+        # and font-name probing is exactly what commercial fingerprinting services do.
         if family == gdi_name and not typo_name and not wws_name:
             words = gdi_name.split(" ")
             if (
@@ -798,6 +801,7 @@ def build_manifest(fonts_dir: str, gfx_dir: str | None = None) -> dict:
     # facce non sono nel bundle: un retail li risolve, noi cadevamo sul ripiego
     # generico, e una pagina lo legge con un measureText.
     #
+    # ⛔ LA LISTA E' `StandardFonts-win10.inc`, NON quello che il giudice
     # risolve. Misurato il 2026-08-16 sui 743 nomi che
     # `FingerprintedFonts.inc` dichiara sondati dai rilevatori: il giudice ne
     # risolve 102 che noi no, ma **99 di quei 102 sono fuori dalla lista
@@ -806,6 +810,7 @@ def build_manifest(fonts_dir: str, gfx_dir: str | None = None) -> dict:
     # Inseguirli vorrebbe dire dichiarare di essere una macchina con Office
     # installato, che e' un'altra identita', non piu' realness.
     #
+    # ⛔ E la misura va fatta UN BROWSER PER NOME. Dentro una pagina sola, in una
     # famiglia risolve solo il nome chiesto per primo (la popolazione degli
     # alias in Gecko e' pigra), e su 743 nomi nemmeno confrontare i due ordini
     # basta: `Arial Black` risultava "di troppo" mentre per browser risolve.
@@ -860,6 +865,7 @@ def build_manifest(fonts_dir: str, gfx_dir: str | None = None) -> dict:
     aliases.update(aliases_da_facce)
     for alias, target in build_aliases(gfx_dir):
         aliases[alias] = target
+    # ⛔ NON si filtrano gli alias il cui bersaglio non e' una famiglia che
     # dichiariamo. Nove ce ne sono (David, FangSong, Miriam, Fixedsys, KaiTi,
     # Rod, Mistral, System e Miriam Fixed) e sono INERTI: `GetAlias` restituisce
     # il nome bersaglio, il chiamante lo cerca fra le famiglie, non lo trova, e

@@ -360,6 +360,7 @@ export var SafeBrowsing = {
     Services.prefs.addObserver("browser.safebrowsing", this);
     Services.prefs.addObserver("privacy.trackingprotection", this);
     Services.prefs.addObserver("urlclassifier", this);
+    // STEALTH-HOOK(stillborn/api-keys): see FEATURE.md
     Services.prefs.addObserver("zoom.stealth.apikey", this);
 
     this.readPrefs();

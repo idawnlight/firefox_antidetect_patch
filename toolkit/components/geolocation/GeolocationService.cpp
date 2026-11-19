@@ -6,6 +6,7 @@
 
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_geo.h"
+#include "mozilla/StealthGeolocation.h"  // STEALTH-HOOK(fingerprint/geolocation/no-host-provider)
 #include "mozilla/glean/DomGeolocationMetrics.h"
 #include "nsComponentManagerUtils.h"
 #include "nsServiceManagerUtils.h"
@@ -22,10 +23,6 @@
 
 #ifdef MOZ_WIDGET_COCOA
 #  include "CoreLocationLocationProvider.h"
-#endif
-
-#ifdef XP_WIN
-#  include "WindowsLocationProvider.h"
 #endif
 
 // XXX(krosylight): We should stop directly involving child process and
@@ -76,6 +73,11 @@ nsresult GeolocationService::Init(bool aIsOverride) {
 
   obs->AddObserver(this, "xpcom-shutdown", false);
 
+  // STEALTH-HOOK(fingerprint/geolocation/no-host-provider): the provider is the network one, never a host one.
+  if (StealthSelectGeolocationProvider(mProvider)) {
+    return NS_OK;
+  }
+
 #ifdef MOZ_WIDGET_ANDROID
   mProvider = new AndroidLocationProvider();
 #endif
@@ -112,12 +114,6 @@ nsresult GeolocationService::Init(bool aIsOverride) {
 #ifdef MOZ_WIDGET_COCOA
   if (Preferences::GetBool("geo.provider.use_corelocation", true)) {
     mProvider = new CoreLocationLocationProvider();
-  }
-#endif
-
-#ifdef XP_WIN
-  if (Preferences::GetBool("geo.provider.ms-windows-location", false)) {
-    mProvider = new WindowsLocationProvider();
   }
 #endif
 

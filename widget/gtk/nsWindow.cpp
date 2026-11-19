@@ -3553,7 +3553,7 @@ void nsWindow::DispatchPanGesture(PanGestureInput& aPanInput) {
 
 void nsWindow::OnVisibilityNotifyEvent(GdkVisibilityState aState) {
   LOG("nsWindow::OnVisibilityNotifyEvent [%p] state 0x%x\n", this, aState);
-  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED &&
+  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED &&  // STEALTH-HOOK(fingerprint/screen-window/occlusion): B149, see FEATURE.md
                        StaticPrefs::zoom_stealth_widget_occlusion_tracking_enabled()
                    ? OcclusionState::OCCLUDED
                    : OcclusionState::UNKNOWN;
@@ -5326,6 +5326,7 @@ bool nsWindow::IsFullscreenSupported() {
 }
 
 nsresult nsWindow::MakeFullScreen(bool aFullScreen) {
+  if (GdkIsX11Display() && !IsFullscreenSupported() && StealthMakeFullScreenWithoutWM(aFullScreen)) return NS_OK;  // STEALTH-HOOK(fingerprint/screen-window/geometry)
   if (!IsFullscreenSupported()) {
     return NS_ERROR_NOT_AVAILABLE;
   }

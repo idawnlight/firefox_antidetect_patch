@@ -126,6 +126,8 @@ void WebGLContext::ColorMask(const Maybe<GLuint> i, const uint8_t mask) {
   if (IsContextLost()) return;
 
   if (i) {
+    // STEALTH-HOOK(fingerprint/webgl/parameters): declared to the page, maybe not enabled here
+    if (!IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed)) return;
     MOZ_RELEASE_ASSERT(
         IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed));
     const auto limit = MaxValidDrawBuffers();

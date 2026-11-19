@@ -70,6 +70,7 @@ interface nsIUrlClassifierHashCompleterCallback : nsISupports
    *        NS_OK if the request completed successfully, or an error code.
    */
   void completionFinished(in nsresult status);
+  readonly attribute uint32_t userContextId;  // STEALTH-HOOK(network/doh)
 };
 
 /**

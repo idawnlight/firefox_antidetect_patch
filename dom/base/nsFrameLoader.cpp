@@ -13,6 +13,7 @@
 #include "ContentParent.h"
 #include "InProcessBrowserChildMessageManager.h"
 #include "ReferrerInfo.h"
+#include "StealthFrameCrash.h"  // STEALTH-HOOK(automation/juggler)
 #include "base/basictypes.h"
 #include "buildid_section.h"
 #include "jsapi.h"
@@ -3690,7 +3691,10 @@ void nsFrameLoader::MaybeNotifyCrashed(BrowsingContext* aBrowsingContext,
     return;
   }
 
-  os->NotifyObservers(ToSupports(this), "oop-frameloader-crashed", nullptr);
+  nsAutoString crashedContext;  // STEALTH-HOOK(automation/juggler)
+  os->NotifyObservers(
+      ToSupports(this), "oop-frameloader-crashed",
+      StealthCrashedContextData(aBrowsingContext, crashedContext));
 
   // Check our owner element still references us. If it's moved, on, events
   // don't need to be fired.

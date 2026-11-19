@@ -28,6 +28,7 @@ UNIFIED_SOURCES += [
     "UntrustedModulesProcessor.cpp",
     "WinDllServices.cpp",
 ]
+UNIFIED_SOURCES += ["StealthOwnBinaries.cpp"]  # STEALTH-HOOK(platform/untrusted-modules)
 
 if CONFIG["MOZ_LAUNCHER_PROCESS"]:
     UNIFIED_SOURCES += [

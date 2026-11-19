@@ -11,6 +11,7 @@
 #include <gtk/gtk.h>
 
 #include "GLContextProvider.h"
+#include "StealthBundleFontList.h"  // STEALTH-HOOK(fingerprint/fonts/bundle)
 #include "VsyncSource.h"
 #include "base/message_loop.h"
 #include "base/task.h"
@@ -429,15 +430,8 @@ static const char kFontNotoSansSymbols2[] = "Noto Sans Symbols2";
 void gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, Script aRunScript,
                                             FontPresentation aPresentation,
                                             nsTArray<const char*>& aFontList) {
-  // Search declared bundle fallback families before platform fallback.
-  if (PrefersColor(aPresentation)) {
-    aFontList.AppendElement("Segoe UI Emoji");
-  }
-  aFontList.AppendElement("Arial");
-  aFontList.AppendElement("Segoe UI");
-  aFontList.AppendElement("Segoe UI Symbol");
-  aFontList.AppendElement("Cambria Math");
-
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
+  StealthAppendWindowsFallbackNames(PrefersColor(aPresentation), aFontList);
   if (PrefersColor(aPresentation)) {
     aFontList.AppendElement(kFontTwemojiMozilla);
   }

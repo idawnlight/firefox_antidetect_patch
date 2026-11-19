@@ -43,6 +43,7 @@
 #include "nsIUrlListManager.h"
 #include "ProtocolParser.h"
 #include "nsContentUtils.h"
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "mozilla/Components.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/ContentClassifierService.h"
@@ -1259,10 +1260,12 @@ class nsUrlClassifierHashCompleterBase
   nsCOMPtr<nsIUrlClassifierCallback> mCallback;
   ConstCacheResultArray mCacheResults;
   uint32_t mPendingCompletions = 0;
+  uint32_t mStealthUserContextId = mozilla::net::StealthCurrentLookupContext();  // STEALTH-HOOK(network/doh)
 };
 
 NS_IMPL_ISUPPORTS(nsUrlClassifierHashCompleterBase,
                   nsIUrlClassifierHashCompleterCallback)
+NS_IMETHODIMP nsUrlClassifierHashCompleterBase::GetUserContextId(uint32_t* aId) { return mozilla::net::StealthLookupContextOut(mStealthUserContextId, aId); }  // STEALTH-HOOK(network/doh)
 
 nsUrlClassifierHashCompleterBase::~nsUrlClassifierHashCompleterBase() {
   if (mCallback) {
@@ -2157,6 +2160,7 @@ nsUrlClassifierDBService::Classify(nsIPrincipal* aPrincipal,
     return NS_OK;
   }
 
+  mozilla::net::StealthLookupContextScope stealthScope(aPrincipal);  // STEALTH-HOOK(network/doh)
   if (Classifier::IsRealTimeModeEnabled()) {
     RefPtr<nsUrlClassifierClassifyCallback> callback =
         new (fallible) nsUrlClassifierClassifyCallback(c);

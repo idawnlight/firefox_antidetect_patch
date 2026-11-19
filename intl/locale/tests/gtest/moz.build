@@ -8,5 +8,6 @@ UNIFIED_SOURCES += [
     "TestLocaleServiceNegotiate.cpp",
     "TestOSPreferences.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthSystemLocales.cpp"]  # STEALTH-HOOK(fingerprint/locale-time/session-declaration)
 
 FINAL_LIBRARY = "xul-gtest"

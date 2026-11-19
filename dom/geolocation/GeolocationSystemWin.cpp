@@ -9,6 +9,7 @@
 #include "GeolocationSystem.h"
 #include "mozilla/Components.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/StealthGeolocation.h"  // STEALTH-HOOK(fingerprint/geolocation/no-host-provider)
 #include "mozilla/dom/BrowsingContext.h"
 #include "nsIGeolocationUIUtils.h"
 #include "nsIWifiListener.h"
@@ -333,6 +334,10 @@ NS_IMPL_ISUPPORTS(LocationPermissionWifiScanListener, nsIWifiListener)
 //-----------------------------------------------------------------------------
 
 SystemGeolocationPermissionBehavior GetGeolocationPermissionBehavior() {
+  // STEALTH-HOOK(fingerprint/geolocation/no-host-provider): the OS location switch is declared on; the OS is not asked.
+  if (StealthSystemLocationDeclaredOn()) {
+    return SystemGeolocationPermissionBehavior::NoPrompt;
+  }
   auto locationAccess = GetLocationAccess();
   if (SystemWillPromptForPermissionHint(locationAccess)) {
     return SystemGeolocationPermissionBehavior::SystemWillPromptUser;

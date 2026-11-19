@@ -17,6 +17,8 @@
 #include "nsISocketProvider.h"
 #include "nsNamedPipeIOLayer.h"
 #include "nsNetCID.h"
+#include "StealthIPv6Literal.h"  // STEALTH-HOOK(network/ipv6-literal)
+#include "nsSOCKSUDPIOLayer.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "nsString.h"
 #include "nsThreadUtils.h"
 #include "nspr.h"
@@ -518,7 +520,7 @@ PRStatus nsSOCKSSocketInfo::ConnectToProxy(PRFileDesc* fd) {
     PRNetAddr prProxy;
     NetAddrToPRNetAddr(&proxy, &prProxy);
     mProxyConnectAttempted = true;
-    status = fd->lower->methods->connect(fd->lower, &prProxy, mTimeout);
+    status = StealthConnect(fd->lower, proxy, StealthConnectTarget::kSocksProxyHop, &prProxy, mTimeout);  // STEALTH-HOOK(network/ipv6-literal)
     if (status != PR_SUCCESS) {
       PRErrorCode c = PR_GetError();
 
@@ -1462,6 +1464,7 @@ nsresult nsSOCKSIOLayerAddToSocket(int32_t family, const char* host,
 
   NS_ADDREF(infoObject);
   infoObject->Init(socksVersion, family, proxy, host, flags, tlsFlags);
+  if (socksVersion == 5) mozilla::net::nsSOCKSUDPIOLayerWarm(proxy);  // STEALTH-HOOK(network/proxy-udp)
   layer->secret = (PRFilePrivate*)infoObject;
 
   PRDescIdentity fdIdentity = PR_GetLayersIdentity(fd);

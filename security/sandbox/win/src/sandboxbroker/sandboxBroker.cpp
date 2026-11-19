@@ -14,6 +14,7 @@
 
 #include "ConfigHelpers.h"
 #include "GfxDriverInfo.h"
+#include "StealthSandboxBranding.h"  // STEALTH-HOOK(fingerprint/js-surface/branding)
 #include "WinUtils.h"
 #include "base/win/sid.h"
 #include "base/win/windows_version.h"
@@ -30,7 +31,6 @@
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/StaticPrefs_security.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/net/StealthBranding.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WinDllServices.h"
 #include "mozilla/WindowsVersion.h"
@@ -1196,18 +1196,8 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
     AddCachedDirRule(config, sandbox::FileSemantics::kAllowReadonly,
                      sProfileDir, u"\\chrome\\*"_ns);
 
-    if (nsCOMPtr<nsIFile> branding =
-            mozilla::net::StealthBrandingDeclaredArchive()) {
-      nsAutoString brandingRule;
-      if (NS_SUCCEEDED(branding->GetPath(brandingRule))) {
-        result = config->AllowFileAccess(
-            sandbox::FileSemantics::kAllowReadonly, brandingRule.get());
-        if (sandbox::SBOX_ALL_OK != result) {
-          NS_ERROR("Failed to add the declared branding read rule.");
-        }
-      }
-    }
-
+    // STEALTH-HOOK(fingerprint/js-surface/branding)
+    AddDeclaredBrandingReadRule(config);
     // Add rule to allow read access to the extensions directory within profile.
     AddCachedDirRule(config, sandbox::FileSemantics::kAllowReadonly,
                      sProfileDir, u"\\extensions\\*"_ns);

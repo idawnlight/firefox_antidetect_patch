@@ -15,6 +15,7 @@
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
+#include "mozilla/net/StealthTRRContext.h"  // STEALTH-HOOK(network/doh)
 #include "nsDNSPrefetch.h"
 #include "nsEscape.h"
 #include "nsHttpConnectionMgr.h"
@@ -246,12 +247,14 @@ nsresult TRRServiceChannel::MaybeResolveProxyAndBeginConnect() {
   // settings if we are never going to make a network connection.
   // If mConnectionInfo is already supplied, we don't need to do proxy
   // resolution again.
+  nsresult proxyRv = NS_OK;  // STEALTH-HOOK(network/doh)
   if (!mProxyInfo && !mConnectionInfo &&
       !(mLoadFlags & (nsICachingChannel::LOAD_ONLY_FROM_CACHE |
                       nsICachingChannel::LOAD_NO_NETWORK_IO)) &&
-      NS_SUCCEEDED(ResolveProxy())) {
+      NS_SUCCEEDED(proxyRv = ResolveProxy())) {  // STEALTH-HOOK(network/doh)
     return NS_OK;
   }
+  if (StealthTRRServiceFailClosed(this, proxyRv, false)) { return NS_OK; }  // STEALTH-HOOK(network/doh)
 
   rv = BeginConnect();
   if (NS_FAILED(rv)) {
@@ -280,7 +283,7 @@ nsresult TRRServiceChannel::ResolveProxy() {
         self->OnProxyAvailable(nullptr, nullptr, aProxyInfo, aStatus);
       },
       mURI, mProxyResolveFlags, LoadIsTRRServiceChannel(),
-      getter_AddRefs(proxyRequest));
+      getter_AddRefs(proxyRequest), Nothing(), StealthTRRContextOfLoadInfo(mLoadInfo));  // STEALTH-HOOK(network/doh)
 
   if (NS_FAILED(rv)) {
     if (!mCurrentEventTarget->IsOnCurrentThread()) {
@@ -344,6 +347,7 @@ TRRServiceChannel::OnProxyAvailable(nsICancelable* request, nsIChannel* channel,
   // proxy info.  That is a non-fatal error assuming it wasn't because the
   // request was canceled.  We just failover to DIRECT when proxy resolution
   // fails (failure can mean that the PAC URL could not be loaded).
+  if (StealthTRRServiceFailClosed(this, StealthTRRProxyAnswer(status, pi, true), mCanceled)) { return NS_OK; }  // STEALTH-HOOK(network/doh)
 
   if (NS_SUCCEEDED(status)) mProxyInfo = pi;
 
@@ -405,8 +409,9 @@ nsresult TRRServiceChannel::BeginConnect() {
   gHttpHandler->MaybeAddAltSvcForTesting(mURI, mUsername, mPrivateBrowsing,
                                          mCallbacks, OriginAttributes());
 
+  OriginAttributes stealthAttrs = StealthTRRContextOfLoadInfo(mLoadInfo).valueOr(OriginAttributes());  // STEALTH-HOOK(network/doh)
   RefPtr<nsHttpConnectionInfo> connInfo = new nsHttpConnectionInfo(
-      host, port, ""_ns, mUsername, proxyInfo, OriginAttributes(), isHttps);
+      host, port, ""_ns, mUsername, proxyInfo, stealthAttrs, isHttps);  // STEALTH-HOOK(network/doh)
   // TODO: Bug 1622778 for using AltService in socket process.
   StoreAllowAltSvc(XRE_IsParentProcess() && LoadAllowAltSvc());
   bool http2Allowed = !gHttpHandler->IsHttp2Excluded(connInfo);
@@ -446,7 +451,7 @@ nsresult TRRServiceChannel::BeginConnect() {
     LOG(("TRRServiceChannel %p Using connection info from altsvc mapping",
          this));
     mapping->GetConnectionInfo(getter_AddRefs(mConnectionInfo), proxyInfo,
-                               OriginAttributes());
+                               stealthAttrs);  // STEALTH-HOOK(network/doh)
     glean::http::transaction_use_altsvc
         .EnumGet(glean::http::TransactionUseAltsvcLabel::eTrue)
         .Add();

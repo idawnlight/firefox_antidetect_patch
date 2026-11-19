@@ -11,6 +11,14 @@ export class JugglerFrameParent extends JSWindowActorParent {
   }
 
   receiveMessage(message) {
+    // ⛔ THIS IS ONLY REACHED WHILE THE CHANNEL IS NOT BOUND TO THIS ACTOR:
+    // `SimpleChannel.bindToActor` binds by replacing an actor's
+    // `receiveMessage`, so the bound actor never arrives here. The one message
+    // that comes this way is a restored document asking to be bound again
+    // (JugglerFrameChild, on its pageshow). Its channel end has been detached
+    // since its pagehide and keeps what it says, so nothing else is sent to an
+    // unbound actor; and the READY of this binding is what makes it announce
+    // itself and then speak (SimpleChannel.detachFromPeer).
     if (message?.name !== 'juggler:became-current')
       return;
     if (this._browserId === undefined || !this.manager?.isCurrentGlobal)
@@ -18,7 +26,7 @@ export class JugglerFrameParent extends JSWindowActorParent {
     const registry = TargetRegistry.instance();
     if (!registry?.targetForBrowserId(this._browserId))
       return;
-    registry.onActorCreated(this, this._browserId);
+    registry.onActorCreated(this, this._browserId, this._rootId);
   }
 
   async actorCreated() {
@@ -29,17 +37,26 @@ export class JugglerFrameParent extends JSWindowActorParent {
     if (!this.manager?.isCurrentGlobal)
       return;
 
-    // Only interested in main frames for now.
-    if (this.browsingContext.parent)
+    // Only the roots of fragments count: the top, and every frame whose parent is in another process
+    // (WindowGlobalParent.isProcessRoot). A frame in the process of its parent is served by the
+    // agents of its root.
+    if (!this.manager.isProcessRoot)
       return;
+    this._rootId = this.browsingContext.id;
 
+    // ⛔ A target is found by browserId and by nothing else (see
+    // TargetRegistry._rootActors). Matching it against a
+    // BrowsingContext id as well let a foreign browser - the preallocated
+    // about:newtab one, 2026-08-23 - take a page's channel when the two
+    // counters met, and the guard added against that dropped a new tab's own
+    // actor whenever they met with a stale entry. One identity removes both.
     this._browserId = this.browsingContext.browserId;
-    TargetRegistry.instance()?.onActorCreated(this, this._browserId);
+    TargetRegistry.instance()?.onActorCreated(this, this._browserId, this._rootId);
   }
 
   didDestroy() {
     if (this._browserId === undefined)
       return;
-    TargetRegistry.instance()?.onActorDestroyed(this, this._browserId);
+    TargetRegistry.instance()?.onActorDestroyed(this, this._browserId, this._rootId);
   }
 }

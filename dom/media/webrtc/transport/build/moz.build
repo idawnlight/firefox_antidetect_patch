@@ -9,6 +9,7 @@ EXPORTS.transport += [
     "../m_cpp_utils.h",
     "../mediapacket.h",
     "../nr_socket_proxy_config.h",
+    "../nr_stealth_network.h",  # STEALTH-HOOK(fingerprint/webrtc/declared-network)
     "../nricectx.h",
     "../nricemediastream.h",
     "../nriceresolverfake.h",

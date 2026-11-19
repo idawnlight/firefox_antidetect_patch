@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsParentalControlsService.h"
+#include "StealthParentalControls.h"  // STEALTH-HOOK(network/doh)
 #include "nsComponentManagerUtils.h"
 #include "nsString.h"
 #include "nsIArray.h"
@@ -59,6 +60,7 @@ static nsAutoString GetUserSid() {
 
 nsParentalControlsService::nsParentalControlsService()
     : mEnabled(false), mProvider(0), mPC(nullptr) {
+  if (StealthParentalControlsDeclared(&mEnabled)) { return; }  // STEALTH-HOOK(network/doh)
   // On at least some builds of Windows 10, the old parental controls API no
   // longer exists, so we have to pull the info we need out of the registry.
   nsAutoString regKeyName;

@@ -11,6 +11,7 @@ UNIFIED_SOURCES = [
     "TestWidgetTouchEventCtors.cpp",
     "TestWidgetTouchEventIPC.cpp",
 ]
+UNIFIED_SOURCES += ["TestStealthFullscreen.cpp"]  # STEALTH-HOOK(fingerprint/screen-window/geometry)
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     UNIFIED_SOURCES += [

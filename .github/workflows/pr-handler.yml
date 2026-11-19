@@ -25,7 +25,6 @@ env:
 
 jobs:
   handle-pr:
-    if: github.repository == 'mozilla-firefox/firefox'
     runs-on: ubuntu-latest
     steps:
 

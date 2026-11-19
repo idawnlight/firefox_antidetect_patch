@@ -242,11 +242,8 @@ class gfxDWriteFontEntry final : public gfxFontEntry {
 
   DWRITE_FONT_FACE_TYPE mFaceType;
 
-  // Face index within a custom (bundle) font file; 0 for single-face files and
-  // for system fonts. Lets a .ttc face be addressed by index in CreateFontFace.
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
   uint16_t mBundleFaceIndex = 0;
-
-  // Carry the bundle path into the unscaled font for WebRender descriptors.
   std::wstring mBundleFilePath;
 
   mozilla::Atomic<FontTableCache*> mFontTableCache;
@@ -478,6 +475,10 @@ class gfxDWriteFontList final : public gfxPlatformFontList {
   already_AddRefed<IDWriteFontCollection> CreateBundledFontsCollection(
       IDWriteFactory* aFactory);
 #endif
+
+  // STEALTH-HOOK(fingerprint/fonts/bundle)
+  already_AddRefed<gfxFontEntry> CreateStealthBundleFontEntry(
+      mozilla::fontlist::Face* aFace, const mozilla::fontlist::Family* aFamily);
 
   /**
    * Fonts listed in the registry as substitutes but for which no actual

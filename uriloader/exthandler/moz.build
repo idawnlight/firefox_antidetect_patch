@@ -18,6 +18,7 @@ XPIDL_SOURCES += [
     "nsIHelperAppLauncherDialog.idl",
     "nsISharingHandlerApp.idl",
 ]
+XPIDL_SOURCES += ["StealthDownloadInterceptor.idl"]  # STEALTH-HOOK(automation/downloads)
 
 XPIDL_MODULE = "exthandler"
 
@@ -60,6 +61,7 @@ UNIFIED_SOURCES += [
     "nsMIMEInfoImpl.cpp",
     "nsOSHelperAppServiceChild.cpp",
 ]
+UNIFIED_SOURCES += ["StealthDownloadIntercept.cpp"]  # STEALTH-HOOK(automation/downloads)
 
 if CONFIG["MOZ_BUILD_APP"] == "browser":
     DEFINES["MOZ_BUILD_APP_IS_BROWSER"] = True

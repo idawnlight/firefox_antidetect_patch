@@ -203,6 +203,7 @@ UNIFIED_SOURCES += [
     "ValidityState.cpp",
     "VideoDocument.cpp",
 ]
+UNIFIED_SOURCES += ["StealthCanvasSnapshot.cpp"]  # STEALTH-HOOK(fingerprint/canvas/noise-projection)
 
 include("/ipc/chromium/chromium-config.mozbuild")
 

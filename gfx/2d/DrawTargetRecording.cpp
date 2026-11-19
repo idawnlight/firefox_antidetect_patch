@@ -16,7 +16,6 @@
 #include "RecordingTypes.h"
 #include "Tools.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
-#include "mozilla/gfx/StealthCanvasProjection.h"
 #include "mozilla/layers/CanvasDrawEventRecorder.h"
 #include "mozilla/layers/RecordedCanvasEventImpl.h"
 #include "mozilla/layers/SourceSurfaceSharedData.h"
@@ -108,13 +107,8 @@ class SourceSurfaceRecording final : public SourceSurface {
   SurfaceFormat GetFormat() const override { return mFormat; }
   already_AddRefed<DataSourceSurface> GetDataSurface() override {
     if (mOriginalSurface) {
-      RefPtr<DataSourceSurface> data = mOriginalSurface->GetDataSurface();
-      if (data && mStealthNoise) {
-        // The projected stand-in reads as projected here too.
-        return StealthProjectedRegion(data, mRect,
-                                      mStealthPremultiplied, mStealthNoise);
-      }
-      return data.forget();
+      // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+      return StealthProjectOriginal(mOriginalSurface.get(), mRect.Size(), mStealth);
     }
 
     return nullptr;
@@ -129,9 +123,8 @@ class SourceSurfaceRecording final : public SourceSurface {
   // we need GetDataSurface to work, so we hold the original surface we
   // optimized to return its GetDataSurface.
   RefPtr<SourceSurface> mOriginalSurface;
-  // Set on the stand-in DrawTargetRecording::StealthProjectedSurface makes.
-  StealthCanvasNoise mStealthNoise = StealthCanvasNoise::Off();
-  bool mStealthPremultiplied = true;
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  StealthStandIn mStealth;
 };
 
 class GradientStopsRecording : public GradientStops {
@@ -897,16 +890,9 @@ already_AddRefed<SourceSurface> DrawTargetRecording::OptimizeSourceSurface(
 already_AddRefed<SourceSurface> DrawTargetRecording::StealthProjectedSurface(
     SourceSurface* aSurface, bool aPremultiplied,
     const StealthCanvasNoise& aNoise) {
-  if (!aSurface || aSurface->GetType() != SurfaceType::RECORDING || !aNoise) {
-    return nullptr;
-  }
-  RefPtr<SourceSurfaceRecording> retSurf = new SourceSurfaceRecording(
-      aSurface->GetRect(), aSurface->GetFormat(), mRecorder, aSurface);
-  retSurf->mStealthNoise = aNoise;
-  retSurf->mStealthPremultiplied = aPremultiplied;
-  RecordEventSelfSkipFlushTransform(
-      RecordedStealthProjectSurface(aSurface, retSurf, aPremultiplied, aNoise));
-  return retSurf.forget();
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
+  return StealthProjectedStandIn<SourceSurfaceRecording>(
+      this, mRecorder.get(), aSurface, aPremultiplied, aNoise);
 }
 
 already_AddRefed<SourceSurface>

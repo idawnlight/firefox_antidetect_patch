@@ -10,12 +10,15 @@
 namespace mozilla {
 namespace net {
 
-ProxyConfigLookupParent::ProxyConfigLookupParent(nsIURI* aURI,
-                                                 uint32_t aProxyResolveFlags,
-                                                 bool aIsTRRServiceChannel)
+ProxyConfigLookupParent::ProxyConfigLookupParent(
+    nsIURI* aURI, uint32_t aProxyResolveFlags, bool aIsTRRServiceChannel,
+    const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+    const Maybe<OriginAttributes>& aOriginAttributes)  // STEALTH-HOOK(network/doh)
     : mURI(aURI),
       mProxyResolveFlags(aProxyResolveFlags),
-      mIsTRRServiceChannel(aIsTRRServiceChannel) {}
+      mIsTRRServiceChannel(aIsTRRServiceChannel),
+      mLoadInfo(aLoadInfo),  // STEALTH-HOOK(network/proxy-udp)
+      mOriginAttributes(aOriginAttributes) {}  // STEALTH-HOOK(network/doh)
 
 ProxyConfigLookupParent::~ProxyConfigLookupParent() = default;
 
@@ -32,7 +35,9 @@ void ProxyConfigLookupParent::DoProxyLookup() {
           (void)Send__delete__(self, proxyInfoArray, aStatus);
         }
       },
-      mURI, mProxyResolveFlags, mIsTRRServiceChannel);
+      mURI, mProxyResolveFlags, mIsTRRServiceChannel, nullptr,
+      mLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      mOriginAttributes);  // STEALTH-HOOK(network/doh)
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
     nsTArray<ProxyInfoCloneArgs> emptyArray;

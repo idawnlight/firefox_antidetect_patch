@@ -390,11 +390,7 @@ nsresult StartupCache::GetBuffer(const char* id, const char** outbuf,
   auto telemetry = MakeScopeExit(
       [&label] { glean::startup_cache::requests.EnumGet(label).Add(); });
 
-  // Treat a busy cache as a miss to avoid waiting for background disk writes.
-  MutexAutoTryLock lock(mTableLock);
-  if (!lock) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
+  MutexAutoLock lock(mTableLock);
   decltype(mTable)::Ptr p = mTable.lookup(nsDependentCString(id));
   if (!p) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -798,7 +794,7 @@ void StartupCache::MaybeWriteOffMainThread(WriteType aWriteType,
   nsCOMPtr<nsIRunnable> runnable = NS_NewRunnableFunction(
       "StartupCache::Write", [self, aWriteType, aUseLowPriorityIO]() mutable {
         Maybe<nsAutoLowPriorityIO> lowPriority;
-        if (aUseLowPriorityIO) {
+        if (aUseLowPriorityIO && StartupCache::WritesMayLowerIOPriority()) {
           lowPriority.emplace();
         }
         MutexAutoLock lock(self->mTableLock);

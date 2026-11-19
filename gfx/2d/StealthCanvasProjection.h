@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "mozilla/AlreadyAddRefed.h"
+#include "mozilla/RefPtr.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/Types.h"
@@ -17,8 +18,22 @@ namespace mozilla {
 namespace gfx {
 
 class DataSourceSurface;
+class DrawEventRecorderPrivate;
+class DrawTargetRecording;
+class SourceSurface;
 
-// The seed and edge tolerance travel together; Off() disables projection.
+/**
+ * What the projection is told, by whoever decided the canvas is to be noised
+ * (StealthCanvasNoiseDeclared in gfx/thebes/StealthDeclarationGate.h, and
+ * CanvasUtils::StealthNoise, which adds the canvas's principal).
+ *
+ * Built only two ways: Off() ("leave the pixels as drawn"), or with the seed
+ * AND the tolerance together. There is no default constructor and no
+ * constructor from the seed alone, so a seed that travels without its declared
+ * tolerance does not compile: the parameter that came before it defaulted to
+ * "touch every edge", the noise measured wrong on text, sitting next to the
+ * declaration as a second value (engine rule 7).
+ */
 class StealthCanvasNoise {
  public:
   static StealthCanvasNoise Off() { return StealthCanvasNoise(0, 0); }
@@ -33,23 +48,162 @@ class StealthCanvasNoise {
   int32_t mEdgeTolerance;
 };
 
-// Project GPU canvas readback as a deterministic function of seed and pixels.
-// Canonical keys clear RGB low bits, making the projection idempotent and
-// independent of channel order, row order and readback rectangle.
+// Set on the stand-in DrawTargetRecording::StealthProjectedSurface makes.
+struct StealthStandIn {
+  StealthCanvasNoise noise = StealthCanvasNoise::Off();
+  bool premultiplied = true;
+};
 
-// Project aRect from aSrc into aDst using neighbors from the full source.
-// aDst already contains the source pixels and may alias aSrc. Only RGB low bits
-// are written; alpha remains unchanged.
+/**
+ * The canvas noise: ONE pure function of the seed and of what the canvas holds,
+ * applied wherever a canvas becomes bytes for the page or the source of another
+ * drawing ("form B", 29-canvas-buffer-unico.md in the workbench docs).
+ *
+ * From firefox-52 only WebGL and WebGPU canvases go through it. A 2D canvas
+ * reads back exactly as drawn, as on retail: a public test's grid of random
+ * 1x1 pixels caught the projection on 2D (6 of 64 changed, retail 0).
+ * Measured 2026-10-24: retail 151 changed 0 of the 64. What makes two
+ * machines' 2D canvases differ is how they draw - display scale, ClearType
+ * tuning, fonts - and those are declared, not added at readback. So the 2D
+ * readers (getImageData, toDataURL, toBlob) are stock. createPattern reads
+ * its canvas source through the element (HTMLCanvasElement::GetSurfaceSnapshot,
+ * OffscreenCanvas::GetSurfaceSnapshot), as a page reads it: a WebGL/WebGPU
+ * source is projected, a 2D one is not.
+ *
+ * WHY ONE FUNCTION. Until firefox-50 the noise was three algorithms bolted onto
+ * five read METHODS (getImageData, toDataURL/toBlob, readPixels, the WebGL
+ * snapshot), each on its own buffer layout: every other road - drawImage onto
+ * another canvas, createImageBitmap, VideoFrame, WebGPU, the PBO, the
+ * transferControlToOffscreen placeholder - read the real pixels, and two reads
+ * of the same canvas disagreed. A page saw it by reading the canvas twice.
+ * With a function that depends only on the pixels, every reader that applies it
+ * to the same pixels gets the same bytes, and there is no state to keep in
+ * step: the "one image per canvas state" is computed, not stored.
+ *
+ * WHAT IT DOES, per pixel with alpha > 0:
+ *   - every value is looked at with the low bit of R, G and B CLEARED (alpha is
+ *     never touched, so it is read whole);
+ *   - the pixel is touched only if it differs from one of its four neighbours
+ *     (an edge, never a flat area), and only if its 3x3 neighbourhood is NOT a
+ *     blend of two colours within the tolerance invisible_core declares
+ *     (zoom.stealth.canvas.edge_tolerance): text at any contrast, the edge
+ *     between two fills and a two-stop gradient stay exactly as drawn, because a
+ *     touched pixel there is a level the rasteriser does not produce (an 18th
+ *     grey of DirectWrite text); a shadow over a fill, an emoji, the junction of
+ *     three shapes carry the noise. A white
+ *     background stays white and a filled rectangle reads back the colour it
+ *     was filled with, which is what a real machine's variation looks like;
+ *   - the low bit of R, G and B is replaced by ONE bit, the same on the three
+ *     channels so a grey stays grey, taken from a hash of the seed and of the
+ *     3x3 neighbourhood. The neighbours enter through a SUM, so the key does not
+ *     depend on the order rows are stored in (WebGL is bottom-up) or on the
+ *     channel order (the 2D canvas is BGRA, WebGL RGBA): the same pixels give
+ *     the same bit in every layout;
+ *   - on a premultiplied buffer the bit is 1 only if every channel stays <=
+ *     alpha, decided from the cleared values, so the result is always a valid
+ *     premultiplied pixel.
+ * Because the mask and the key only read cleared bits, and the function only
+ * writes those bits, it is a PROJECTION: applying it twice changes nothing.
+ * That is what makes getImageData -> putImageData -> getImageData give the same
+ * bytes, and drawImage of a projected canvas onto another give, read back, the
+ * same bytes as reading the first.
+ *
+ * NEIGHBOURS OUTSIDE THE BUFFER are the edge pixel itself (clamp to edge), so a
+ * uniform canvas is never an "edge" at its border: a white canvas reads 255 in
+ * every corner. A rectangle read is the whole read cropped as long as the
+ * caller hands over the rectangle grown by one pixel inside the canvas (see
+ * StealthProjectedRegion).
+ */
+
+/**
+ * The seed is not read here: callers pass StealthCanvasNoiseDeclared()
+ * (gfx/thebes/StealthDeclarationGate.h), which is where "is the engine on"
+ * lives. This layer stays a function of its arguments.
+ *
+ * Applies the projection to the pixels of aRect, reading neighbours from aSrc
+ * and writing into aDst, whose first byte is the pixel at aRect's top-left and
+ * which must already hold a copy of those pixels: only the low bit of R, G and
+ * B of the touched pixels is written. aDst may be aSrc itself (in place): the
+ * function reads only the bits it does not write. Formats: B8G8R8A8, B8G8R8X8, R8G8B8A8, R8G8B8X8 (X reads as 255).
+ * Returns false, writing nothing, for any other format, a zero seed or an
+ * empty rectangle.
+ */
 bool StealthProjectPixels(const uint8_t* aSrc, int32_t aSrcStride,
                           const IntSize& aSrcSize, SurfaceFormat aFormat,
                           const IntRect& aRect, uint8_t* aDst,
                           int32_t aDstStride, bool aPremultiplied,
                           const StealthCanvasNoise& aNoise);
 
-// Copy aRect and project it using aSource neighbors; leave aSource unchanged.
+/**
+ * A new surface of aRect's size holding aRect of aSource with the projection
+ * applied, its neighbours read from aSource; aSource is left untouched. Null if
+ * aSource cannot be mapped. With a zero seed it is a plain copy.
+ */
 already_AddRefed<DataSourceSurface> StealthProjectedRegion(
     DataSourceSurface* aSource, const IntRect& aRect, bool aPremultiplied,
     const StealthCanvasNoise& aNoise);
+
+/**
+ * aOriginal's pixels as a recording stand-in (aStandIn, set by
+ * DrawTargetRecording::StealthProjectedSurface) reads them: projected over
+ * the whole of aSize when the stand-in carries noise, as drawn otherwise.
+ * Null if aOriginal has no pixels.
+ */
+already_AddRefed<DataSourceSurface> StealthProjectOriginal(
+    SourceSurface* aOriginal, const IntSize& aSize,
+    const StealthStandIn& aStandIn);
+
+/**
+ * Whether DrawTargetRecording::StealthProjectedSurface
+ * (gfx/2d/DrawTargetRecording.cpp) may stand in for aSurface.
+ */
+bool StealthCanProjectRecording(SourceSurface* aSurface,
+                                const StealthCanvasNoise& aNoise);
+
+/**
+ * Records, on aRecorder, that the replaying process is to project aSurface
+ * into aStandIn (a SourceSurfaceRecording, passed as its address).
+ */
+void StealthRecordProjection(const DrawTargetRecording* aDT,
+                             DrawEventRecorderPrivate* aRecorder,
+                             SourceSurface* aSurface, const void* aStandIn,
+                             bool aPremultiplied,
+                             const StealthCanvasNoise& aNoise);
+
+/**
+ * The body of DrawTargetRecording::StealthProjectedSurface. StandIn is the
+ * recording surface class of DrawTargetRecording.cpp (it is not named in any
+ * header): constructed (aSize, aFormat, aRecorder, aOriginal), with a public
+ * StealthStandIn mStealth. The test comes BEFORE the stand-in is made:
+ * making it adds a stored object to the recorder and destroying it records an
+ * event, so a refusal must leave the recording untouched.
+ *
+ * Surface is SourceSurface; it is a parameter only so that the calls on it
+ * are resolved where the template is instantiated (DrawTargetRecording.cpp),
+ * which keeps mozilla/gfx/2D.h out of this header.
+ *
+ * The result is a recording surface standing for aSurface with the canvas
+ * noise applied in the process that replays the recording
+ * (RecordedStealthProjectSurface), or null if aSurface is not a recording
+ * surface. Read back in this process, it gives the same projection computed
+ * here. (DrawTargetRecording::StealthProjectedSurface is declared in
+ * DrawTargetRecording.h.)
+ */
+template <class StandIn, class Surface>
+already_AddRefed<Surface> StealthProjectedStandIn(
+    const DrawTargetRecording* aDT, DrawEventRecorderPrivate* aRecorder,
+    Surface* aSurface, bool aPremultiplied, const StealthCanvasNoise& aNoise) {
+  if (!StealthCanProjectRecording(aSurface, aNoise)) {
+    return nullptr;
+  }
+  RefPtr<StandIn> standIn = MakeRefPtr<StandIn>(
+      aSurface->GetRect(), aSurface->GetFormat(), aRecorder, aSurface);
+  standIn->mStealth.noise = aNoise;
+  standIn->mStealth.premultiplied = aPremultiplied;
+  StealthRecordProjection(aDT, aRecorder, aSurface, standIn.get(),
+                          aPremultiplied, aNoise);
+  return standIn.forget();
+}
 
 }  // namespace gfx
 }  // namespace mozilla

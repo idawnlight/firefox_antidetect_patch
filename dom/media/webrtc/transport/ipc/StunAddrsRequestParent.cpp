@@ -13,6 +13,7 @@
 #include "transport/nricectx.h"
 #include "transport/nricemediastream.h"  // needed only for including nricectx.h
 #include "transport/nricestunaddr.h"
+#include "transport/nr_stealth_network.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 
 using namespace mozilla::ipc;
 
@@ -144,22 +145,12 @@ void StunAddrsRequestParent::SendStunAddrs(const NrIceStunAddrArray& addrs) {
     return;
   }
 
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): the responder joins the mDNS group on the loopback and
+  // speaks through it, not on the adapters of the list: the list is the declaration, whose address the OS does
+  // not own (a join on it fails, and the responder would never hear its own query). On the loopback the query
+  // and the answer make the same round trip through the responder's thread as on a real adapter.
   if (!MDNSServiceWrapper::Instance()) {
-    std::ostringstream o;
-    char buffer[16];
-    for (auto& addr : addrs) {
-      nr_local_addr localAddr;
-      addr.toNrLocalAddr(localAddr);
-      if (localAddr.addr.ip_version == NR_IPV4 &&
-          !nr_transport_addr_is_loopback(&localAddr.addr)) {
-        nr_transport_addr_get_addrstring(&localAddr.addr, buffer, 16);
-        o << buffer << ";";
-      }
-    }
-    std::string addrstring = o.str();
-    if (!addrstring.empty()) {
-      (void)MDNSServiceWrapper::EnsureInstance(addrstring);
-    }
+    (void)MDNSServiceWrapper::EnsureInstance(nr_stealth_mdns_interfaces());
   }
 
   // send the new addresses back to the child

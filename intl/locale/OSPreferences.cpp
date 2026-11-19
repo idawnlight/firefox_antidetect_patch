@@ -16,6 +16,7 @@
 #include "mozilla/intl/LocaleService.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
+#include "mozilla/intl/StealthSessionPrefs.h"  // STEALTH-HOOK(fingerprint/locale-time/session-declaration)
 #include "nsIObserverService.h"
 
 using namespace mozilla::intl;
@@ -410,6 +411,8 @@ bool OSPreferences::GetDateTimeConnectorPattern(const nsACString& aLocale,
  */
 NS_IMETHODIMP
 OSPreferences::GetSystemLocales(nsTArray<nsCString>& aRetVal) {
+  // STEALTH-HOOK(fingerprint/locale-time/session-declaration): why here, StealthSessionPrefs.h
+  if (SessionSystemLocales(aRetVal)) return NS_OK;
   if (!mSystemLocales.IsEmpty()) {
     aRetVal = mSystemLocales.Clone();
     return NS_OK;
@@ -429,6 +432,8 @@ OSPreferences::GetSystemLocales(nsTArray<nsCString>& aRetVal) {
 
 NS_IMETHODIMP
 OSPreferences::GetSystemLocale(nsACString& aRetVal) {
+  // STEALTH-HOOK(fingerprint/locale-time/session-declaration): the same
+  if (SessionSystemLocale(aRetVal)) return NS_OK;
   if (!mSystemLocales.IsEmpty()) {
     aRetVal = mSystemLocales[0];
   } else {

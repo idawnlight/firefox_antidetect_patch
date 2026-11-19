@@ -220,6 +220,7 @@ bool CroppingWindowCapturerWin::ShouldUseScreenCapturer() {
     return false;
   }
 
+  // STEALTH-HOOK(platform/hidden-desktop)
   if (!window_capture_helper_.IsWindowOnInputDesktop(selected)) {
     return false;
   }

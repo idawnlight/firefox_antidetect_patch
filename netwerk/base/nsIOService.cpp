@@ -8,6 +8,7 @@
 #include "MainThreadUtils.h"
 #include "SerializedLoadContext.h"
 #include "StaticComponents.h"
+#include "StealthIPv6Literal.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 #include "SuspendableChannelWrapper.h"
 #include "WebTransportSessionProxy.h"
 #include "mozilla/AppShutdown.h"
@@ -285,6 +286,8 @@ static const char* gCallbackSecurityPrefs[] = {
 };
 
 nsresult nsIOService::Init() {
+  StealthApplyDeclaredNetwork();  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
+
   SSLTokensCache::Init();
 
   InitializeCaptivePortalService();

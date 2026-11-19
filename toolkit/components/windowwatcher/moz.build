@@ -30,6 +30,8 @@ UNIFIED_SOURCES += [
     "nsOpenWindowInfo.cpp",
     "nsWindowWatcher.cpp",
 ]
+UNIFIED_SOURCES += ["JugglerWindowSize.cpp"]  # STEALTH-HOOK(automation/window-size)
+UNIFIED_SOURCES += ["StealthWindowPlacement.cpp"]  # STEALTH-HOOK(fingerprint/screen-window/popup-position)
 
 FINAL_LIBRARY = "xul"
 # For nsJSUtils

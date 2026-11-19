@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "StealthDeclarationGate.h"
+#include "StealthTextQuality.h"
 #include "gfxContext.h"
 #include "gfxDWriteFontList.h"
 #include "gfxHarfBuzzShaper.h"
@@ -14,11 +14,9 @@
 #include "harfbuzz/hb.h"
 #include "mozilla/FontPropertyTypes.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DWriteSettings.h"
 #include "mozilla/gfx/Logging.h"
-#include "mozilla/gfx/StealthRefuse.h"
 #include "mozilla/gfx/gfxVars.h"
 
 using namespace mozilla;
@@ -36,21 +34,10 @@ using namespace mozilla::gfx;
 
 // Cleartype can be dynamically enabled/disabled, so we have to allow for
 // dynamically updating it.
-// Use the declared text quality whenever the engine is enabled.
 static BYTE GetSystemTextQuality() {
-  if (mozilla::gfx::StealthEngineActive()) {
-    const int32_t declared = StaticPrefs::zoom_stealth_text_system_quality();
-    if (declared == DEFAULT_QUALITY || declared == ANTIALIASED_QUALITY ||
-        declared == CLEARTYPE_QUALITY) {
-      return BYTE(declared);
-    }
-    mozilla::gfx::StealthRefuse(
-        "stealth: zoom.stealth.text.system_quality is %d, not one of 0 "
-        "(DEFAULT_QUALITY), 4 (ANTIALIASED_QUALITY), 5 (CLEARTYPE_QUALITY). "
-        "Engine rule 7: a finite-domain value lives only in invisible_core, "
-        "and a missing or malformed declaration refuses rather than asking "
-        "the host.",
-        int(declared));
+  // STEALTH-HOOK(fingerprint/fonts/metrics)
+  if (const Maybe<BYTE> declared = StealthDeclaredTextQuality()) {
+    return *declared;
   }
   BOOL font_smoothing;
   UINT smoothing_type;
@@ -81,7 +68,6 @@ static BYTE GetSystemTextQuality() {
 
 // "Retrieves a contrast value that is used in ClearType smoothing. Valid
 // contrast values are from 1000 to 2200. The default value is 1400."
-// GDI-classic contrast is used only by the platform GDI rendering path.
 static FLOAT GetSystemGDIGamma() {
   UINT value = 0;
   if (!SystemParametersInfo(SPI_GETFONTSMOOTHINGCONTRAST, 0, &value, 0) ||
@@ -216,15 +202,12 @@ void gfxDWriteFont::UpdateClearTypeVars() {
   int pixelGeometry = DWRITE_PIXEL_GEOMETRY_RGB;
   int renderingMode = DWRITE_RENDERING_MODE_DEFAULT;
 
-  // Use declared rendering values when the engine is enabled.
-  const bool stealthDeclared = mozilla::gfx::StealthEngineActive();
-
   // Override these from DWrite function if available.
   RefPtr<IDWriteRenderingParams> defaultRenderingParams;
-  HRESULT hr = stealthDeclared
-                   ? E_FAIL
-                   : Factory::GetDWriteFactory()->CreateRenderingParams(
-                         getter_AddRefs(defaultRenderingParams));
+  // STEALTH-HOOK(fingerprint/fonts/metrics)
+  const bool stealthDeclared = StealthTextQualityDeclared();
+  HRESULT hr =
+      StealthCreateRenderingParams(stealthDeclared, defaultRenderingParams);
   if (SUCCEEDED(hr) && defaultRenderingParams) {
     clearTypeLevel = defaultRenderingParams->GetClearTypeLevel();
 
@@ -257,7 +240,7 @@ void gfxDWriteFont::UpdateClearTypeVars() {
   // gfxWindowsPlatform::SetupClearTypeParams, but it seems odd because the
   // default params will still be the ClearType ones although we won't use the
   // anti-alias for ClearType because of GetSystemDefaultAAMode.
-  // Apply declared rendering parameters at every text quality.
+  // STEALTH-HOOK(fingerprint/fonts/metrics)
   if (stealthDeclared || gfxVars::SystemTextQuality() == CLEARTYPE_QUALITY) {
     int32_t prefInt = Preferences::GetInt(GFX_CLEARTYPE_PARAMS_LEVEL, -1);
     if (prefInt >= 0 && prefInt <= 100) {

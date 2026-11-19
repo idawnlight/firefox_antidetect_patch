@@ -7,6 +7,7 @@
 
 #include <functional>
 
+#include "mozilla/OriginAttributes.h"  // STEALTH-HOOK(network/doh)
 #include "mozilla/net/PProxyConfigLookupChild.h"
 
 class nsIProxyInfo;
@@ -20,7 +21,9 @@ class ProxyConfigLookupChild final : public PProxyConfigLookupChild {
 
   static bool Create(nsIURI* aURI, uint32_t aProxyResolveFlags,
                      bool aIsTRRServiceChannel,
-                     std::function<void(nsIProxyInfo*, nsresult)>&& aCallback);
+                     std::function<void(nsIProxyInfo*, nsresult)>&& aCallback,
+                     const Maybe<LoadInfoArgs>& aLoadInfo = Nothing(),  // STEALTH-HOOK(network/proxy-udp)
+                     const Maybe<OriginAttributes>& aOriginAttributes = Nothing());  // STEALTH-HOOK(network/doh)
 
   mozilla::ipc::IPCResult Recv__delete__(
       nsTArray<ProxyInfoCloneArgs>&& aProxyInfo, const nsresult& aResult);

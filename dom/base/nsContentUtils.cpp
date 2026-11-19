@@ -28,6 +28,8 @@
 #include "PLDHashTable.h"
 #include "ReferrerInfo.h"
 #include "ScopedNSSTypes.h"
+#include "StealthInputEventBirth.h"  // STEALTH-HOOK(fingerprint/input/event-birth)
+#include "StealthJugglerEventId.h"  // STEALTH-HOOK(automation/input)
 #include "ThirdPartyUtil.h"
 #include "Units.h"
 #include "chrome/common/ipc_message.h"
@@ -10428,17 +10430,6 @@ NS_IMPL_ISUPPORTS(SynthesizedEventCallback, nsISynthesizedEventCallback)
 
 }  // namespace
 
-/* static */
-TimeStamp nsContentUtils::InputEventBirth(double aLatencyMs) {
-  static TimeStamp sLastBorn;
-  TimeStamp born = TimeStamp::Now() - TimeDuration::FromMilliseconds(aLatencyMs);
-  if (!sLastBorn.IsNull() && born < sLastBorn) {
-    born = sLastBorn;
-  }
-  sLastBorn = born;
-  return born;
-}
-
 Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
     mozilla::PresShell* aPresShell, nsIWidget* aWidget, const nsAString& aType,
     LayoutDeviceIntPoint& aRefPoint,
@@ -10544,7 +10535,7 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
   mouseOrPointerEvent.mModifiers =
       GetWidgetModifiers(aMouseEventData.mModifiers);
   mouseOrPointerEvent.mButton = aMouseEventData.mButton;
-  mouseOrPointerEvent.mJugglerEventId = aMouseEventData.mJugglerEventId;
+  StealthSetJugglerId(mouseOrPointerEvent, aMouseEventData.mJugglerEventId);  // STEALTH-HOOK(automation/input)
   mouseOrPointerEvent.mButtons =
       aMouseEventData.mButtons.WasPassed()
           ? aMouseEventData.mButtons.Value()
@@ -10573,15 +10564,14 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
 
   mouseOrPointerEvent.mRefPoint = aRefPoint;
   mouseOrPointerEvent.mIgnoreRootScrollFrame = aOptions.mIgnoreRootScrollFrame;
-  if (aMouseEventData.mLatency > 0) {
-    mouseOrPointerEvent.mTimeStamp = InputEventBirth(aMouseEventData.mLatency);
-  }
   if (aMouseEventData.mMovementX.WasPassed()) {
     MOZ_ASSERT(aMouseEventData.mMovementY.WasPassed());
     mouseOrPointerEvent.mMovement.emplace(aMouseEventData.mMovementX.Value(),
                                           aMouseEventData.mMovementY.Value());
   }
 
+  // STEALTH-HOOK(fingerprint/input/event-birth)
+  StealthSetInputEventBirth(mouseOrPointerEvent, aMouseEventData.mLatency, aPresShell);
   nsEventStatus status = nsEventStatus_eIgnore;
   if (aOptions.mToWindow) {
     nsresult rv = aPresShell->HandleEvent(aPresShell->GetRootFrame(),
@@ -10595,6 +10585,7 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
     // targeted directly at a window and async dispatching is requested.
     mouseOrPointerEvent.mFlags.mIsAsyncSynthesizedForTests =
         aOptions.mIsDOMEventSynthesized;
+    StealthJugglerNotAsyncSynthesized(mouseOrPointerEvent);  // STEALTH-HOOK(automation/input)
     status = aWidget->DispatchInputEvent(&mouseOrPointerEvent).mContentStatus;
   } else {
     status = aWidget->DispatchEvent(&mouseOrPointerEvent);

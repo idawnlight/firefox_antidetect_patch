@@ -16,7 +16,7 @@
 #include "MediaInfo.h"
 #include "MediaRecorder.h"
 #include "PDMFactorySupport.h"
-#include "StealthMediaDeclaration.h"
+#include "StealthMediaDeclaration.h"  // STEALTH-HOOK(fingerprint/media/decode-declaration)
 #include "VPXDecoder.h"
 #include "VideoUtils.h"
 #include "WindowRenderer.h"
@@ -238,49 +238,6 @@ mozilla::LazyLogModule sMediaCapabilitiesLog("MediaCapabilities");
 namespace mozilla::dom {
 using mediacaps::IsValidMediaDecodingConfiguration;
 using mediacaps::IsValidMediaEncodingConfiguration;
-
-// AND the video codec declarations; audio-only configurations use normal queries.
-static bool StealthDeclaredDecodingInfoFor(
-    const MediaDecodingConfiguration& aConfiguration, bool& aSupported,
-    bool& aSmooth, bool& aPowerEfficient) {
-  if (!aConfiguration.mVideo.WasPassed()) {
-    return false;
-  }
-  Maybe<MediaContainerType> container =
-      MakeMediaContainerType(aConfiguration.mVideo.Value().mContentType);
-  if (!container) {
-    return false;
-  }
-  // Preserve Gecko container, codec-profile and level validation before lookup.
-  if (DecoderTraits::CanHandleContainerType(*container, nullptr) ==
-      CANPLAY_NO) {
-    return false;
-  }
-  const MediaCodecs& codecs = container->ExtendedType().Codecs();
-  if (codecs.IsEmpty()) {
-    return false;
-  }
-  bool supported = true, smooth = true, powerEfficient = true;
-  bool sawOne = false;
-  for (const auto& codec : codecs.Range()) {
-    bool s = false, m = false, p = false;
-    if (!StealthDeclaredDecodingInfo(container->Type().AsString(),
-                                     NS_ConvertUTF16toUTF8(codec), s, m, p)) {
-      return false;
-    }
-    sawOne = true;
-    supported &= s;
-    smooth &= m;
-    powerEfficient &= p;
-  }
-  if (!sawOne) {
-    return false;
-  }
-  aSupported = supported;
-  aSmooth = smooth;
-  aPowerEfficient = powerEfficient;
-  return true;
-}
 
 static gfx::IntSize ClampedIntSize(uint32_t aWidth, uint32_t aHeight) {
   return gfx::IntSize(
@@ -632,6 +589,7 @@ static uint32_t Vp8EncoderThreads(const uint32_t aPixels,
 }
 static bool IsSWEncodeSmooth(const CodecType aCodec,
                              const VideoConfiguration& aConfig) {
+  const auto GetNumberOfProcessors = StealthDeclaredNumberOfProcessors;  // STEALTH-HOOK(fingerprint/media/decode-declaration)
   // ratio = clip_duration / wall_time at 60fps: >1.0 means faster than
   // real-time. threads = libwebrtc thread count used during measurement. For
   // non-standard resolutions: rounds up to nearest standard bucket
@@ -1397,19 +1355,9 @@ void MediaCapabilities::CreateNonWebRTCDecodingInfo(
                holder->Complete();
                nsIGlobalObject* global = holder->GetParentObject();
                NS_ENSURE_TRUE_VOID(global);
-               // Apply the declared decodingInfo result to both async success and failure.
-               {
-                 bool dSupported = false, dSmooth = false, dPower = false;
-                 if (StealthDeclaredDecodingInfoFor(aConfiguration, dSupported,
-                                                    dSmooth, dPower)) {
-                   MediaCapabilitiesDecodingInfo declaredInfo;
-                   declaredInfo.mSupported = dSupported;
-                   declaredInfo.mSmooth = dSmooth;
-                   declaredInfo.mPowerEfficient = dPower;
-                   LOG("{} -> DECLARED {}", aConfiguration, declaredInfo);
-                   promise->MaybeResolve(std::move(declaredInfo));
-                   return;
-                 }
+               // STEALTH-HOOK(fingerprint/media/decode-declaration)
+               if (auto d = StealthDeclaredDecodingInfoFor(aConfiguration)) {
+                 return promise->MaybeResolve(std::move(*d));
                }
                if (aValue.IsReject()) {
                  MediaCapabilitiesDecodingInfo info;

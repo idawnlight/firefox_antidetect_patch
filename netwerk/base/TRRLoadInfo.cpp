@@ -26,6 +26,7 @@ TRRLoadInfo::TRRLoadInfo(nsIURI* aResultPrincipalURI,
 already_AddRefed<nsILoadInfo> TRRLoadInfo::Clone() const {
   nsCOMPtr<nsILoadInfo> loadInfo =
       new TRRLoadInfo(mResultPrincipalURI, mInternalContentPolicyType);
+  static_cast<TRRLoadInfo*>(loadInfo.get())->mOriginAttributes = mOriginAttributes;  // STEALTH-HOOK(network/doh)
 
   return loadInfo.forget();
 }
@@ -302,7 +303,8 @@ nsresult TRRLoadInfo::GetOriginAttributes(
 
 nsresult TRRLoadInfo::SetOriginAttributes(
     const mozilla::OriginAttributes& aOriginAttributes) {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  mOriginAttributes = aOriginAttributes;  // STEALTH-HOOK(network/doh)
+  return NS_OK;  // STEALTH-HOOK(network/doh)
 }
 
 NS_IMETHODIMP

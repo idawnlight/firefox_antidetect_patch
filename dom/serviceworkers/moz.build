@@ -83,6 +83,7 @@ UNIFIED_SOURCES += [
     "ServiceWorkerUpdateJob.cpp",
     "ServiceWorkerUtils.cpp",
 ]
+UNIFIED_SOURCES += ["StealthWorkerDeclaration.cpp"]  # STEALTH-HOOK(fingerprint/locale-time/workers)
 
 IPDL_SOURCES += [
     "IPCNavigationPreloadState.ipdlh",

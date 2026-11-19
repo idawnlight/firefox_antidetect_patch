@@ -492,7 +492,7 @@ uint32_t PreferredSampleRate(bool aShouldResistFingerprinting) {
   if (sCubebForcedSampleRate) {
     return sCubebForcedSampleRate;
   }
-  // Stealth: sampleRate from pref set by Python at launch
+  // STEALTH-HOOK(fingerprint/audio/sample-rate)
   {
     int32_t rate = mozilla::StaticPrefs::zoom_stealth_audio_sample_rate();
     if (rate > 0) return (uint32_t)rate;

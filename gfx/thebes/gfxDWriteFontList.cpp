@@ -6,7 +6,7 @@
 
 #include "../2d/AutoHelpersWin.h"
 #include "SharedFontList-impl.h"
-#include "StealthBundleFontList.h"
+#include "StealthBundleFontList.h"  // STEALTH-HOOK(fingerprint/fonts/font-list)
 #include "gfxDWriteCommon.h"
 #include "gfxDWriteFonts.h"
 #include "gfxRect.h"
@@ -537,6 +537,7 @@ nsresult gfxDWriteFontEntry::ReadCMAP(FontInfoData* aFontInfoData) {
     }
     gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
     fontlist::FontList* sharedFontList = pfl->SharedFontList();
+    // STEALTH-HOOK(fingerprint/fonts/font-list)
     if (ShouldPublishCharacterMap()) {
       mShmemFace->SetCharacterMap(sharedFontList, charmap, mShmemFamily);
       if (TrySetShmemCharacterMap()) {
@@ -662,25 +663,6 @@ void gfxDWriteFontEntry::GetVariationInstancesInternal(
 
 #if MOZ_FONTATIONS
 void gfxDWriteFontEntry::InitSkrifaFontFace() {
-  auto* pfl = gfxPlatformFontList::PlatformFontList(false);
-  if (mShmemFace && pfl && pfl->StealthBundleOnly()) {
-    auto* list = pfl->SharedFontList();
-    if (!list) {
-      return;
-    }
-    const nsCString file(mShmemFace->mDescriptor.AsString(list));
-    RefPtr<StealthBundleFontList::FileBlob> blob =
-        StealthBundleFontList::Get()->GetFaceBlob(file);
-    if (blob) {
-      if (auto* skf = skrifa_font_new_from_index(
-              blob->Data(), blob->Length(), mShmemFace->mIndex)) {
-        // The bundle cache outlives the Skrifa reference.
-        SetSkrifaFont(skf);
-      }
-    }
-    return;
-  }
-
   RefPtr<IDWriteFontFace> face;
   {
     AutoReadLock lock(mLock);
@@ -804,9 +786,10 @@ gfxFont* gfxDWriteFontEntry::CreateFontInstance(
     // Only pass in the underlying IDWriteFont if the unscaled font doesn't
     // reflect a data font. This signals whether or not we can safely query
     // a descriptor to represent the font for various transport use-cases.
-    // Carry the bundle path into the unscaled font for WebRender descriptors.
-    unscaledFont = new UnscaledFontDWrite(
-        fontFace, !mIsDataUserFont ? mFont : nullptr, mBundleFilePath);
+    // STEALTH-HOOK(fingerprint/fonts/font-list)
+    unscaledFont =
+        new UnscaledFontDWrite(fontFace, !mIsDataUserFont ? mFont : nullptr,
+                               mBundleFilePath);
     if (useBoldSim) {
       mUnscaledFontBold = unscaledFont;
     } else {
@@ -855,6 +838,7 @@ nsresult gfxDWriteFontEntry::CreateFontFace(
         hr = mFont->CreateFontFace(getter_AddRefs(mFontFace));
       } else if (mFontFile) {
         IDWriteFontFile* fontFile = mFontFile.get();
+        // STEALTH-HOOK(fingerprint/fonts/font-list)
         hr = Factory::GetDWriteFactory()->CreateFontFace(
             mFaceType, 1, &fontFile, mBundleFaceIndex,
             DWRITE_FONT_SIMULATIONS_NONE, getter_AddRefs(mFontFace));
@@ -1150,51 +1134,8 @@ static void GetPostScriptNameFromNameTable(IDWriteFontFace* aFace,
 
 already_AddRefed<gfxFontEntry> gfxDWriteFontList::CreateFontEntry(
     fontlist::Face* aFace, const fontlist::Family* aFamily) {
-  if (mStealthBundleOnly) {
-    // Create the bundle collection face directly from its file and face index.
-    auto* bundle =
-        StealthBundleFontList::Get();  // never null; it crashes first
-    const nsCString file(aFace->mDescriptor.AsString(SharedFontList()));
-    // Borrow bytes from the process-lifetime bundle cache.
-    RefPtr<StealthBundleFontList::FileBlob> blob = bundle->GetFaceBlob(file);
-    if (!blob || !blob->Length()) {
-      return nullptr;
-    }
-    RefPtr<gfxDWriteFontFileStream> stream;
-    RefPtr<IDWriteFontFile> fontFile;
-    HRESULT hr = gfxDWriteFontFileLoader::CreateBorrowedFontFile(
-        blob->Data(), blob->Length(), getter_AddRefs(fontFile),
-        getter_AddRefs(stream));
-    if (FAILED(hr)) {
-      return nullptr;
-    }
-    nsAutoString uniqueName;
-    if (NS_FAILED(gfxFontUtils::MakeUniqueUserFontName(uniqueName))) {
-      return nullptr;
-    }
-    auto* entry = new gfxDWriteFontEntry(NS_ConvertUTF16toUTF8(uniqueName),
-                                         fontFile, stream, aFace->mWeight,
-                                         aFace->mWidth, aFace->mStyle);
-    entry->mBundleFaceIndex = aFace->mIndex;
-    // Use the same bundle path for the platform face and WebRender descriptor.
-    nsAutoCString percorso;
-    if (StealthBundleFontList::GetFacePath(file, percorso)) {
-      // char16ptr_t converts to the native Windows wchar_t pointer.
-      entry->mBundleFilePath =
-          std::wstring(NS_ConvertUTF8toUTF16(percorso).get());
-    }
-    BOOL supported;
-    DWRITE_FONT_FILE_TYPE fileType;
-    UINT32 numFaces;
-    if (FAILED(fontFile->Analyze(&supported, &fileType, &entry->mFaceType,
-                                 &numFaces)) ||
-        !supported || aFace->mIndex >= numFaces) {
-      delete entry;
-      return nullptr;
-    }
-    // Initialize the shared-list face so cmap and manifest metrics use this entry.
-    entry->InitializeFrom(aFace, aFamily);
-    return RefPtr<gfxFontEntry>(entry).forget();
+  if (mStealthBundleOnly) {  // STEALTH-HOOK(fingerprint/fonts/font-list)
+    return CreateStealthBundleFontEntry(aFace, aFamily);
   }
   IDWriteFontCollection* collection =
 #ifdef MOZ_BUNDLED_FONTS
@@ -1462,7 +1403,7 @@ void gfxDWriteFontList::AppendFamiliesFromCollection(
 void gfxDWriteFontList::GetFacesInitDataForFamily(
     const fontlist::Family* aFamily, nsTArray<fontlist::Face::InitData>& aFaces,
     bool aLoadCmaps) const {
-  if (mStealthBundleOnly) {
+  if (mStealthBundleOnly) {  // STEALTH-HOOK(fingerprint/fonts/font-list)
     StealthBundleFontList::Get()->GetFaces(
         aFamily->DisplayName().AsString(SharedFontList()), aFaces);
     return;
@@ -1553,7 +1494,7 @@ bool gfxDWriteFontList::ReadFaceNames(const fontlist::Family* aFamily,
                                       const fontlist::Face* aFace,
                                       nsCString& aPSName,
                                       nsCString& aFullName) {
-  if (mStealthBundleOnly) {
+  if (mStealthBundleOnly) {  // STEALTH-HOOK(fingerprint/fonts/font-list)
     return gfxPlatformFontList::ReadFaceNames(aFamily, aFace, aPSName,
                                               aFullName);
   }
@@ -1635,7 +1576,7 @@ bool gfxDWriteFontList::ReadFaceNames(const fontlist::Family* aFamily,
 
 void gfxDWriteFontList::ReadFaceNamesForFamily(
     fontlist::Family* aFamily, bool aNeedFullnamePostscriptNames) {
-  if (mStealthBundleOnly) {
+  if (mStealthBundleOnly) {  // STEALTH-HOOK(fingerprint/fonts/font-list)
     gfxPlatformFontList::ReadFaceNamesForFamily(aFamily,
                                                 aNeedFullnamePostscriptNames);
     return;
@@ -1689,7 +1630,39 @@ void gfxDWriteFontList::ReadFaceNamesForFamily(
         continue;
       }
 
-      RecordFaceNamesFromTable(aFamily, i, key, familyName, data, size);
+      AutoTArray<nsCString, 4> otherFamilyNames;
+      gfxFontUtils::ReadOtherFamilyNamesForFace(familyName, data, size,
+                                                otherFamilyNames, false);
+      for (const auto& alias : otherFamilyNames) {
+        nsAutoCString key(alias);
+        ToLowerCase(key);
+        auto aliasData = mAliasTable.GetOrInsertNew(key);
+        aliasData->InitFromFamily(aFamily, familyName);
+        aliasData->mFaces.AppendElement(facePtrs[i]);
+      }
+
+      nsAutoCString psname, fullname;
+      // Bug 1854090: don't load PSname if the family name ends with ".tmp",
+      // as some PDF-related software appears to pollute the font collection
+      // with spurious re-encoded versions of standard fonts like Arial, fails
+      // to alter the PSname, and thus can result in garbled rendering because
+      // the wrong resource may be found via src:local(...).
+      if (!StringEndsWith(key, ".tmp"_ns)) {
+        if (NS_SUCCEEDED(gfxFontUtils::ReadCanonicalName(
+                data, size, gfxFontUtils::NAME_ID_POSTSCRIPT, psname))) {
+          ToLowerCase(psname);
+          MaybeAddToLocalNameTable(psname,
+                                   fontlist::LocalFaceRec::InitData(key, i));
+        }
+      }
+      if (NS_SUCCEEDED(gfxFontUtils::ReadCanonicalName(
+              data, size, gfxFontUtils::NAME_ID_FULL, fullname))) {
+        ToLowerCase(fullname);
+        if (fullname != psname) {
+          MaybeAddToLocalNameTable(fullname,
+                                   fontlist::LocalFaceRec::InitData(key, i));
+        }
+      }
 
       dwFontFace->ReleaseFontTable(context);
     }
@@ -1746,21 +1719,20 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
       forceClassicFams.Sort();
     }
     nsTArray<fontlist::Family::InitData> families;
-    if (mStealthBundleOnly) {
-      // Build families from the manifest while retaining platform rendering interfaces.
+    if (mStealthBundleOnly) {  // STEALTH-HOOK(fingerprint/fonts/font-list)
       families = StealthBundleFontList::Get()->Families().Clone();
     } else {
       AppendFamiliesFromCollection(mSystemFonts, families, &forceClassicFams);
-#ifdef MOZ_BUNDLED_FONTS
-      if (mBundledFonts) {
-        TimeStamp start2 = TimeStamp::Now();
-        AppendFamiliesFromCollection(mBundledFonts, families);
-        TimeStamp end2 = TimeStamp::Now();
-        glean::fontlist::bundledfonts_activate.AccumulateRawDuration(
-            (end1 - start1) + (end2 - start2));
-      }
-#endif
     }
+#ifdef MOZ_BUNDLED_FONTS
+    if (mBundledFonts && !mStealthBundleOnly) {
+      TimeStamp start2 = TimeStamp::Now();
+      AppendFamiliesFromCollection(mBundledFonts, families);
+      TimeStamp end2 = TimeStamp::Now();
+      glean::fontlist::bundledfonts_activate.AccumulateRawDuration(
+          (end1 - start1) + (end2 - start2));
+    }
+#endif
     SharedFontList()->SetFamilyNames(families);
     GetPrefsAndStartLoader();
   }
@@ -1769,10 +1741,8 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
     return;
   }
 
-  // Use manifest aliases across platforms instead of host registry substitutes.
-  auto* stealthBundle =
-      mStealthBundleOnly ? StealthBundleFontList::Get() : nullptr;
-  if (!stealthBundle || !stealthBundle->HasAliases()) {
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
+  if (StealthBundleFontList::UsesHostSubstitutes(mStealthBundleOnly)) {
     GetDirectWriteSubstitutes();
     GetFontSubstitutes();
   }
@@ -1827,9 +1797,11 @@ nsresult gfxDWriteFontList::InitFontListForPlatform() {
 
   const uint32_t kBundledCount = mFontFamilies.Count();
 
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
   if (!mStealthBundleOnly) {
     GetFontsFromCollection(mSystemFonts);
   }
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
   if (!mStealthBundleOnly && mFontFamilies.Count() == kBundledCount) {
     // If no fonts are found, something is out of whack, so bail.
     NS_ERROR("no fonts found in the system fontlist -- holy crap batman!");
@@ -1841,12 +1813,8 @@ nsresult gfxDWriteFontList::InitFontListForPlatform() {
   QueryPerformanceCounter(&t3);  // iterate over system fonts
 
   mOtherFamilyNamesInitialized = true;
-  // STEALTH: see the note at the shared-list call site above - under
-  // bundle-only with a v3 manifest the aliases are ours, not the host's.
-  auto* stealthBundle2 =
-      mStealthBundleOnly ? StealthBundleFontList::Get() : nullptr;
-  const bool stealthAliases = stealthBundle2 && stealthBundle2->HasAliases();
-  if (!stealthAliases) {
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
+  if (StealthBundleFontList::UsesHostSubstitutes(mStealthBundleOnly)) {
     GetFontSubstitutes();
   }
 
@@ -1855,7 +1823,8 @@ nsresult gfxDWriteFontList::InitFontListForPlatform() {
   // are frequently specified in shoddy CSS, without appropriate fallbacks.
   // By mapping these to TrueType equivalents, we provide better consistency
   // with both pre-DW systems and with IE9, which appears to do the same.
-  if (!stealthAliases) {
+  // STEALTH-HOOK(fingerprint/fonts/font-list)
+  if (StealthBundleFontList::UsesHostSubstitutes(mStealthBundleOnly)) {
     GetDirectWriteSubstitutes();
   }
 
@@ -2786,6 +2755,10 @@ BundledFontLoader::CreateEnumeratorFromKey(
 
 already_AddRefed<IDWriteFontCollection>
 gfxDWriteFontList::CreateBundledFontsCollection(IDWriteFactory* aFactory) {
+  if (StealthBundleFontList::SkipsPlatformBundledCollection(  // STEALTH-HOOK(fingerprint/fonts/font-list)
+          SharedFontList() != nullptr, mStealthBundleOnly, XRE_IsParentProcess())) {
+    return nullptr;
+  }
   nsCOMPtr<nsIFile> localDir;
   nsresult rv = NS_GetSpecialDirectory(NS_GRE_DIR, getter_AddRefs(localDir));
   if (NS_FAILED(rv)) {

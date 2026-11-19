@@ -6,8 +6,8 @@
 #define MOZILLA_GFX_DRAWTARGETRECORDING_H_
 
 #include "2D.h"
-#include "DrawEventRecorder.h"
 #include "StealthCanvasProjection.h"
+#include "DrawEventRecorder.h"
 
 class nsICanvasRenderingContextInternal;
 
@@ -429,11 +429,13 @@ class DrawTargetRecording final : public DrawTarget {
       const IntSize& aSize, SurfaceFormat aFormat);
 
  public:
+  // STEALTH-HOOK(fingerprint/canvas/noise-projection)
   already_AddRefed<SourceSurface> StealthProjectedSurface(
       SourceSurface* aSurface, bool aPremultiplied,
       const StealthCanvasNoise& aNoise);
 
  private:
+
   friend class ::nsICanvasRenderingContextInternal;
 
   already_AddRefed<SourceSurface> SnapshotExternalCanvas(

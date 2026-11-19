@@ -29,6 +29,7 @@ use nsstring::{nsACString, nsCString};
 use crate::error::GPUError;
 
 type RawString = *const std::os::raw::c_char;
+pub mod stealth_external_texture; // STEALTH-HOOK(fingerprint/webgpu/external-texture-vulkan)
 
 fn cow_label(raw: &RawString) -> Option<Cow<'_, str>> {
     if raw.is_null() {

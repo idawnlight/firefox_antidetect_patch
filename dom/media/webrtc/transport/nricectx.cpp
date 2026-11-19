@@ -44,6 +44,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ScopedNSSTypes.h"
 #include "logging.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/RandomNum.h"  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 #include "nr_socket_proxy_config.h"
 #include "nsCOMPtr.h"
 #include "nsError.h"
@@ -272,7 +273,8 @@ NrIceCtx::NrIceCtx(const std::string& name)
       trickle_(true),
       config_(),
       nat_(nullptr),
-      proxy_config_(nullptr) {}
+      proxy_config_(nullptr),
+      host_ports_(mozilla::RandomUint64OrDie()) {}  // STEALTH-HOOK(fingerprint/webrtc/declared-network)
 
 /* static */
 RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& aName) {
@@ -1217,7 +1219,25 @@ int nr_socket_local_create(void* obj, nr_transport_addr* addr,
     config = static_cast<NrIceCtx*>(obj)->GetProxyConfig();
   }
 
-  r = NrSocketBase::CreateSocket(addr, &sock, config);
+  // STEALTH-HOOK(fingerprint/webrtc/declared-network): a host UDP socket of a declared address takes the next port
+  // of its connection (R3); a busy one is skipped (R_ALREADY from NrSocket::create), as the kernel skips it.
+  if (obj && addr->protocol == IPPROTO_UDP && !nr_stealth_addr_is_wildcard_ip(addr) &&
+      !nr_transport_addr_is_loopback(addr)) {
+    nr_transport_addr chosen;
+    r = R_ALREADY;
+    bool internal_error = false;
+    static_cast<NrIceCtx*>(obj)->TakeHostPort([&](uint16_t port) {
+      if (nr_transport_addr_copy(&chosen, addr) || nr_transport_addr_set_port(&chosen, port)) {
+        internal_error = true;
+        return true;
+      }
+      r = NrSocketBase::CreateSocket(&chosen, &sock, config);
+      return r != R_ALREADY;
+    });
+    if (internal_error) ABORT(R_INTERNAL);
+  } else {
+    r = NrSocketBase::CreateSocket(addr, &sock, config);
+  }
   if (r) {
     ABORT(r);
   }

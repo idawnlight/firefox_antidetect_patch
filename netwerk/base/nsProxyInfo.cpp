@@ -183,6 +183,11 @@ bool nsProxyInfo::IsSOCKS() {
 
 bool nsProxyInfo::IsHttp3Proxy() { return mType == kProxyType_MASQUE; }
 
+// STEALTH-HOOK(network/proxy-udp)
+bool nsProxyInfo::IsSOCKS5() {
+  return mType == kProxyType_SOCKS || mType == kProxyType_SOCKS5;
+}
+
 /* static */
 void nsProxyInfo::SerializeProxyInfo(nsProxyInfo* aProxyInfo,
                                      nsTArray<ProxyInfoCloneArgs>& aResult) {

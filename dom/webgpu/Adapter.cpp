@@ -11,6 +11,7 @@
 #include "Instance.h"
 #include "SupportedFeatures.h"
 #include "SupportedLimits.h"
+#include "StealthWebGPUDeclaration.h"  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
 #include "ipc/WebGPUChild.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/ErrorResult.h"
@@ -72,6 +73,10 @@ uint32_t AdapterInfo::SubgroupMaxSize() const {
 }
 
 bool AdapterInfo::IsFallbackAdapter() const {
+  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
+  if (const auto declared = StealthWebGPUDeclaredIsFallback(mParent.get())) {
+    return *declared;
+  }
   if (GetParentObject()->ShouldResistFingerprinting(
           RFPTarget::WebGPUIsFallbackAdapter)) {
     // Always report hardware support for WebGPU.
@@ -255,6 +260,8 @@ struct FeatureImplementationStatus {
   }
 };
 
+static std::string_view ToJsKey(const Limit limit);  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
+
 Adapter::Adapter(Instance* const aParent, WebGPUChild* const aChild,
                  const std::shared_ptr<ffi::WGPUAdapterInformation>& aInfo)
     : ObjectBase(aChild, aInfo->id, ffi::wgpu_client_drop_adapter),
@@ -327,6 +334,9 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aChild,
       // feature.
     }
   }
+  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
+  StealthWebGPUDeclareAdapter(this, aParent, aInfo->id, mFeatures,
+                              *mLimits->mFfi, StealthAdaptLimitKey<ToJsKey>);
   // TODO: Once we implement compat mode (see
   // <https://bugzilla.mozilla.org/show_bug.cgi?id=1905951>), do not report this
   // unconditionally.
@@ -630,6 +640,7 @@ already_AddRefed<dom::Promise> Adapter::RequestDevice(
     ffiDesc.required_features = featureBits;
     ffiDesc.required_limits = deviceLimits;
 
+    StealthWebGPUClampToReal(ffiDesc, *mInfoInner, StealthAdaptLimitKey<ToJsKey>);  // STEALTH-HOOK(fingerprint/webgpu/adapter-declaration)
     ffi::WGPUDeviceQueueId ids =
         ffi::wgpu_client_request_device(GetClient(), GetId(), &ffiDesc);
 

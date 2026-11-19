@@ -11,6 +11,7 @@
 #include "NSSErrorsService.h"
 #include "NetworkDataCountLayer.h"
 #include "QuicSocketControl.h"
+#include "StealthIPv6Literal.h"  // STEALTH-HOOK(network/ipv6-literal)
 #include "mozilla/ProfilerBandwidthCounter.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/SyncRunnable.h"
@@ -1677,7 +1678,7 @@ nsresult nsSocketTransport::InitiateSocket() {
   }
 #endif
 
-  status = PR_Connect(fd, &prAddr, NS_SOCKET_CONNECT_TIMEOUT);
+  status = StealthConnect(fd, mNetAddr, mProxyTransparent && !mProxyHost.IsEmpty() ? StealthConnectTarget::kBehindSocksProxy : StealthConnectTarget::kDirect, &prAddr, NS_SOCKET_CONNECT_TIMEOUT);  // STEALTH-HOOK(network/ipv6-literal)
   PRErrorCode code = PR_GetError();
   if (status == PR_SUCCESS) {
     PR_SetFDInheritable(fd, false);

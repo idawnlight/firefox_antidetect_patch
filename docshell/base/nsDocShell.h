@@ -1399,6 +1399,7 @@ class nsDocShell final : public nsDocLoader,
 
   bool mIsExecutingOnLoadHandler : 1;
 
+  // STEALTH-HOOK(automation/docshell-attrs)
   bool mFileInputInterceptionEnabled : 1;
   bool mBypassCSPEnabled : 1;
 

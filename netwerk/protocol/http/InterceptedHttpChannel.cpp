@@ -739,34 +739,13 @@ NS_IMPL_ISUPPORTS(ResetInterceptionHeaderVisitor, nsIHttpHeaderVisitor)
 }  // anonymous namespace
 
 NS_IMETHODIMP
-InterceptedHttpChannel::InterceptAfterServiceWorkerResets() {
-  mInterceptAfterServiceWorkerResets = true;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-InterceptedHttpChannel::ResetInterceptionWithURI(nsIURI* aURI) {
-  if (aURI) {
-    mURI = aURI;
-    return ResetInterception(true);
-  }
-  return ResetInterception(mServiceWorkerResetBypass);
-}
-
-NS_IMETHODIMP
 InterceptedHttpChannel::ResetInterception(bool aBypass) {
   INTERCEPTED_LOG(("InterceptedHttpChannel::ResetInterception [%p] bypass: %s",
                    this, aBypass ? "true" : "false"));
+  // STEALTH-HOOK(automation/network-interception)
   if (mInterceptAfterServiceWorkerResets) {
-    mInterceptAfterServiceWorkerResets = false;
-    mServiceWorkerResetBypass = aBypass;
-    nsCOMPtr<nsINetworkInterceptController> controller;
-    GetCallback(controller);
-    if (!controller)
-      return NS_ERROR_DOM_INVALID_STATE_ERR;
-    return controller->ChannelIntercepted(this);
+    return StealthInterceptAgain(aBypass);
   }
-
   if (mCanceled) {
     return mStatus;
   }
@@ -1191,12 +1170,11 @@ InterceptedHttpChannel::OnStartRequest(nsIRequest* aRequest) {
   }
   mHasProgressSink = !!mProgressSink;
 
-  if (!mLoadInfo->GetJugglerLoadIdentifier()) {
-    MOZ_ASSERT_IF(!mLoadInfo->GetServiceWorkerTaintingSynthesized(),
-                  mLoadInfo->GetLoadingPrincipal());
-    MOZ_DIAGNOSTIC_ASSERT(mLoadInfo->GetServiceWorkerTaintingSynthesized() ||
-                          mLoadInfo->GetLoadingPrincipal()->IsSystemPrincipal());
-  }
+  MOZ_ASSERT_IF(!mLoadInfo->GetServiceWorkerTaintingSynthesized(),
+                mLoadInfo->GetLoadingPrincipal());
+  // No need to do ORB checks if these conditions hold.
+  MOZ_DIAGNOSTIC_ASSERT(mLoadInfo->GetServiceWorkerTaintingSynthesized() ||
+                        mLoadInfo->GetLoadingPrincipal()->IsSystemPrincipal());
 
   if (mPump && mLoadFlags & LOAD_CALL_CONTENT_SNIFFERS) {
     RefPtr<nsInputStreamPump> pump(mPump);

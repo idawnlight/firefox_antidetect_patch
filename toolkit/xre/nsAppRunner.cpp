@@ -6237,6 +6237,10 @@ nsresult XREMain::XRE_mainRun() {
     // ready in time for early consumers, such as the component loader.
     mDirProvider.InitializeUserPrefs();
 
+    // STEALTH-HOOK(network/proxy-udp): the SOCKS5 UDP layer lives in the socket process; locked, no caller moves the ICE out.
+    (void)Preferences::Lock("network.process.enabled");
+    (void)Preferences::Lock("media.peerconnection.mtransport_process");
+
     // Now that preferences are loaded the profile service may be able to
     // determine the correct startup profile.
     mProfileSvc->UpdateCurrentProfile();

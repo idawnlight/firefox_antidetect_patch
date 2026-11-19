@@ -71,6 +71,8 @@ pageTypes.PointerLanding = {
   on: t.String,
 };
 
+// The element a pointer event is meant for, so that the dispatch can answer
+// whether the event landed on it. [B230]
 pageTypes.LandingTarget = {
   frameId: t.String,
   objectId: t.String,
@@ -91,6 +93,13 @@ pageTypes.Size = {
 pageTypes.Viewport = {
   viewportSize: pageTypes.Size,
   deviceScaleFactor: t.Optional(t.Number),
+  // STEALTHFOX: Playwright 1.61+ sends isMobile and screenSize on
+  // Browser.setDefaultViewport (Firefox 151 Juggler). The strict checkScheme
+  // validator rejects any undeclared field, so declare both to stay
+  // forward-compatible. Both are accepted and ignored: setDefaultViewport reads
+  // only viewportSize + deviceScaleFactor, we are always desktop, and the screen
+  // dimensions come from the fingerprint prefs - letting the client override them
+  // would break the seed/screen consistency the profile guarantees.
   isMobile: t.Optional(t.Boolean),
   screenSize: t.Optional(t.Nullable(pageTypes.Size)),
 };
@@ -121,6 +130,10 @@ pageTypes.Clip = {
 pageTypes.InitScript = {
   script: t.String,
   worldName: t.Optional(t.String),
+  // STEALTHFOX [B322]: what kind of world `worldName` is, declared by the
+  // client: 'isolated' (the default, the machinery's world) or 'caller' (where
+  // the caller's code runs, through hybrid Xrays). content/FrameTree.js,
+  // _createGlobal, says what each one is.
   worldKind: t.Optional(t.Enum(['isolated', 'caller'])),
 };
 
@@ -272,8 +285,11 @@ const Browser = {
         port: t.Number,
         username: t.Optional(t.String),
         password: t.Optional(t.String),
+        // Of a SOCKS5 proxy: whether its UDP was measured coherent with its TCP exit. Absent is 'no'.
+        udp: t.Optional(t.Enum(['coherent', 'no', 'unmeasured'])),
       },
     },
+    'setNoBrowserProxy': {},
     'setContextProxy': {
       params: {
         browserContextId: t.Optional(t.String),
@@ -283,6 +299,7 @@ const Browser = {
         port: t.Number,
         username: t.Optional(t.String),
         password: t.Optional(t.String),
+        udp: t.Optional(t.Enum(['coherent', 'no', 'unmeasured'])),
       },
     },
     'setHTTPCredentials': {
@@ -547,6 +564,11 @@ const Network = {
         base64body: t.Optional(t.String),  // base64-encoded
       },
     },
+    // Stealthfox 2026-08-30: RIMESSO. Era stato tolto il 2026-08-24 portando
+    // NetworkObserver all'osso, e la conseguenza l'ha segnalata un utente:
+    // response.text() e response.body() sono una delle tre fonti - URL, header,
+    // corpo - con cui si riconosce chi protegge un sito, e senza il corpo ne
+    // restano due. Toglieva anche i corpi dai trace e dagli HAR, in silenzio.
     'getResponseBody': {
       params: {
         requestId: t.String,
@@ -790,6 +812,9 @@ const Page = {
     'setViewportSize': {
       params: {
         viewportSize: t.Nullable(pageTypes.Size),
+        // STEALTHFOX: same 1.61 drift as pageTypes.Viewport, on the per-page path
+        // (page.set_viewport_size). Declared and ignored - the handler reads only
+        // viewportSize, and screen dimensions stay owned by the fingerprint prefs.
         screenSize: t.Optional(t.Nullable(pageTypes.Size)),
         isMobile: t.Optional(t.Boolean),
       },
@@ -848,6 +873,15 @@ const Page = {
     'setInitScripts': {
       params: {
         scripts: t.Array(pageTypes.InitScript)
+      }
+    },
+    // Stealthfox: the same as Browser.addBinding, for this page only (a page's own exposed function). The page keeps it
+    // for the processes its frames move to, as it keeps its init scripts.
+    'addBinding': {
+      params: {
+        worldName: t.Optional(t.String),
+        name: t.String,
+        script: t.String,
       }
     },
     'navigate': {
@@ -910,6 +944,24 @@ const Page = {
         quads: t.Array(pageTypes.DOMQuad),
       },
     },
+    // Stealthfox [F6]: where the viewport of a frame starts, in the CSS pixels of the main document (the viewport
+    // of the top as origin). window.mozInnerScreenX/Y say it only inside one process: a frame in another process
+    // has its own widget, which sits at the origin of the window like the top's, so the difference of the two
+    // origins is zero for it and a point of the main document would be asked of it as it is.
+    'getFrameOrigin': {
+      params: {
+        frameId: t.String,
+      },
+      returns: {
+        x: t.Number,
+        y: t.Number,
+        // Stealthfox: where one CSS pixel along the frame's x axis, and along its y axis, goes in the main
+        // document. (1,0) and (0,1) when the frame is only shifted; different when a CSS transform scales,
+        // skews or rotates the <iframe> or an element above it.
+        ex: t.Optional(pageTypes.DOMPoint),
+        ey: t.Optional(pageTypes.DOMPoint),
+      },
+    },
     'dispatchKeyEvent': {
       params: {
         type: t.String,
@@ -919,7 +971,17 @@ const Page = {
         code: t.String,
         repeat: t.Boolean,
         text: t.Optional(t.String),
+        // Stealthfox [B299]: milliseconds between the event's birth and its
+        // dispatch, as an input event is born in the system before a page's
+        // handler runs. Absent is born at the dispatch.
         latency: t.Optional(t.Number),
+        // Stealthfox [B299] [B301]: the stroke this event belongs to (one type(), one mouse
+        // path, one click) and the offset, in ms, of this event from the start of the stroke
+        // in the CLIENT's own plan. With both the engine is told where the plan puts the
+        // event, not only how late it was sent: the event is born at the plan's instant
+        // however late it is delivered. Offsets only: there is no clock shared with the client.
+        stroke: t.Optional(t.String),
+        at: t.Optional(t.Number),
       }
     },
     'dispatchTapEvent': {
@@ -941,8 +1003,22 @@ const Page = {
         // The element the event is meant for: the answer then says whether the
         // event LANDED on it, judged when the page handled it.
         landsOn: t.Optional(pageTypes.LandingTarget),
+        // Stealthfox [B299]: as for dispatchKeyEvent.
         latency: t.Optional(t.Number),
+        // Stealthfox [B299] [B301]: the stroke this event belongs to (one type(), one mouse
+        // path, one click) and the offset, in ms, of this event from the start of the stroke
+        // in the CLIENT's own plan. With both the engine is told where the plan puts the
+        // event, not only how late it was sent: the event is born at the plan's instant
+        // however late it is delivered. Offsets only: there is no clock shared with the client.
+        stroke: t.Optional(t.String),
+        at: t.Optional(t.Number),
       },
+      // The command answers once the page has HANDLED the event (or a dialog
+      // it opened is showing), so a caller's next command runs after it.
+      // `landing` comes with `landsOn`, and is absent only when a dialog the
+      // event opened ended the wait - the dialog is the proof that it landed.
+      // It replaces `Page.pointerLanded`, a second command asked afterwards:
+      // by then a click that navigated had taken its element away. [B230]
       returns: {
         landing: t.Optional(pageTypes.PointerLanding),
       },
@@ -951,7 +1027,15 @@ const Page = {
       params: {
         x: t.Number,
         y: t.Number,
+        // [B301] born this many ms before the dispatch, decided by the client.
         latency: t.Optional(t.Number),
+        // Stealthfox [B299] [B301]: the stroke this event belongs to (one type(), one mouse
+        // path, one click) and the offset, in ms, of this event from the start of the stroke
+        // in the CLIENT's own plan. With both the engine is told where the plan puts the
+        // event, not only how late it was sent: the event is born at the plan's instant
+        // however late it is delivered. Offsets only: there is no clock shared with the client.
+        stroke: t.Optional(t.String),
+        at: t.Optional(t.Number),
         deltaX: t.Number,
         deltaY: t.Number,
         deltaZ: t.Number,
@@ -982,6 +1066,18 @@ const Page = {
         message: t.String,
       },
     },
+    // Live JPEG frames of the browser window. width and height BOUND the
+    // frame: it is scaled down to fit and never up.
+    //
+    // ⛔ `fullWindow` is ours and it is the reason this exists. Upstream
+    // captures the window and then crops the chrome away, because it wanted
+    // video of the page; with this flag the chrome crop is skipped and the
+    // frame keeps the tab strip, the address bar and the chrome-side pointer
+    // overlay - which lives in the chrome document and can therefore never
+    // appear in a page screenshot. The window's OS frame is cropped in both
+    // modes: on Windows 11 that border is transparent on screen and the
+    // capturer would otherwise hand over the pixels of whatever lies under
+    // it. Default false, which is upstream's behaviour to the pixel.
     'startScreencast': {
       params: {
         width: t.Number,

@@ -46,6 +46,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "nsIDNSListener.h"
 #include "nsIDNSService.h"
 
+#include "StealthIceResolverContext.h"  // STEALTH-HOOK(network/doh)
+
 typedef struct nr_resolver_ nr_resolver;
 typedef struct nr_resolver_vtbl_ nr_resolver_vtbl;
 typedef struct nr_transport_addr_ nr_transport_addr;
@@ -64,6 +66,8 @@ class NrIceResolver {
   nr_resolver* AllocateResolver();
   void DestroyResolver();
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(NrIceResolver)
+  void SetOriginAttributes(const OriginAttributes& aAttrs) { mAttrs = aAttrs; }  // STEALTH-HOOK(network/doh)
+  const OriginAttributes& GetOriginAttributes() const { return mAttrs; }  // STEALTH-HOOK(network/doh)
 
   int resolve(nr_resolver_resource* resource,
               int (*cb)(void* cb_arg, nr_transport_addr* addr), void* cb_arg,
@@ -105,6 +109,7 @@ class NrIceResolver {
     void* cb_arg_;
   };
 
+  OriginAttributes mAttrs;  // STEALTH-HOOK(network/doh)
   nr_resolver_vtbl* vtbl_;
   nsCOMPtr<nsIEventTarget> sts_thread_;
   nsCOMPtr<nsIDNSService> dns_;

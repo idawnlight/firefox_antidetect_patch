@@ -319,6 +319,7 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile* aLockFile,
   //   2. The file system does not support fcntl() locking.
   //   3. The browser is run from two different computers at the same time.
 #  ifndef MOZ_PROXY_BYPASS_PROTECTION
+#    if 0  // STEALTH-HOOK(network/doh): the host's own name is never looked up; the signature keeps 127.0.0.1
   char hostname[256];
   PRStatus status = PR_GetSystemInfo(PR_SI_HOSTNAME, hostname, sizeof hostname);
   if (status == PR_SUCCESS) {
@@ -327,6 +328,7 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile* aLockFile,
     status = PR_GetHostByName(hostname, netdbbuf, sizeof netdbbuf, &hostent);
     if (status == PR_SUCCESS) memcpy(&inaddr, hostent.h_addr, sizeof inaddr);
   }
+#    endif  // STEALTH-HOOK(network/doh)
 #  endif
 
   mozilla::SmprintfPointer signature =

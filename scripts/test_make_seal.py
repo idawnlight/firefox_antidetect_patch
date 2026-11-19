@@ -90,7 +90,7 @@ def _juggler_files(marked) -> dict:
 
 
 def _archive(path: Path, *, version: str, build_id: str, marked: bool = True,
-             juggler: bool = True, app_ini: bool = True) -> Path:
+             juggler: bool = True, app_ini: bool = True, optimized: bool = False) -> Path:
     """One leg, laid out the way a real asset is: members are TREE-RELATIVE at
     the archive root, not under a `firefox/` wrapper. `_norm` strips a leading
     `./` and nothing else, so a wrapper directory hides every file from every
@@ -107,9 +107,23 @@ def _archive(path: Path, *, version: str, build_id: str, marked: bool = True,
 
     if path.suffix == ".zip":
         omni = io.BytesIO()
-        with zipfile.ZipFile(omni, "w") as z:
-            if juggler:
-                for name, body in _juggler_files(marked).items():
+        members = _juggler_files(marked) if juggler else {}
+        if optimized:
+            # The layout a PGO build packs (the jarlog's preload list puts the
+            # central directory first), which zipfile refuses.
+            import stock_parity  # noqa: F401  (puts mozpack on the path)
+            from mozpack.mozjar import JarWriter
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmp:
+                jar_path = Path(tmp) / "omni.ja"
+                with JarWriter(file=str(jar_path)) as jar:
+                    for name, body in members.items():
+                        jar.add(name, body)
+                    jar.preload(list(members)[:1])
+                omni.write(jar_path.read_bytes())
+        else:
+            with zipfile.ZipFile(omni, "w") as z:
+                for name, body in members.items():
                     z.writestr(name, body)
         entries["omni.ja"] = omni.getvalue()
         with zipfile.ZipFile(path, "w") as z:
@@ -130,22 +144,23 @@ def _archive(path: Path, *, version: str, build_id: str, marked: bool = True,
 _LEGS = {
     "win-x86_64": ".zip",
     "linux-x86_64": ".tar.gz",
-    "linux-arm64": ".tar.gz",
 }
 
 
 def _release(d: Path, version: str = "151.0", **overrides) -> Path:
-    """A clean three-way set (Win + Linux x2), unless an override breaks one leg.
+    """A clean set (Win + Linux, x86_64), unless an override breaks one leg.
 
     Era a cinque fino a firefox-20: le due gambe macOS sono uscite il 2026-08-26
-    quando si e' smesso di rilasciare per Mac."""
+    quando si e' smesso di rilasciare per Mac; linux-arm64 e' uscita il 2026-11-04,
+    da firefox-56."""
     for i, (leg, ext) in enumerate(_LEGS.items()):
         v = overrides.get(f"{leg}_version", version)
         name = overrides.get(f"{leg}_name", f"firefox-{v}-stealth-{leg}{ext}")
         _archive(d / name, version=v, build_id=f"2026072400{1000 + i}",
                  marked=overrides.get(f"{leg}_marked", True),
                  juggler=overrides.get(f"{leg}_juggler", True),
-                 app_ini=overrides.get(f"{leg}_app_ini", True))
+                 app_ini=overrides.get(f"{leg}_app_ini", True),
+                 optimized=overrides.get(f"{leg}_optimized", False))
     return d
 
 
@@ -171,14 +186,14 @@ def case(fn):
 
 
 @case
-def test_a_clean_three_way_set_produces_a_usable_seal(d: Path):
+def test_a_clean_two_way_set_produces_a_usable_seal(d: Path):
     """The positive case, and it is not decoration: every refusal below is only
     meaningful if the happy path actually builds something downstream can read."""
     seal, _ = _build(_release(d))
     assert seal["schema"] == m.SCHEMA, seal["schema"]
     assert seal["tag"] == "firefox-18"
     assert seal["upstream_version"] == "151.0"
-    assert len(seal["assets"]) == 3, sorted(seal["assets"])
+    assert len(seal["assets"]) == 2, sorted(seal["assets"])
     for name, rec in seal["assets"].items():
         assert "151.0" in name, name
         assert len(rec["sha256"]) == 64, rec["sha256"]
@@ -186,17 +201,26 @@ def test_a_clean_three_way_set_produces_a_usable_seal(d: Path):
         assert rec["build_id"], name
     # Three independent CI runs give three BuildIDs. A seal-wide one matched
     # exactly one platform and refused the other two.
-    assert len({r["build_id"] for r in seal["assets"].values()}) == 3
+    assert len({r["build_id"] for r in seal["assets"].values()}) == 2
     assert seal["playwright"] == {"min": "1.55.0", "max": "1.61.0"}
     json.dumps(seal)          # it has to survive being written
+
+
+@case
+def test_a_pgo_builds_optimized_omni_ja_is_read(d: Path):
+    """A PGO build packs omni.ja in Mozilla's optimized layout, as the retail
+    does. make_seal read it with zipfile, which refuses that layout, so the
+    first PGO candidate's Juggler would have looked absent (2026-10-27)."""
+    seal, _ = _build(_release(d, **{"win-x86_64_optimized": True}))
+    assert len(seal["assets"]) == 2, sorted(seal["assets"])
 
 
 @case
 def test_two_legs_from_different_trees_are_refused(d: Path):
     """The cross-leg check. Five legs are five CI runs of ONE commit; a leg
     reporting another Version was built from another tree."""
-    _release(d, **{"linux-arm64_version": "150.0.1",
-                   "linux-arm64_name": "firefox-150.0.1-stealth-linux-arm64.tar.gz"})
+    _release(d, **{"linux-x86_64_version": "150.0.1",
+                   "linux-x86_64_name": "firefox-150.0.1-stealth-linux-x86_64.tar.gz"})
     _expect(d, "not one base version")
 
 
@@ -256,19 +280,19 @@ def test_three_of_four_is_still_refused(d: Path):
 def test_a_full_house_is_NOT_refused(d: Path):
     """Il caso che deve NON scattare: un gate che rifiuta tutto e' inutile.
 
-    Le tre gambe (Win + Linux x2) segnano 4/4 e non vanno rifiutate. Fino a
+    Le due gambe (Win + Linux, x86_64) segnano 4/4 e non vanno rifiutate. Fino a
     firefox-20 erano cinque, con le due mac scaricate e aperte prima di alzare
-    la sbarra; da firefox-21 il mac non si rilascia piu'.
+    la sbarra; da firefox-21 il mac non si rilascia piu', da firefox-56 arm64.
     """
     seal, _ = _build(_release(d))
-    assert len(seal["assets"]) == 3, sorted(seal["assets"])
+    assert len(seal["assets"]) == 2, sorted(seal["assets"])
 
 
 @case
 def test_an_archive_with_no_application_ini_is_refused(d: Path):
     """A broken package. There is no version to cross-check and no version to
     compare the basename against, so everything downstream would be guessed."""
-    _release(d, **{"linux-arm64_app_ini": False})
+    _release(d, **{"linux-x86_64_app_ini": False})
     _expect(d, "no application.ini")
 
 
@@ -277,7 +301,7 @@ def test_an_incomplete_release_is_refused(d: Path):
     """Four legs is not a release: the missing platform's users get a 404 from a
     seal that looks complete."""
     _release(d)
-    (d / "firefox-151.0-stealth-linux-arm64.tar.gz").unlink()
+    (d / "firefox-151.0-stealth-linux-x86_64.tar.gz").unlink()
     _expect(d, "incomplete release")
 
 
@@ -286,9 +310,21 @@ def test_allow_partial_is_the_only_way_past_an_incomplete_release(d: Path):
     """The escape hatch exists for a re-cut of a single leg. It must be
     explicit - and it must still build, or it is not an escape hatch."""
     _release(d)
-    (d / "firefox-151.0-stealth-linux-arm64.tar.gz").unlink()
+    (d / "firefox-151.0-stealth-linux-x86_64.tar.gz").unlink()
     seal, _ = _build(d, allow_partial=True)
-    assert len(seal["assets"]) == 2
+    assert len(seal["assets"]) == 1
+
+
+@case
+def test_an_old_tag_with_an_arm64_archive_still_seals(d: Path):
+    """linux-arm64 left on 2026-11-04 (firefox-56): a release no longer needs it, and
+    republish.yml still re-seals the old tags that have one. Stop requiring it, not
+    reading it, as for the mac."""
+    _release(d)
+    _archive(d / "firefox-151.0-stealth-linux-arm64.tar.gz", version="151.0", build_id="20260724009999")
+    seal, _ = _build(d)
+    assert len(seal["assets"]) == 3, sorted(seal["assets"])
+    assert "firefox-151.0-stealth-linux-arm64.tar.gz" in seal["assets"]
 
 
 @case
@@ -378,6 +414,39 @@ def test_the_command_line_records_the_commit_file_in_a_from_tree_seal(d: Path):
     rc, out = _cli(d, f)
     assert rc == 0, rc
     assert json.loads(out.read_bytes())["source_commit"] == commit
+
+
+@case
+def test_the_series_commit_is_recorded_beside_the_engine_commit(d: Path):
+    """The engine commit (tag + series applied) is on no remote; the series commit is
+    what rebuilds it, so the seal carries both."""
+    engine, series = "17140065a1b0477fabecf16f921120176803aa8b", "dc842b5" + "0" * 33
+    f, g = d / "source-commit.txt", d / "series-commit.txt"
+    f.write_bytes((engine + "\n").encode("ascii"))
+    g.write_bytes((series + "\n").encode("ascii"))
+    rng = _range_file(d)
+    out = d / "seal.json"
+    rc = m.main(["--tag", "firefox-51", "--from-tree", str(_unpacked_tree(d)), "--playwright-range",
+                 str(rng), "--source-commit-file", str(f), "--series-commit-file", str(g), "-o", str(out)])
+    seal = json.loads(out.read_bytes())
+    assert rc == 0 and seal["source_commit"] == engine and seal["series_commit"] == series, seal
+
+
+@case
+def test_a_seal_without_a_series_commit_has_no_such_field(d: Path):
+    """Older seals and dev seals stay byte-identical: the field appears only when given."""
+    rc, out = _cli(d, None)
+    assert rc == 0 and "series_commit" not in json.loads(out.read_bytes())
+
+
+@case
+def test_a_series_commit_file_that_is_not_a_commit_is_a_failed_seal(d: Path):
+    g = d / "series-commit.txt"
+    g.write_bytes(b"main\n")
+    rng = _range_file(d)
+    rc = m.main(["--tag", "firefox-51", "--from-tree", str(_unpacked_tree(d)), "--playwright-range",
+                 str(rng), "--series-commit-file", str(g), "-o", str(d / "seal.json")])
+    assert rc == 1
 
 
 @case

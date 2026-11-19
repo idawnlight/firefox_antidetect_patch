@@ -18,6 +18,7 @@
 
 #include "GetAddrInfo.h"
 #include "PLDHashTable.h"
+#include "StealthSessionResolver.h"  // STEALTH-HOOK(network/doh)
 #include "TRR.h"
 #include "TRRQuery.h"
 #include "TRRService.h"
@@ -448,6 +449,8 @@ nsresult nsHostResolver::ResolveHost(const nsACString& aHost,
                                      const OriginAttributes& aOriginAttributes,
                                      nsIDNSService::DNSFlags flags, uint16_t af,
                                      nsResolveHostCallback* aCallback) {
+  // STEALTH-HOOK(network/doh): the lookup resolves by the proxy of its context.
+  flags = StealthFlagsFollowSession(aHost, aOriginAttributes, flags);
   nsAutoCString host(aHost);
   NS_ENSURE_TRUE(!host.IsEmpty(), NS_ERROR_UNEXPECTED);
 
@@ -888,6 +891,8 @@ void nsHostResolver::DetachCallback(
     const nsACString& host, const nsACString& aTrrServer, uint16_t aType,
     const OriginAttributes& aOriginAttributes, nsIDNSService::DNSFlags flags,
     uint16_t af, nsResolveHostCallback* aCallback, nsresult status) {
+  flags = StealthFlagsFollowSession(host, aOriginAttributes,
+                                    flags);  // STEALTH-HOOK(network/doh)
   RefPtr<nsHostRecord> rec;
   RefPtr<nsResolveHostCallback> callback(aCallback);
 

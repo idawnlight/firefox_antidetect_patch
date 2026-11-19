@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// The properties gfx::StealthProjectPixels promises, each one a reason the
+// canvas noise reads the same through every reader of a canvas
+// (gfx/2d/StealthCanvasProjection.h). The browser-level proof is the canvas
+// form B bench in the workbench; these pin the function itself.
 
 #include <string.h>
 
@@ -24,6 +28,10 @@ constexpr int32_t kSeed = 8;
 // The tolerance invisible_core declares (zoom.stealth.canvas.edge_tolerance).
 constexpr int32_t kTolerance = 4;
 
+// A drawing with flat areas, hard edges, a ramp of greys (a blend of two
+// colours, left alone) and, from row 18, independent colours (a third colour
+// in every neighbourhood, the part the noise touches), as RGBA, opaque unless
+// aAlpha.
 std::vector<uint8_t> Drawing(bool aAlpha) {
   std::vector<uint8_t> px(kW * kH * 4);
   uint32_t state = 12345;
@@ -69,9 +77,10 @@ std::vector<uint8_t> Drawing(bool aAlpha) {
 bool Project(std::vector<uint8_t>& aPx, SurfaceFormat aFormat,
              bool aPremult = true, int32_t aSeed = kSeed,
              int32_t aEdgeTolerance = kTolerance) {
-  return StealthProjectPixels(
-      aPx.data(), kW * 4, IntSize(kW, kH), aFormat, IntRect(0, 0, kW, kH),
-      aPx.data(), kW * 4, aPremult, StealthCanvasNoise{aSeed, aEdgeTolerance});
+  return StealthProjectPixels(aPx.data(), kW * 4, IntSize(kW, kH), aFormat,
+                              IntRect(0, 0, kW, kH), aPx.data(), kW * 4,
+                              aPremult,
+                              StealthCanvasNoise{aSeed, aEdgeTolerance});
 }
 
 std::vector<uint8_t> SwapRB(const std::vector<uint8_t>& aPx) {
@@ -210,8 +219,8 @@ TEST(StealthCanvasProjection, ARectangleIsTheWholeCropped)
   ASSERT_TRUE(Project(whole, SurfaceFormat::R8G8B8A8));
 
   const IntRect rect(4, 2, 19, 15);  // its edges cut through the drawing
-  RefPtr<DataSourceSurface> part = StealthProjectedRegion(
-      surf, rect, true, StealthCanvasNoise{kSeed, kTolerance});
+  RefPtr<DataSourceSurface> part =
+      StealthProjectedRegion(surf, rect, true, StealthCanvasNoise{kSeed, kTolerance});
   ASSERT_TRUE(part);
   DataSourceSurface::ScopedMap map(part, DataSourceSurface::READ);
   ASSERT_TRUE(map.IsMapped());
@@ -225,6 +234,14 @@ TEST(StealthCanvasProjection, ARectangleIsTheWholeCropped)
 
 TEST(StealthCanvasProjection, ABlendOfTwoColoursIsLeftAlone)
 {
+  // Text at any contrast is the ink blended over the background: every pixel
+  // on the segment between two colours. Coverage levels of a low-contrast
+  // coloured ink (a fingerprinting service's rgba(102,204,0,0.2) over white has
+  // steps of 1-5 per channel), a black-on-white ramp, and the antialiased edge
+  // between two fills: none of it may move, whatever the step between
+  // neighbours. Each blend in a buffer of its own: two of them side by side
+  // would put a third colour in the neighbourhoods along their border, which
+  // the noise touches on purpose (two inks a pixel apart are three colours).
   auto blend = [](const uint8_t aFrom[3], const uint8_t aTo[3]) {
     std::vector<uint8_t> px(kW * kH * 4, 255);
     for (int32_t y = 0; y < kH; ++y) {
@@ -243,14 +260,12 @@ TEST(StealthCanvasProjection, ABlendOfTwoColoursIsLeftAlone)
   const uint8_t black[3] = {0, 0, 0};
   const uint8_t red[3] = {200, 0, 0};
   const uint8_t blue[3] = {0, 0, 220};
-  for (const auto& [from, to] :
-       {std::pair{white, green02}, std::pair{white, black},
-        std::pair{red, blue}}) {
+  for (const auto& [from, to] : {std::pair{white, green02}, std::pair{white, black},
+                                 std::pair{red, blue}}) {
     std::vector<uint8_t> px = blend(from, to);
     const std::vector<uint8_t> drawn = px;
     ASSERT_TRUE(Project(px, SurfaceFormat::R8G8B8A8));
-    EXPECT_EQ(drawn, px) << int(to[0]) << "," << int(to[1]) << ","
-                         << int(to[2]);
+    EXPECT_EQ(drawn, px) << int(to[0]) << "," << int(to[1]) << "," << int(to[2]);
   }
 }
 
@@ -273,6 +288,10 @@ TEST(StealthCanvasProjection, AThirdColourIsTouched)
 
 namespace {
 
+// The WebGL probe of the wrapper's test_webgl_readpixels_no_masking_signature,
+// in miniature: a triangle whose red follows x and whose green follows y, blue
+// 0 throughout, antialiased over a transparent background. Every neighbourhood
+// inside holds a plane of colours, not a segment, so the noise touches it.
 std::vector<uint8_t> GradientTriangle() {
   std::vector<uint8_t> px(kW * kH * 4, 0);
   for (int32_t y = 0; y < kH; ++y) {
@@ -300,9 +319,13 @@ int Sign(int aV) { return (aV > 0) - (aV < 0); }
 
 TEST(StealthCanvasProjection, NoNewExtremum)
 {
+  // Every difference between two neighbours, in each direction and on each
+  // channel, keeps the sign the drawing gave it. A bit on a channel whose
+  // value equals a neighbour's would flip a 0 into a +-1: the isolated spike
+  // a page reading back a smooth render counts.
   const int32_t dirs[4][2] = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
-  for (const std::vector<uint8_t>& drawn :
-       {GradientTriangle(), Drawing(true), Drawing(false)}) {
+  for (const std::vector<uint8_t>& drawn : {GradientTriangle(), Drawing(true),
+                                            Drawing(false)}) {
     std::vector<uint8_t> px = drawn;
     ASSERT_TRUE(Project(px, SurfaceFormat::R8G8B8A8));
     EXPECT_NE(drawn, px) << "nothing was touched: the test proves nothing";
@@ -319,8 +342,7 @@ TEST(StealthCanvasProjection, NoNewExtremum)
           for (int k = 0; k < 3; ++k) {
             ASSERT_EQ(Sign(int(drawn[i + k]) - drawn[j + k]),
                       Sign(int(px[i + k]) - px[j + k]))
-                << x << "," << y << " to " << x2 << "," << y2 << " channel "
-                << k;
+                << x << "," << y << " to " << x2 << "," << y2 << " channel " << k;
           }
         }
       }
@@ -341,4 +363,92 @@ TEST(StealthCanvasProjection, AConstantChannelStaysConstant)
     moved += px[i] != drawn[i] || px[i + 1] != drawn[i + 1];
   }
   EXPECT_GT(moved, 0u);
+}
+
+// StealthCanProjectRecording (gfx/2d/StealthCanvasProjection.cpp) decides
+// whether DrawTargetRecording::StealthProjectedSurface may stand in for a
+// surface. The surfaces a canvas recording hands out are CanvasChild.cpp's
+// SourceSurfaceCanvasRecording: GetType() answers CANVAS_RECORDING and
+// GetUnderlyingType() answers the type of the surface it wraps, RECORDING for
+// a draw target made by Factory::CreateRecordingDrawTarget. The two stand-ins
+// below answer the same way, so no recorder, IPC or GPU is needed to reach
+// the decision.
+//
+// The logic that shipped on 157 tested GetType() == RECORDING. On a canvas
+// recording surface GetType() is CANVAS_RECORDING, so that test refused the
+// very surfaces the projection exists for (the GPU path never ran):
+// ProjectsACanvasRecordingSurface below fails on it and passes on the test
+// of GetUnderlyingType().
+namespace {
+
+class FakeRecordingSurface : public SourceSurface {
+ public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(FakeRecordingSurface, override)
+  // aWrapped false: a plain recording surface (GetType() == RECORDING).
+  // aWrapped true: a canvas recording surface, as CanvasChild.cpp makes it,
+  // wrapping a RECORDING surface.
+  explicit FakeRecordingSurface(bool aWrapped) : mWrapped(aWrapped) {}
+  SurfaceType GetType() const override {
+    return mWrapped ? SurfaceType::CANVAS_RECORDING : SurfaceType::RECORDING;
+  }
+  SurfaceType GetUnderlyingType() const override {
+    return SurfaceType::RECORDING;
+  }
+  IntSize GetSize() const override { return IntSize(kW, kH); }
+  SurfaceFormat GetFormat() const override { return SurfaceFormat::B8G8R8A8; }
+  already_AddRefed<DataSourceSurface> GetDataSurface() override {
+    return nullptr;
+  }
+
+ private:
+  bool mWrapped;
+};
+
+// A surface that is no recording at all (the control).
+class FakeDataSurface : public SourceSurface {
+ public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(FakeDataSurface, override)
+  SurfaceType GetType() const override { return SurfaceType::DATA; }
+  IntSize GetSize() const override { return IntSize(kW, kH); }
+  SurfaceFormat GetFormat() const override { return SurfaceFormat::B8G8R8A8; }
+  already_AddRefed<DataSourceSurface> GetDataSurface() override {
+    return nullptr;
+  }
+};
+
+}  // namespace
+
+TEST(StealthCanvasProjection, ProjectsACanvasRecordingSurface)
+{
+  RefPtr<SourceSurface> canvasRecording = new FakeRecordingSurface(true);
+  // The shape of the bug: the surface's own type is not RECORDING, what it
+  // wraps is.
+  ASSERT_EQ(SurfaceType::CANVAS_RECORDING, canvasRecording->GetType());
+  ASSERT_EQ(SurfaceType::RECORDING, canvasRecording->GetUnderlyingType());
+  EXPECT_TRUE(StealthCanProjectRecording(
+      canvasRecording, StealthCanvasNoise{kSeed, kTolerance}));
+}
+
+TEST(StealthCanvasProjection, ProjectsAPlainRecordingSurface)
+{
+  RefPtr<SourceSurface> recording = new FakeRecordingSurface(false);
+  EXPECT_TRUE(StealthCanProjectRecording(
+      recording, StealthCanvasNoise{kSeed, kTolerance}));
+}
+
+TEST(StealthCanvasProjection, RefusesWhatIsNotARecording)
+{
+  RefPtr<SourceSurface> data = new FakeDataSurface();
+  ASSERT_EQ(SurfaceType::DATA, data->GetUnderlyingType());
+  EXPECT_FALSE(
+      StealthCanProjectRecording(data, StealthCanvasNoise{kSeed, kTolerance}));
+  EXPECT_FALSE(StealthCanProjectRecording(
+      nullptr, StealthCanvasNoise{kSeed, kTolerance}));
+}
+
+TEST(StealthCanvasProjection, RefusesARecordingWithoutNoise)
+{
+  RefPtr<SourceSurface> canvasRecording = new FakeRecordingSurface(true);
+  EXPECT_FALSE(
+      StealthCanProjectRecording(canvasRecording, StealthCanvasNoise::Off()));
 }

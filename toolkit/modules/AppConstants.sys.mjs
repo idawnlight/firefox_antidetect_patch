@@ -179,6 +179,7 @@ export var AppConstants = Object.freeze({
 
   MOZ_BING_API_CLIENTID: "@MOZ_BING_API_CLIENTID@",
   MOZ_BING_API_KEY: "@MOZ_BING_API_KEY@",
+  // STEALTH-HOOK(stillborn/api-keys): three API keys removed, see FEATURE.md
 
   BROWSER_CHROME_URL: "@BROWSER_CHROME_URL@",
 

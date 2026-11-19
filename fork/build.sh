@@ -4,6 +4,7 @@ set -euo pipefail
 task_source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$task_source_root"
 export MOZBUILD_STATE_PATH="${MOZBUILD_STATE_PATH:-$task_source_root/../build-state}"
+export PATH="$MOZBUILD_STATE_PATH/sccache:$PATH"
 export MOZCONFIG="${MOZCONFIG:-$task_source_root/fork/mozconfig.linux}"
 export INVISIBLE_BUILD_SOURCE_COMMIT="$(git rev-parse HEAD)"
 if [[ -n "${MOZ_SOURCE_REPO:-}" ]]; then
@@ -19,6 +20,9 @@ print("https://github.com/" + match.group(1))
 ')"
 fi
 export INVISIBLE_BUILD_SOURCE_REPOSITORY
+export MOZ_SOURCE_REPO="$INVISIBLE_BUILD_SOURCE_REPOSITORY"
+export MOZ_SOURCE_CHANGESET="$INVISIBLE_BUILD_SOURCE_COMMIT"
+export MOZ_BUILD_DATE="${MOZ_BUILD_DATE:-$(date -u +%Y%m%d%H%M%S)}"
 if [[ $# == 0 ]]; then
   set -- build
 fi

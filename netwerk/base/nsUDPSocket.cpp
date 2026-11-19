@@ -3,8 +3,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsUDPSocket.h"
-#include "mozilla/Preferences.h"
-#include "nsSOCKSUDPIOLayer.h"
 
 #include "HttpConnectionUDP.h"
 #include "MockNetworkLayer.h"
@@ -15,7 +13,10 @@
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/glean/NetwerkMetrics.h"
 #include "nsError.h"
+#include "StealthPcUdpProxy.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "nsICancelable.h"
+#include "nsIProxyInfo.h"  // STEALTH-HOOK(network/proxy-udp)
+#include "nsSOCKSUDPIOLayer.h"  // STEALTH-HOOK(network/proxy-udp)
 #include "nsIDNSRecord.h"
 #include "nsIDNSService.h"
 #include "nsIOService.h"
@@ -620,31 +621,8 @@ nsUDPSocket::InitWithAddress(const NetAddr* aAddr, nsIPrincipal* aPrincipal,
     return NS_ERROR_FAILURE;
   }
 
-  if (mozilla::Preferences::GetBool("network.proxy.socks_remote_udp", false)) {
-    int32_t proxyType = mozilla::Preferences::GetInt("network.proxy.type", 0);
-    int32_t socksVer = mozilla::Preferences::GetInt(
-        "network.proxy.socks_version", 5);
-    if (proxyType == 1 && socksVer == 5) {
-      nsAutoCString host;
-      mozilla::Preferences::GetCString("network.proxy.socks", host);
-      int32_t port = mozilla::Preferences::GetInt(
-          "network.proxy.socks_port", 0);
-      if (!host.IsEmpty() && port > 0) {
-        nsAutoCString user, pass;
-        mozilla::Preferences::GetCString("network.proxy.socks_username", user);
-        mozilla::Preferences::GetCString("network.proxy.socks_password", pass);
-        nsresult sr = mozilla::net::nsSOCKSUDPIOLayerAddToSocket(
-            mFD, host.get(), port, user.get(), pass.get());
-        if (NS_FAILED(sr)) {
-          UDPSOCKET_LOG(("SOCKS UDP layer push failed (%" PRIx32
-                         "); falling back to direct UDP",
-                         static_cast<uint32_t>(sr)));
-        } else {
-          UDPSOCKET_LOG(("SOCKS UDP layer attached (proxy %s:%d)",
-                         host.get(), port));
-        }
-      }
-    }
+  if (mSocksProxy && NS_FAILED(StealthPutSocksUdpLayer(mFD, mSocksProxy))) {  // STEALTH-HOOK(network/proxy-udp)
+    goto fail;
   }
 
 #ifdef FUZZING
@@ -715,6 +693,13 @@ nsUDPSocket::InitWithAddress(const NetAddr* aAddr, nsIPrincipal* aPrincipal,
 fail:
   Close();
   return NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP
+nsUDPSocket::SetSocksProxy(nsIProxyInfo* aProxyInfo) {  // STEALTH-HOOK(network/proxy-udp)
+  NS_ENSURE_TRUE(mFD == nullptr, NS_ERROR_ALREADY_INITIALIZED);
+  mSocksProxy = aProxyInfo;
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1292,6 +1277,10 @@ nsUDPSocket::SendWithAddress(const NetAddr* aAddr, const uint8_t* aData,
 
 int64_t nsUDPSocket::GetFileDescriptor() {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
+  // STEALTH-HOOK(network/proxy-udp): a socket with the SOCKS UDP layer gives no OS handle: what writes on it would go direct.
+  if (nsSOCKSUDPIOLayerIsOn(mFD)) {
+    return -1;
+  }
   return PR_FileDesc2NativeHandle(mFD);
 }
 

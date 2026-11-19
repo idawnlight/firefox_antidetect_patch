@@ -7,6 +7,7 @@
 #include "GmpVideoCodec.h"
 #include "MediaDataCodec.h"
 #include "MediaMIMETypes.h"
+#include "StealthMediaDeclaration.h"  // STEALTH-HOOK(fingerprint/media/decode-declaration)
 #include "VideoConduit.h"
 #include "WebrtcGmpVideoCodec.h"
 #include "WebrtcMediaDataDecoderCodec.h"
@@ -118,6 +119,8 @@ PlatformEncodeSupportOrNone(const EncoderConfig& aConfig) {
 /* static */
 RefPtr<PlatformEncoderModule::SupportsEncoderPromise>
 WebrtcVideoEncoderFactory::SupportsCodec(const EncoderConfig& aConfig) {
+  // STEALTH-HOOK(fingerprint/media/decode-declaration)
+  if (auto declared = StealthDeclaredWebrtcEncodeSupport(aConfig)) return declared;
   const auto strategy = static_cast<EncoderCreationStrategy>(
       StaticPrefs::media_webrtc_encoder_creation_strategy());
   const media::EncodeSupportSet libwebrtcSupport =

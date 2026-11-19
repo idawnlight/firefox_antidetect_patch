@@ -583,6 +583,7 @@ interface nsITextInputProcessor : nsISupports
   [optional_argc]
     boolean keyup(in Event aKeyboardEvent,
                   [optional] in unsigned long aKeyFlags);
+  void setNextKeyLatency(in double aLatencyMs, [optional] in unsigned long long aPageId);  // STEALTH-HOOK(fingerprint/input/event-birth)
 
   /**
    * insertTextWithKeyPress() is designed for automated tests.  This dispatches

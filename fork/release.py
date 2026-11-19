@@ -161,7 +161,8 @@ def download(url: str, output: Path) -> None:
 
 
 def prepare(manifest: dict, manifest_path: Path, package: Path | None,
-            output: Path, archive_url: str | None = None) -> None:
+            output: Path, archive_url: str | None = None,
+            extra_bundle_dir: Path | None = None) -> None:
     if output.exists():
         raise ReleaseError(f"output already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +180,17 @@ def prepare(manifest: dict, manifest_path: Path, package: Path | None,
         tree = work / "tree"
         tree.mkdir()
         inventory = unpack(package, tree)
+        if extra_bundle_dir is not None:
+            if not extra_bundle_dir.is_dir():
+                raise ReleaseError(f"extra bundle dir not found: {extra_bundle_dir}")
+            for sub in ("lavapipe", "llvmpipe"):
+                src_sub = extra_bundle_dir / sub
+                if not src_sub.is_dir():
+                    raise ReleaseError(f"missing {sub}/ in {extra_bundle_dir}")
+                shutil.copytree(src_sub, tree / sub, dirs_exist_ok=True)
+                for p in sorted((tree / sub).rglob("*")):
+                    if p.is_file():
+                        inventory[p.relative_to(tree).as_posix()] = make_seal.sha256_path(p)
         verify_tree(tree, manifest)
         assets = work / "assets"
         assets.mkdir()
@@ -239,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--github-output", type=Path)
         else:
             command.add_argument("--package", type=Path)
+            command.add_argument("--extra-bundle-dir", type=Path)
             command.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
@@ -255,7 +268,8 @@ def main(argv: list[str] | None = None) -> int:
             if not ready:
                 print("No pinned input URL: prepare locally, then upload with gh release create.")
         else:
-            prepare(manifest, path, args.package, args.out, args.archive_url)
+            prepare(manifest, path, args.package, args.out, args.archive_url,
+                    args.extra_bundle_dir)
     except (ReleaseError, make_seal.SealBuildError, OSError, ValueError,
             KeyError, tarfile.TarError) as error:
         print(f"RELEASE ERROR: {error}", file=sys.stderr)

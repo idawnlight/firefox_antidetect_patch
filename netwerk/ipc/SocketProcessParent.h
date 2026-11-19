@@ -82,11 +82,14 @@ class SocketProcessParent final
 
   already_AddRefed<PProxyConfigLookupParent> AllocPProxyConfigLookupParent(
       nsIURI* aURI, const uint32_t& aProxyResolveFlags,
-      const bool& aIsTRRServiceChannel);
+      const bool& aIsTRRServiceChannel,
+      const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      const Maybe<OriginAttributes>& aOriginAttributes);  // STEALTH-HOOK(network/doh)
   mozilla::ipc::IPCResult RecvPProxyConfigLookupConstructor(
       PProxyConfigLookupParent* aActor, nsIURI* aURI,
-      const uint32_t& aProxyResolveFlags,
-      const bool& aIsTRRServiceChannel) override;
+      const uint32_t& aProxyResolveFlags, const bool& aIsTRRServiceChannel,
+      const Maybe<LoadInfoArgs>& aLoadInfo,  // STEALTH-HOOK(network/proxy-udp)
+      const Maybe<OriginAttributes>& aOriginAttributes) override;  // STEALTH-HOOK(network/doh)
 
   mozilla::ipc::IPCResult RecvExcludeHttp2OrHttp3(
       const HttpConnectionInfoCloneArgs& aArgs);

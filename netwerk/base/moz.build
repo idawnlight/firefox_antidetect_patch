@@ -257,6 +257,8 @@ UNIFIED_SOURCES += [
     "TLSServerSocket.cpp",
     "TRRLoadInfo.cpp",
 ]
+UNIFIED_SOURCES += ["StealthIPv6Literal.cpp"]  # STEALTH-HOOK(network/ipv6-literal)
+UNIFIED_SOURCES += ["StealthSocksCredentials.cpp"]  # STEALTH-HOOK(network/socks)
 
 if CONFIG["FUZZING"]:
     SOURCES += [

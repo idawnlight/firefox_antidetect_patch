@@ -5,3 +5,4 @@ skip-if = [
 ]
 
 ["test_urlformatter.js"]
+["test_stealth_apikeys.js"]

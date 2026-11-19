@@ -1,3 +1,17 @@
+// A context or object id names one thing for the whole session.
+//
+// Runtime.js is loaded once per content process and once per worker, and its
+// ids were a counter: every process named its worlds id-1, id-2... in the
+// same order. Measured 2026-10-24 on firefox-52: a page served with
+// Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy runs in a
+// process of its own, the page after it does not, and the utility world was
+// id-8 in both - a client holding the first one's id-8 and an object of it
+// (id-10) was answered by the second one's id-8, "Cannot find object with
+// id = id-10", on every locator for good.
+//
+// Each load below is one process: its own global, its own copy of the file.
+//
+// Run: node --test juggler/tests/
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

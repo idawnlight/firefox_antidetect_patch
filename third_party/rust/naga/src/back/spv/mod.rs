@@ -179,6 +179,8 @@ pub enum Error {
     SpirvVersionTooLow(u8, u8),
     #[error("mapping of {0:?} is missing")]
     MissingBinding(crate::ResourceBinding),
+    #[error("{0:?} is an external texture, but its mapping is not marked `external_texture`")]
+    ExternalTextureBindingMismatch(crate::ResourceBinding),
 }
 
 #[derive(Default)]
@@ -251,6 +253,15 @@ struct EntryPointContext {
 struct Function {
     signature: Option<Instruction>,
     parameters: Vec<FunctionArgument>,
+    /// Maps each Naga function argument to the index within [`parameters`] of
+    /// the first SPIR-V parameter it expands to.
+    ///
+    /// Most arguments map to a single parameter, but an external texture
+    /// argument expands to four consecutive parameters (three planes and a
+    /// parameters buffer).
+    ///
+    /// [`parameters`]: Function::parameters
+    parameter_offsets: Vec<u32>,
     variables: crate::FastHashMap<Handle<crate::LocalVariable>, LocalVariable>,
     /// Map from a local variable that is a ray query to its u32 tracker.
     ray_query_initialization_tracker_variables:
@@ -316,10 +327,19 @@ impl Function {
     fn parameter_id(&self, index: u32) -> Word {
         match self.entry_point_context {
             Some(ref context) => context.argument_ids[index as usize],
-            None => self.parameters[index as usize]
-                .instruction
-                .result_id
-                .unwrap(),
+            None => {
+                let offset = self.parameter_offsets[index as usize] as usize;
+                let end = self
+                    .parameter_offsets
+                    .get(index as usize + 1)
+                    .map_or(self.parameters.len(), |&end| end as usize);
+                debug_assert_eq!(
+                    end - offset,
+                    1,
+                    "argument {index} is an external texture, which has no single parameter id"
+                );
+                self.parameters[offset].instruction.result_id.unwrap()
+            }
         }
     }
 }
@@ -385,7 +405,15 @@ impl LocalImageType {
                 flags: make_flags(false, ImageTypeFlags::empty()),
                 image_format: format.into(),
             },
-            crate::ImageClass::External => unimplemented!(),
+            crate::ImageClass::External => LocalImageType {
+                sampled_type: crate::Scalar {
+                    kind: crate::ScalarKind::Float,
+                    width: 4,
+                },
+                dim: spirv::Dim::Dim2D,
+                flags: make_flags(false, ImageTypeFlags::SAMPLED),
+                image_format: spirv::ImageFormat::Unknown,
+            },
         }
     }
 }
@@ -543,6 +571,18 @@ enum LocalType {
     RayQuery,
 }
 
+impl LocalType {
+    const EXTERNAL_TEXTURE_PLANE: Self = LocalType::Image(LocalImageType {
+        sampled_type: crate::Scalar {
+            kind: crate::ScalarKind::Float,
+            width: 4,
+        },
+        dim: spirv::Dim::Dim2D,
+        flags: ImageTypeFlags::SAMPLED,
+        image_format: spirv::ImageFormat::Unknown,
+    });
+}
+
 /// A type encountered during SPIR-V generation.
 ///
 /// In the process of writing SPIR-V, we need to synthesize various types for
@@ -626,6 +666,10 @@ enum WrappedFunction {
     MatCx2GetColumn {
         r#type: Handle<crate::Type>,
     },
+    ExternalTextureSize,
+    ExternalTextureLoad,
+    ExternalTextureSample,
+    ExternalTextureYuvToRgb,
 }
 
 /// A map from evaluated [`Expression`](crate::Expression)s to their SPIR-V ids.
@@ -737,6 +781,9 @@ struct GlobalVariable {
     /// `OpLoad` instruction in the function's prologue that loads its value.
     /// (This value is assigned as we write the prologue code of each function.)
     /// It is then used for all operations on the global, such as `OpImageSample`.
+    ///
+    /// As a special case, when `GlobalVariable` is an external texture parameter
+    /// buffer, this is the value of that parameter struct.
     handle_id: Word,
 
     /// The SPIR-V id of a pointer to this variable's Naga IR value.
@@ -776,6 +823,26 @@ impl GlobalVariable {
     const fn reset_for_function(&mut self) {
         self.handle_id = 0;
         self.access_id = 0;
+    }
+}
+
+/// An external texture, which maps to four SPIR-V globals: up to three planes, and the
+/// parameters buffer.
+///
+/// These are separated from `GlobalVariable`s so that indices in the main `GlobalVariable`
+/// map retain their meaning.
+struct ExternalTexture {
+    planes: [GlobalVariable; 3],
+    params: GlobalVariable,
+}
+
+impl ExternalTexture {
+    /// Prepare `self` for use within a single function.
+    fn reset_for_function(&mut self) {
+        for plane in self.planes.iter_mut() {
+            plane.reset_for_function();
+        }
+        self.params.reset_for_function();
     }
 }
 
@@ -959,6 +1026,7 @@ pub struct Writer {
     constant_ids: HandleVec<crate::Expression, Word>,
     cached_constants: crate::FastHashMap<CachedConstant, Word>,
     global_variables: HandleVec<crate::GlobalVariable, GlobalVariable>,
+    external_textures: crate::FastHashMap<Handle<crate::GlobalVariable>, ExternalTexture>,
     std140_compat_uniform_types: crate::FastHashMap<Handle<crate::Type>, Std140CompatTypeInfo>,
     fake_missing_bindings: bool,
     binding_map: BindingMap,
@@ -1210,7 +1278,7 @@ pub fn supported_capabilities() -> crate::valid::Capabilities {
         | Caps::RAY_HIT_VERTEX_POSITION
         | Caps::SHADER_FLOAT16
         | Caps::SHADER_INT16
-        // No TEXTURE_EXTERNAL
+        | Caps::TEXTURE_EXTERNAL
         | Caps::SHADER_FLOAT16_IN_FLOAT32
         | Caps::SHADER_BARYCENTRICS
         | Caps::MESH_SHADER

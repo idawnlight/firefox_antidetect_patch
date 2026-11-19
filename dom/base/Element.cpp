@@ -65,7 +65,6 @@
 #include "mozilla/StaticAnalysisFunctions.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_full_screen_api.h"
-#include "mozilla/StaticPrefs_zoom.h"
 #include "mozilla/StaticPrefs_mathml.h"
 #include "mozilla/StaticString.h"
 #include "mozilla/TextControlElement.h"
@@ -211,7 +210,7 @@
 #include "nsThreadUtils.h"
 #include "nsWindowSizes.h"
 #include "nsXULElement.h"
-#include "StealthDeclarationGate.h"
+#include "StealthShadowRoot.h"  // STEALTH-HOOK(automation/shadow-root)
 
 #ifdef DEBUG
 #  include "mozilla/dom/Range.h"
@@ -1402,28 +1401,14 @@ ShadowRoot* Element::GetShadowRootForBindings(nsIPrincipal& aSubject) const {
    * 2. If shadow is null or its mode is "closed", then return null.
    */
   ShadowRoot* shadowRoot = GetShadowRoot();
-  if (!shadowRoot) {
-    return nullptr;
-  }
-  if (!shadowRoot->IsClosed()) {
-    /**
-     * 3. Return shadow.
-     */
-    return shadowRoot;
+  if (!shadowRoot || shadowRoot->IsClosed()) {
+    // STEALTH-HOOK(automation/shadow-root)
+    return StealthClosedShadowRootForBindings(shadowRoot, aSubject);
   }
 
-  if (!BasePrincipal::Cast(aSubject).Is<ExpandedPrincipal>()) {
-    return nullptr;
-  }
-
-  if (shadowRoot->IsUAWidget()) {
-    return nullptr;
-  }
-
-  if (!mozilla::gfx::StealthEngineActive()) {
-    return nullptr;  // stock Firefox
-  }
-
+  /**
+   * 3. Return shadow.
+   */
   return shadowRoot;
 }
 

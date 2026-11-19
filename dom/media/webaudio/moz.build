@@ -125,6 +125,7 @@ UNIFIED_SOURCES += [
     "WaveShaperNode.cpp",
     "WebAudioUtils.cpp",
 ]
+UNIFIED_SOURCES += ["StealthAudioNoise.cpp"]  # STEALTH-HOOK(fingerprint/audio/noise)
 
 if CONFIG["TARGET_CPU"] == "aarch64" or CONFIG["BUILD_ARM_NEON"]:
     DEFINES["USE_NEON"] = True

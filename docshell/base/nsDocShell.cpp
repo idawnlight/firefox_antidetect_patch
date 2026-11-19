@@ -4,6 +4,8 @@
 
 #include "nsDocShell.h"
 
+#include "StealthNavigation.h"  // STEALTH-HOOK(automation/navigation)
+
 #include <algorithm>
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/dom/HTMLFormElement.h"
@@ -367,6 +369,7 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
       mURIResultedInDocument(false),
       mIsBeingDestroyed(false),
       mIsExecutingOnLoadHandler(false),
+      // STEALTH-HOOK(automation/docshell-attrs)
       mFileInputInterceptionEnabled(false),
       mBypassCSPEnabled(false),
       mInvisible(false),
@@ -3048,27 +3051,6 @@ nsDocShell* nsDocShell::GetInProcessChildAt(int32_t aIndex) {
 
   // child may be nullptr here.
   return static_cast<nsDocShell*>(child);
-}
-
-NS_IMETHODIMP
-nsDocShell::GetFileInputInterceptionEnabled(bool* aEnabled) {
-  *aEnabled = mFileInputInterceptionEnabled;
-  return NS_OK;
-}
-NS_IMETHODIMP
-nsDocShell::SetFileInputInterceptionEnabled(bool aEnabled) {
-  mFileInputInterceptionEnabled = aEnabled;
-  return NS_OK;
-}
-NS_IMETHODIMP
-nsDocShell::GetBypassCSPEnabled(bool* aEnabled) {
-  *aEnabled = mBypassCSPEnabled;
-  return NS_OK;
-}
-NS_IMETHODIMP
-nsDocShell::SetBypassCSPEnabled(bool aEnabled) {
-  mBypassCSPEnabled = aEnabled;
-  return NS_OK;
 }
 
 NS_IMETHODIMP nsDocShell::SynchronizeLayoutHistoryState() {
@@ -9243,22 +9225,7 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
   attrs.SetFirstPartyDomain(isTopLevelDoc, aLoadState->URI());
 
   nsCOMPtr<nsIRequest> req;
-
-  // Juggler: report navigation started for non-same-document and non-javascript
-  // navigations.  This drives the Juggler protocol's Page.navigationStarted and
-  // ultimately Page.ready events.
-  if (!isJavaScript && !sameDocument) {
-    nsCOMPtr<nsIObserverService> observerService =
-        mozilla::services::GetObserverService();
-    if (observerService) {
-      observerService->NotifyObservers(
-          GetAsSupports(this), "juggler-navigation-started-renderer",
-          NS_ConvertASCIItoUTF16(
-              nsPrintfCString("%" PRIu64, aLoadState->GetLoadIdentifier()))
-              .get());
-    }
-  }
-
+  StealthNavigationLoad stealthLoad(this, aLoadState, !isJavaScript && !sameDocument);  // STEALTH-HOOK(automation/navigation)
   rv = DoURILoad(aLoadState, aCacheKey, getter_AddRefs(req));
 
   if (NS_SUCCEEDED(rv)) {
@@ -9268,6 +9235,7 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
   }
 
   if (NS_FAILED(rv)) {
+    stealthLoad.Failed(rv);  // STEALTH-HOOK(automation/navigation)
     nsCOMPtr<nsIChannel> chan(do_QueryInterface(req));
     UnblockEmbedderLoadEventForFailure();
 
@@ -12384,9 +12352,12 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
       if (!mLoadState->HasSourceElement()) {
         mLoadState->SetSourceElement(mContent->AsElement());
       }
+      mStealth.SetRunning(true);  // STEALTH-HOOK(automation/navigation)
       mHandler->OnLinkClickSync(mContent, mLoadState, mNoOpenerImplied,
                                 mTriggeringPrincipal);
+      mStealth.SetRunning(false);  // STEALTH-HOOK(automation/navigation)
     }
+    mStealth.Done(mContent);  // STEALTH-HOOK(automation/navigation)
     return NS_OK;
   }
 
@@ -12395,6 +12366,7 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
     // Don't clear mLoadState, etc. here since this can be called
     // from the OnLinkClickSync() above, and we might be holding
     // the last references to them.
+    mStealth.Cancelled(mContent);  // STEALTH-HOOK(automation/navigation)
     return NS_OK;
   }
 
@@ -12405,6 +12377,7 @@ class OnLinkClickEvent : public CancelableRunnable, public SupportsWeakPtr {
   nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
   bool mNoOpenerImplied;
   bool mCancelled = false;
+  StealthLinkClickAfter mStealth;  // STEALTH-HOOK(automation/navigation)
 };
 
 OnLinkClickEvent::OnLinkClickEvent(nsDocShell* aHandler, nsIContent* aContent,
@@ -12448,6 +12421,7 @@ nsresult nsDocShell::OnFormSubmit(HTMLFormElement* aForm,
   RefPtr<nsIRunnable> runnable = ev;
   nsresult rv = Dispatch(runnable.forget());
   NS_ENSURE_SUCCESS(rv, rv);
+  StealthLinkClickBefore(aForm);  // STEALTH-HOOK(automation/navigation)
 
   nsDocShell* targetDocShell = this;
   if (!aLoadState->Target().IsEmpty()) {
@@ -12598,7 +12572,10 @@ nsresult nsDocShell::OnLinkClick(
   }
 
   RefPtr<nsIRunnable> runnable = ev;
-  return Dispatch(runnable.forget());
+  nsresult rv = Dispatch(runnable.forget());
+  NS_ENSURE_SUCCESS(rv, rv);
+  StealthLinkClickBefore(aContent);  // STEALTH-HOOK(automation/navigation)
+  return NS_OK;
 }
 
 bool nsDocShell::ShouldOpenInBlankTarget(const nsAString& aOriginalTarget,

@@ -9,6 +9,7 @@
 #include "mozilla/Array.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/StealthGeolocation.h"  // STEALTH-HOOK(fingerprint/geolocation/no-host-provider)
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Geolocation.h"
@@ -218,6 +219,10 @@ void PermissionObserver::RemoveSink(PermissionStatusSink* aSink) {
 /* static */
 void PermissionObserver::EnsureMonitoringInParent(PermissionName aName) {
   MOZ_ASSERT(XRE_IsParentProcess());
+  if (aName == PermissionName::Geolocation &&
+      StealthSystemLocationDeclaredOn()) {  // STEALTH-HOOK(fingerprint/geolocation/no-host-provider): declared on, never changes
+    return;
+  }
   EnsureOSMonitoring(aName);
 }
 

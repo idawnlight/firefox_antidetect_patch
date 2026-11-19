@@ -63,11 +63,12 @@
 #include "nsJSUtils.h"
 #include "nsNetUtil.h"
 #include "nsPIDOMWindowInlines.h"
+#include "StealthSandbox.h"  // STEALTH-HOOK(automation/hybrid-xrays)
 #include "WrapperFactory.h"
 #include "xpc_make_class.h"
 #include "xpcprivate.h"
 #include "XPCWrapper.h"
-#include "XrayWrapper.h"
+#include "XrayWrapper.h"  // STEALTH-HOOK(automation/hybrid-xrays)
 
 #include "js/Array.h"             // JS::GetArrayLength, JS::IsArrayObject
 #include "js/CallAndConstruct.h"  // JS::Call, JS::IsCallable
@@ -106,6 +107,7 @@
 #include "mozilla/dom/XMLHttpRequest.h"
 #include "mozilla/dom/XMLSerializerBinding.h"
 #include "mozilla/ExtensionPolicyService.h"
+#include "mozilla/intl/StealthSessionPrefs.h"  // STEALTH-HOOK(fingerprint/locale-time/timezone)
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "mozilla/Maybe.h"
@@ -824,6 +826,7 @@ bool SandboxProxyHandler::getPropertyDescriptorImpl(
       return false;
     }
   } else if (xpc::IsHybridXrayWrapper(obj)) {
+    // STEALTH-HOOK(automation/hybrid-xrays)
     if (!xpc::HybridXrayGetBareName(cx, obj, id, desc_)) {
       return false;
     }
@@ -1332,16 +1335,10 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
 
   bool isSystemPrincipal = principal->IsSystemPrincipal();
 
-  if (options.hybridXrays &&
-      (isSystemPrincipal ||
-       BasePrincipal::Cast(principal)->Is<ExpandedPrincipal>() ||
-       options.wantXrays)) {
-    JS_ReportErrorASCII(cx,
-                        "hybridXrays needs a content principal and "
-                        "wantXrays: false");
+  // STEALTH-HOOK(automation/hybrid-xrays)
+  if (!xpc::StealthCheckHybridXrays(cx, principal, options)) {
     return NS_ERROR_INVALID_ARG;
   }
-
   if (isSystemPrincipal) {
     options.forceSecureContext = true;
   }
@@ -1399,14 +1396,9 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
       const nsCString& localeOverride =
           window->GetBrowsingContext()->Top()->GetLanguageOverride();
       if (!localeOverride.IsEmpty()) {
-        // Accept-Language list ("fr-FR, fr") -> primary BCP-47 tag for the
-        // realm Intl locale (navigator.languages keeps the full list).
-        nsAutoCString primaryLocale(localeOverride);
-        int32_t comma = primaryLocale.FindChar(',');
-        if (comma >= 0) {
-          primaryLocale.Truncate(comma);
-        }
-        primaryLocale.Trim(" \t");
+        // STEALTH-HOOK(fingerprint/locale-time/timezone)
+        nsAutoCString primaryLocale;
+        mozilla::intl::PrimaryLanguageTag(localeOverride, primaryLocale);
         realmOptions.behaviors().setLocaleOverride(primaryLocale.get());
       }
 
@@ -1452,6 +1444,7 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
     MOZ_RELEASE_ASSERT(priv->isUAWidgetCompartment == options.isUAWidgetScope);
     MOZ_RELEASE_ASSERT(priv->hasExclusiveExpandos == hasExclusiveExpandos);
     MOZ_RELEASE_ASSERT(priv->wantXrays == wantXrays);
+    // STEALTH-HOOK(automation/hybrid-xrays)
     MOZ_RELEASE_ASSERT(priv->hybridXrays == options.hybridXrays);
   } else {
     CompartmentPrivate* priv = CompartmentPrivate::Get(sandbox);
@@ -1460,6 +1453,7 @@ nsresult xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp,
     priv->isUAWidgetCompartment = options.isUAWidgetScope;
     priv->hasExclusiveExpandos = hasExclusiveExpandos;
     priv->wantXrays = wantXrays;
+    // STEALTH-HOOK(automation/hybrid-xrays)
     priv->hybridXrays = options.hybridXrays;
   }
 
@@ -2064,6 +2058,7 @@ bool SandboxOptions::Parse() {
   bool ok = ParseObject("sandboxPrototype", &proto) &&
             ParseObject("associatedWindow", &associatedWindow) &&
             ParseBoolean("wantXrays", &wantXrays) &&
+            // STEALTH-HOOK(automation/hybrid-xrays)
             ParseBoolean("hybridXrays", &hybridXrays) &&
             ParseBoolean("allowWaivers", &allowWaivers) &&
             ParseBoolean("wantComponents", &wantComponents) &&

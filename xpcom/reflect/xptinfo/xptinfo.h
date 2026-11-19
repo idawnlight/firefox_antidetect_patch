@@ -504,6 +504,7 @@ static_assert(sizeof(nsXPTMethodInfo) == 8, "wrong size");
 #if defined(MOZ_THUNDERBIRD) || defined(MOZ_SUITE)
 #  define PARAM_BUFFER_COUNT 18
 #else
+// Stealthfox: bumped 14 -> 15 for jugglerSendMouseEvent (15 args).
 #  define PARAM_BUFFER_COUNT 15
 #endif
 

@@ -2745,6 +2745,7 @@ void AppWindow::WindowActivated() {
   if (mDocShell) {
     if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
       if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+        // STEALTH-HOOK(fingerprint/screen-window/focus)
         if (StaticPrefs::zoom_stealth_focus_ignore_os_deactivation()) {
           nsCOMPtr<nsPIDOMWindowOuter> active = fm->GetActiveWindow();
           if (active && active != window) {
@@ -2762,6 +2763,7 @@ void AppWindow::WindowActivated() {
 }
 
 void AppWindow::WindowDeactivated() {
+  // STEALTH-HOOK(fingerprint/screen-window/focus)
   if (StaticPrefs::zoom_stealth_focus_ignore_os_deactivation()) {
     return;
   }

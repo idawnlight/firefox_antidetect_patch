@@ -2827,6 +2827,7 @@ void EventStateManager::GenerateDragGesture(
     return;
   }
 
+  // STEALTH-HOOK(automation/input): B288, see FEATURE.md
   if (const WidgetMouseEvent* mouseEvent =
           aMouseOrTouchOrPointerEvent.AsMouseEvent()) {
     if ((mouseEvent->mJugglerEventId != 0) != mGestureDownFromJuggler) {

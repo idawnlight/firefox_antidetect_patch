@@ -9,6 +9,7 @@
 #include "ContentAnalysis.h"
 #include "ErrorList.h"
 #include "SessionHistoryEntry.h"
+#include "StealthNavigationEvents.h"  // STEALTH-HOOK(automation/navigation)
 #include "mozilla/CheckedInt.h"
 #include "mozilla/Components.h"
 #include "mozilla/ErrorResult.h"
@@ -2200,17 +2201,8 @@ void CanonicalBrowsingContext::LoadURI(nsIURI* aURI,
     (void)SetIsCaptivePortalTab(true);
   }
 
-  {
-    nsCOMPtr<nsIObserverService> observerService =
-        mozilla::services::GetObserverService();
-    if (observerService) {
-      observerService->NotifyObservers(
-          ToSupports(this), "juggler-navigation-started-browser",
-          NS_ConvertASCIItoUTF16(
-              nsPrintfCString("%" PRIu64, loadState->GetLoadIdentifier()))
-              .get());
-    }
-  }
+  // STEALTH-HOOK(automation/navigation)
+  StealthNotifyNavigationStarted(this, loadState);
   LoadURI(loadState, true);
 }
 
@@ -2236,17 +2228,8 @@ void CanonicalBrowsingContext::FixupAndLoadURIString(
     (void)SetIsCaptivePortalTab(true);
   }
 
-  {
-    nsCOMPtr<nsIObserverService> observerService =
-        mozilla::services::GetObserverService();
-    if (observerService) {
-      observerService->NotifyObservers(
-          ToSupports(this), "juggler-navigation-started-browser",
-          NS_ConvertASCIItoUTF16(
-              nsPrintfCString("%" PRIu64, loadState->GetLoadIdentifier()))
-              .get());
-    }
-  }
+  // STEALTH-HOOK(automation/navigation)
+  StealthNotifyNavigationStarted(this, loadState);
   LoadURI(loadState, true);
 }
 

@@ -1946,9 +1946,9 @@ pref("browser.newtab.preload", true);
 // For further detail on the TOU prefs below, see the `preonboarding` feature in
 // FeatureManifest.yaml
 // Version of the TOU that the user last accepted
-pref("termsofuse.acceptedVersion", 999);
+pref("termsofuse.acceptedVersion", 0);
 // Stringified timestamp of when the user last accepted the TOU
-pref("termsofuse.acceptedDate", "1785573000000");
+pref("termsofuse.acceptedDate", "0");
 // Stringified timestamp of when the user first accepted the TOU, only set if
 // they have accepted more than one version.
 pref("termsofuse.firstAcceptedDate", "0");
@@ -2641,11 +2641,11 @@ pref("media.contextmenu.video-overlay-detection", true);
 
 // Enable Firefox translations powered by the Bergamot translations
 // engine https://browser.mt/.
-pref("browser.translations.enable", false);
+// STEALTH-HOOK(platform/prefs): browser.translations.enable stays all.js's false
 
 // Enable Firefox Select translations powered by Bergamot translations
 // engine https://browser.mt/.
-pref("browser.translations.select.enable", false);
+// STEALTH-HOOK(platform/prefs): browser.translations.select.enable stays all.js's false
 
 // Enable the Translations QuickAction in the URL bar.
 pref("browser.translations.quickAction.enabled", true);
@@ -3909,6 +3909,3 @@ pref("distribution.mozillaonline.ignore", true);
 #ifdef XP_MACOSX
   pref("browser.macAppMenu.setAsDefaultShown", false);
 #endif
-
-pref("invisible_firefox.usage_ping.enabled", false);
-pref("invisible_firefox.usage_ping.url", "");

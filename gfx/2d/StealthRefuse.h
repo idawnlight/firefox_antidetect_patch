@@ -16,10 +16,15 @@
 namespace mozilla {
 namespace gfx {
 
-// Print declaration or installation failures before recording the crash reason.
-[[noreturn]] MOZ_FORMAT_PRINTF(1,
-                               2) inline void StealthRefuse(const char* aFormat,
-                                                            ...) {
+// The one way the stealth engine refuses to run: a declaration missing or
+// malformed, a broken installation. The sentence goes to stderr FIRST and then
+// into the crash. MOZ_CRASH alone keeps its text in the crash reason, and a
+// release build prints nothing, so a launcher saw "the browser exited during
+// startup ... printed: (nothing)" and every refusal read as a broken binary
+// (firefox-51, 70-known-bugs.md [B367]). Every refusal goes through here, so
+// none of them can be silent again.
+[[noreturn]] MOZ_FORMAT_PRINTF(1, 2) inline void StealthRefuse(
+    const char* aFormat, ...) {
   char message[1024];
   va_list args;
   va_start(args, aFormat);

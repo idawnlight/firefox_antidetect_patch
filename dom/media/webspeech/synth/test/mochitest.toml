@@ -42,3 +42,5 @@ support-files = [
 ["test_speech_simple.html"]
 
 ["test_speech_cancel_on_navigation.html"]
+
+["test_stealth_voices.html"]

@@ -72,6 +72,7 @@ class nsUDPSocket final : public nsASocketHandler, public nsIUDPSocket {
   // so mListener is not cleared while being used/locked.
   Mutex mLock{"nsUDPSocket.mLock"};
   PRFileDesc* mFD{nullptr};
+  nsCOMPtr<nsIProxyInfo> mSocksProxy;  // STEALTH-HOOK(network/proxy-udp)
   NetAddr mAddr;
   nsCOMPtr<nsIUDPSocketListener> mListener MOZ_GUARDED_BY(mLock);
   nsCOMPtr<nsIUDPSocketSyncListener> mSyncListener;

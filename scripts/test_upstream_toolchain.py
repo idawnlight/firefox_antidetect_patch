@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""upstream_toolchain.py against a fake Taskcluster, on the inputs it must refuse.
+
+  known-bad
+    1. a profile whose bytes do not match the sha256 of its chain of trust;
+    2. a chain of trust that lists no sha256 for the profile;
+    3. a changeset with no retail build in the index;
+    4. a retail build that fetched no profile;
+    5. a Rust toolchain task with no X.Y.Z release (a nightly channel);
+  known-good (and 8-10: Taskcluster busy is asked again, a 404 is not)
+    6. the Rust release of the toolchain the retail build fetched;
+    7. the profile unpacked, and the mozconfig lines with the retail's LTO mode
+       (full on both legs; no linux-arm64 from firefox-56 on).
+
+Run it directly: `python3 scripts/test_upstream_toolchain.py`.
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import upstream_toolchain as u  # noqa: E402
+
+SOURCE = {"repo": "https://hg.mozilla.org/releases/mozilla-release", "changeset": "a" * 40}
+
+
+def profile_tar() -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:xz") as tar:
+        for name, data in (("merged.profdata", b"PROF"), ("en-US.log", b"LOG")):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def fake(profile=None, cot_sha="right", indexed=True, fetches=("rustc", "profdata"),
+         channel="1.95.0"):
+    profile = profile if profile is not None else profile_tar()
+    sha = hashlib.sha256(profile).hexdigest() if cot_sha == "right" else cot_sha
+    fetch = []
+    if "rustc" in fetches:
+        fetch.append({"task": "RUST", "artifact": "public/build/rustc.tar.zst"})
+    if "profdata" in fetches:
+        fetch.append({"task": "PROF", "artifact": "public/build/profdata.tar.xz"})
+    build = {"metadata": {"name": "build"}, "payload": {"env": {"MOZ_FETCHES": json.dumps(fetch)}}}
+    rust = {"metadata": {"name": "toolchain-rust"},
+            "payload": {"command": ["repack", "--channel", channel]}}
+    cot = {"artifacts": {"public/build/profdata.tar.xz": {"sha256": sha}} if sha else {}}
+
+    def get(url):
+        if "/index/v1/task/" in url:
+            if not indexed:
+                raise OSError("404")
+            return json.dumps({"taskId": "BUILD"}).encode()
+        table = {"/queue/v1/task/BUILD": build, "/queue/v1/task/RUST": rust,
+                 "/queue/v1/task/PROF/artifacts/public/chain-of-trust.json": cot}
+        for suffix, obj in table.items():
+            if url.endswith(suffix):
+                return json.dumps(obj).encode()
+        if url.endswith("/queue/v1/task/PROF/artifacts/public/build/profdata.tar.xz"):
+            return profile
+        raise AssertionError("unexpected url %s" % url)
+    return get
+
+
+def refuses(fn):
+    try:
+        fn()
+    except u.UpstreamError:
+        return True
+    return False
+
+
+def busy_then(code: int, times: int):
+    """http_get against a server that fails `times` times with `code`, then answers."""
+    import urllib.error
+    calls, waits = [], []
+
+    def open_url(url, timeout):
+        calls.append(url)
+        if len(calls) <= times:
+            raise urllib.error.HTTPError(url, code, "busy", {}, None)
+        return io.BytesIO(b"OK")
+    return u.http_get("https://tc/x", open_url, waits.append), waits
+
+
+def refuses_http(fn) -> bool:
+    import urllib.error
+    try:
+        fn()
+    except urllib.error.HTTPError:
+        return True
+    return False
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "pgo"
+        cases = [
+            ("a profile that does not match its chain of trust",
+             refuses(lambda: u.pgo("win-x86_64", out, fake(cot_sha="0" * 64), SOURCE))),
+            ("a chain of trust with no sha256 for the profile",
+             refuses(lambda: u.pgo("win-x86_64", out, fake(cot_sha=""), SOURCE))),
+            ("a changeset with no retail build",
+             refuses(lambda: u.rust_version("win-x86_64", fake(indexed=False), SOURCE))),
+            ("a retail build that fetched no profile",
+             refuses(lambda: u.pgo("win-x86_64", out, fake(fetches=("rustc",)), SOURCE))),
+            ("a Rust toolchain with no X.Y.Z release",
+             refuses(lambda: u.rust_version("win-x86_64", fake(channel="nightly"), SOURCE))),
+            ("the Rust release the retail fetched",
+             u.rust_version("win-x86_64", fake(), SOURCE) == "1.95.0"),
+            ("Taskcluster busy (503) twice, then the answer: asked again",
+             busy_then(503, 2) == (b"OK", [15, 60])),
+            ("Taskcluster busy on every attempt: the error after the last wait",
+             refuses_http(lambda: busy_then(503, 99))),
+            ("a 404 is an answer: not asked again",
+             refuses_http(lambda: busy_then(404, 1))),
+        ]
+        lines = u.pgo("win-x86_64", out, fake(), SOURCE)
+        linux = u.pgo("linux-x86_64", out, fake(), SOURCE)
+        cases.append(("the profile unpacked, with the retail's LTO mode",
+                      (out / "merged.profdata").read_bytes() == b"PROF"
+                      and (out / "en-US.log").read_bytes() == b"LOG"
+                      and lines[-1] == "ac_add_options --enable-lto=full,cross"
+                      and linux[-1] == "ac_add_options --enable-lto=full,cross"))
+        cases.append(("no linux-arm64 leg from firefox-56 on: nothing to ask the retail for",
+                      sorted(u.PLATFORMS) == ["linux-x86_64", "win-x86_64"] and sorted(u.LTO) == sorted(u.PLATFORMS)))
+    failures = 0
+    for name, ok in cases:
+        print(("ok    " if ok else "FAIL  ") + name)
+        failures += not ok
+    print("%d/%d cases as expected" % (len(cases) - failures, len(cases)))
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
