@@ -128,12 +128,35 @@ export class Juggler {
           Services.appShell.hiddenDOMWindow;
         }
 
+        // The intermediate certificates of the declared list are written to
+        // cert_storage on a thread of their own, in parallel to this start
+        // (security/manager/ssl/stealth/StealthIntermediates.sys.mjs). A page
+        // verified before the write ends could miss them, so the client gets
+        // nothing of this browser until it has ended: no command reaches the
+        // dispatcher (receiveMessage below keeps them in order), and the line
+        // that tells it the browser is ready is written after. whenLoaded is
+        // never rejected and never left pending; if the module cannot be
+        // loaded there is nothing to wait for.
+        let intermediatesWritten = false;
+        const heldMessages = [];
+        let whenIntermediatesLoaded;
+        try {
+          whenIntermediatesLoaded = ChromeUtils.importESModule("resource://gre/modules/psm/StealthIntermediates.sys.mjs").StealthIntermediates.whenLoaded;
+        } catch (e) {
+          say('Juggler: the intermediates are not awaited: ' + (e && e.message) + '\n');
+          whenIntermediatesLoaded = Promise.resolve();
+        }
+
         let pipeStopped = false;
         let browserHandler;
         const pipe = Cc['@mozilla.org/juggler/remotedebuggingpipe;1'].getService(Ci.nsIRemoteDebuggingPipe);
         const connection = {
           QueryInterface: ChromeUtils.generateQI([Ci.nsIRemoteDebuggingPipeClient]),
           receiveMessage(message) {
+            if (!intermediatesWritten) {
+              heldMessages.push(message);
+              return;
+            }
             if (this.onmessage)
               this.onmessage({ data: message });
           },
@@ -162,6 +185,10 @@ export class Juggler {
         });
         dispatcher.rootSession().setHandler(browserHandler);
         loadStyleSheet();
+        await whenIntermediatesLoaded;
+        intermediatesWritten = true;
+        for (const message of heldMessages.splice(0))
+          connection.receiveMessage(message);
         // STEALTHFOX: Playwright dichiara il browser pronto SOLO quando legge
         // questa riga sullo stdout del processo (waitForReadyState cerca la
         // stringa esatta 'Juggler listening to the pipe' nei log del browser).

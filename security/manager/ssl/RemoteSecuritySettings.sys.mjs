@@ -292,6 +292,9 @@ export var RemoteSecuritySettings = {
 
 class IntermediatePreloads {
   constructor() {
+    // STEALTH-HOOK(stillborn/intermediates)
+    const { StealthIntermediates } = ChromeUtils.importESModule("resource://gre/modules/psm/StealthIntermediates.sys.mjs");
+    if (StealthIntermediates.ownsPreloads()) { return; }
     this.client = RemoteSettings("intermediates", {
       bucketName: SECURITY_STATE_BUCKET,
       signerName: SECURITY_STATE_SIGNER,
