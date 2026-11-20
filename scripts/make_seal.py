@@ -87,12 +87,14 @@ class SealBuildError(RuntimeError):
     pass
 
 
-def check_release_tag(tag: str) -> int:
+def check_release_tag(tag: str, version: str | None = None) -> int:
     """Legacy release number or explicit fork revision, or SealBuildError."""
     m = RELEASE_TAG_RE.fullmatch(tag)
     if not m:
         raise SealBuildError(
             f"tag must look like firefox-N or firefox-VERSION-rREVISION, got {tag!r}")
+    if version is not None and m.group("version") and m.group("version") != version:
+        raise SealBuildError(f"tag/base mismatch: {tag!r} vs {version}")
     return int(m.group("n") or m.group("revision"))
 
 
@@ -350,7 +352,7 @@ def build_from_assets(tag: str, assets_dir: Path, source_commit: str,
     if missing and not allow_partial:
         raise SealBuildError(f"incomplete release, missing platforms: {sorted(missing)}")
 
-    check_release_tag(tag)
+    check_release_tag(tag, version)
 
     # No top-level build_id: there is no single value that is true of all five
     # legs, and a scalar that is true for one platform is a refusal for the other
