@@ -166,6 +166,7 @@ function browser({ flag = true, failFirstRegistration = false } = {}) {
     'EarlyProxyHold.js': { EarlyProxyHold },
     'Helper.js': { Helper },
     'Say.js': { say },
+    'psm/StealthSecurityState.sys.mjs': { StealthSecurityState: { whenStorageReady: () => Promise.resolve() } },
     'ActorManagerParent.sys.mjs': { ActorManagerParent: { addJSWindowActors() {} } },
   };
   const { Juggler } = load('components/Juggler.js', {

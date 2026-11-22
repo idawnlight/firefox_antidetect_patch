@@ -128,23 +128,25 @@ export class Juggler {
           Services.appShell.hiddenDOMWindow;
         }
 
-        // The intermediate certificates of the declared list are written to
-        // cert_storage on a thread of their own, in parallel to this start
-        // (security/manager/ssl/stealth/StealthIntermediates.sys.mjs). A page
-        // verified before the write ends could miss them, so the client gets
-        // nothing of this browser until it has ended: no command reaches the
-        // dispatcher (receiveMessage below keeps them in order), and the line
-        // that tells it the browser is ready is written after. whenLoaded is
-        // never rejected and never left pending; if the module cannot be
-        // loaded there is nothing to wait for.
-        let intermediatesWritten = false;
+        // The first navigation of the client must see the CRLite deltas (and
+        // the full filter) the core put in <profile>/security_state/.
+        // cert_storage reads them on a thread of its own, in parallel to this
+        // start; a page verified before it has finished could miss them.
+        // StealthSecurityState.whenStorageReady()
+        // (security/manager/ssl/stealth/StealthSecurityState.sys.mjs) resolves
+        // when it has. So the client gets nothing of this browser until then:
+        // no command reaches the dispatcher (receiveMessage below keeps them in
+        // order), and the line that tells it the browser is ready is written
+        // after. The promise is never rejected and never left pending; if the
+        // module cannot be loaded there is nothing to wait for.
+        let storageReady = false;
         const heldMessages = [];
-        let whenIntermediatesLoaded;
+        let whenStorageReady;
         try {
-          whenIntermediatesLoaded = ChromeUtils.importESModule("resource://gre/modules/psm/StealthIntermediates.sys.mjs").StealthIntermediates.whenLoaded;
+          whenStorageReady = ChromeUtils.importESModule("resource://gre/modules/psm/StealthSecurityState.sys.mjs").StealthSecurityState.whenStorageReady();
         } catch (e) {
-          say('Juggler: the intermediates are not awaited: ' + (e && e.message) + '\n');
-          whenIntermediatesLoaded = Promise.resolve();
+          say('Juggler: the security state is not awaited: ' + (e && e.message) + '\n');
+          whenStorageReady = Promise.resolve();
         }
 
         let pipeStopped = false;
@@ -153,7 +155,7 @@ export class Juggler {
         const connection = {
           QueryInterface: ChromeUtils.generateQI([Ci.nsIRemoteDebuggingPipeClient]),
           receiveMessage(message) {
-            if (!intermediatesWritten) {
+            if (!storageReady) {
               heldMessages.push(message);
               return;
             }
@@ -185,8 +187,8 @@ export class Juggler {
         });
         dispatcher.rootSession().setHandler(browserHandler);
         loadStyleSheet();
-        await whenIntermediatesLoaded;
-        intermediatesWritten = true;
+        await whenStorageReady;
+        storageReady = true;
         for (const message of heldMessages.splice(0))
           connection.receiveMessage(message);
         // STEALTHFOX: Playwright dichiara il browser pronto SOLO quando legge

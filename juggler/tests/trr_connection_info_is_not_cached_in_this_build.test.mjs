@@ -31,10 +31,9 @@ test('the pref follows the milestone, as Mozilla wrote it', () => {
 
 test('the milestone of this build is a release', () => {
   const lines = read('config/milestone.txt').split(/\r?\n/).filter(l => l && !l.startsWith('#'));
-  assert.equal(lines.at(-1), '160.0');
+  assert.equal(lines.at(-1), '159.0');
   assert.doesNotMatch(lines.at(-1), /a1/);
-  const mozcfg = fs.existsSync(path.join(TREE, '.mozconfig')) ? '.mozconfig' : 'fork/mozconfig.linux';
-  assert.doesNotMatch(read(mozcfg), /as-milestone/);
+  assert.doesNotMatch(read('.mozconfig'), /as-milestone/);
 });
 
 test('the cached connection info is used only behind that pref, and not for another context', () => {

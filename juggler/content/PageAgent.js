@@ -11,6 +11,14 @@ const Cu = Components.utils;
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
 const {NetUtil} = ChromeUtils.importESModule('resource://gre/modules/NetUtil.sys.mjs');
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let tracePageAgent = () => {};
+try {
+  const tracePageAgentModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (tracePageAgentModule && typeof tracePageAgentModule.trace === 'function')
+    tracePageAgent = (...args) => { try { tracePageAgentModule.trace(...args); } catch (e) {} };
+} catch (e) {}
 const {StrokeBirth} = ChromeUtils.importESModule('resource://gre/modules/juggler/StrokeBirth.js');
 
 const dragService = Cc["@mozilla.org/widget/dragservice;1"].getService(
@@ -186,6 +194,8 @@ export class PageAgent {
       this._runtime.events.onExecutionContextDestroyed(this._onExecutionContextDestroyed.bind(this)),
       this._runtime.events.onBindingCalled(this._onBindingCalled.bind(this)),
       browserChannel.register('page', {
+        // Answered at once, with nothing: the answer leaves after what this end had queued (PageHandler._confirmCut).
+        barrier: () => undefined,
         adoptNode: this._adoptNode.bind(this),
         describeNode: this._describeNode.bind(this),
         frameName: this._frameName.bind(this),
@@ -216,13 +226,15 @@ export class PageAgent {
   _reportFrame(frame) {
     this._onFrameAttached(frame);
     if (frame.url() || frame.pendingNavigationId()) {
-      this._framesChannel.emit('frameKnown', {
+      const known = {
         frameId: frame.id(),
         url: frame.url(),
         name: frame.name(),
         navigationId: frame.lastCommittedNavigationId() || undefined,
         pendingNavigationId: frame.pendingNavigationId() || undefined,
-      });
+      };
+      tracePageAgent('page-agent', 'frameKnown', known);
+      this._framesChannel.emit('frameKnown', known);
     }
   }
 
@@ -430,20 +442,24 @@ export class PageAgent {
   // The load of a frame began in this process: the parent hears of it here when no request tells it (about:blank,
   // data:, a navigation the network never sees).
   _onNavigationStarted(frame) {
-    this._framesChannel.emit('frameNavigationStarted', {
+    const started = {
       frameId: frame.id(),
       navigationId: frame.pendingNavigationId(),
-    });
+    };
+    tracePageAgent('page-agent', 'frameNavigationStarted', started);
+    this._framesChannel.emit('frameNavigationStarted', started);
   }
 
   // A document appeared in a frame of this process. The parent knows whether a navigation of the frame is in flight.
   _onDocumentInserted(frame, navigationId) {
-    this._framesChannel.emit('frameDocumentInserted', {
+    const inserted = {
       frameId: frame.id(),
       navigationId,
       url: frame.url(),
       name: frame.name(),
-    });
+    };
+    tracePageAgent('page-agent', 'frameDocumentInserted', inserted);
+    this._framesChannel.emit('frameDocumentInserted', inserted);
   }
 
   // The first document of a frame, which no navigation made (the about:blank a tree finds when it is born): the
@@ -451,11 +467,13 @@ export class PageAgent {
   _onInitialDocumentCommitted(frame) {
     if (frame.lastCommittedNavigationId())
       return;
-    this._framesChannel.emit('frameKnown', {
+    const known = {
       frameId: frame.id(),
       url: frame.url(),
       name: frame.name(),
-    });
+    };
+    tracePageAgent('page-agent', 'frameKnown', known);
+    this._framesChannel.emit('frameKnown', known);
   }
 
   // A navigation of this process ended in an error, or Firefox refused it before any channel reported progress. This
@@ -463,11 +481,13 @@ export class PageAgent {
   // navigation whose document was inserted before the load was cut (a page that navigates from its first script) has
   // committed, and is not aborted.
   _onNavigationAborted(frame, navigationId, errorText) {
-    this._framesChannel.emit('frameNavigationAborted', {
+    const aborted = {
       frameId: frame.id(),
       navigationId,
       errorText,
-    });
+    };
+    tracePageAgent('page-agent', 'frameNavigationAborted', aborted);
+    this._framesChannel.emit('frameNavigationAborted', aborted);
   }
 
   _onSameDocumentNavigation(frame) {

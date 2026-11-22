@@ -12,6 +12,14 @@ const {StrokeBirth} = ChromeUtils.importESModule('resource://gre/modules/juggler
 const {FrameLifecycle} = ChromeUtils.importESModule('resource://gre/modules/juggler/FrameLifecycle.js');
 const {FrameNavigations} = ChromeUtils.importESModule('resource://gre/modules/juggler/FrameNavigations.js');
 const {setTimeout, clearTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let tracePageHandler = () => {};
+try {
+  const tracePageHandlerModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (tracePageHandlerModule && typeof tracePageHandlerModule.trace === 'function')
+    tracePageHandler = (...args) => { try { tracePageHandlerModule.trace(...args); } catch (e) {} };
+} catch (e) {}
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -279,11 +287,11 @@ export class PageHandler {
       helper.on(this._pageTarget, PageTarget.Events.ContentDetached,
                 this._onContentDetached.bind(this)),
       contentChannel.register('frames', {
-        frameNavigationStarted: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onContentNavigationStarted(p.frameId, p.navigationId)),
-        frameDocumentInserted: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onDocumentInserted(p.frameId, p.url, p.name, p.navigationId)),
-        frameDocumentRestored: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onDocumentRestored(p.frameId, p.url, p.name)),
-        frameKnown: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onFrameKnown(p.frameId, p)),
-        frameNavigationAborted: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onNavigationAborted(p.frameId, p.navigationId, p.errorText)),
+        frameNavigationStarted: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onContentNavigationStarted(p.frameId, p.navigationId), 'frameNavigationStarted', p),
+        frameDocumentInserted: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onDocumentInserted(p.frameId, p.url, p.name, p.navigationId), 'frameDocumentInserted', p),
+        frameDocumentRestored: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onDocumentRestored(p.frameId, p.url, p.name), 'frameDocumentRestored', p),
+        frameKnown: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onFrameKnown(p.frameId, p), 'frameKnown', p),
+        frameNavigationAborted: p => this._unlessDropped(p.frameId, () => this._frameNavigations.onNavigationAborted(p.frameId, p.navigationId, p.errorText), 'frameNavigationAborted', p),
       }),
       helper.on(this._pageTarget, PageTarget.Events.Crashed, () => {
         this._session.emitEvent('Page.crashed', {});
@@ -355,6 +363,7 @@ export class PageHandler {
   }
 
   async dispose() {
+    this._disposed = true;
     this._frameLifecycle.dispose();
     this._frameEventsBeforeFrame.clear();
     // Each worker has a fan-in registered on the page's mux and a connector: the session that goes leaves none of
@@ -435,6 +444,10 @@ export class PageHandler {
   }
 
   _handleNetworkEvent(protocolEventName, eventDetails, frameId) {
+    if (protocolEventName === 'Network.requestWillBeSent' && eventDetails.navigationId)
+      tracePageHandler('page-handler', 'Network.requestWillBeSent of a document', {frameId, navigationId: eventDetails.navigationId, url: eventDetails.url, dropped: this._isDropped(frameId)});
+    if (protocolEventName === 'Network.requestFailed')
+      tracePageHandler('page-handler', 'Network.requestFailed', {frameId, navigationId: eventDetails.navigationId, errorCode: eventDetails.errorCode, documentResponded: !!eventDetails.documentResponded, dropped: this._isDropped(frameId)});
     if (this._isDropped(frameId))
       return;
     // A document request tells the navigation it belongs to before the request itself is told.
@@ -442,14 +455,47 @@ export class PageHandler {
       this._frameNavigations.onDocumentRequest(frameId, eventDetails.navigationId, eventDetails.url);
     if (protocolEventName === 'Network.requestFailed') {
       // The last request of a document's navigation failed: the request is told as it is, then the navigation ends with
-      // it. `navigationId` is the registry's, not the client's.
-      const {navigationId, ...failure} = eventDetails;
+      // it, or, cut after its response had begun, once the barrier says nothing of its document is still on its way.
+      // `navigationId`, `documentResponded` and `documentEnded` are the registry's, not the client's.
+      const {navigationId, documentResponded, documentEnded, ...failure} = eventDetails;
       this._emitFrameKeyed(protocolEventName, failure, frameId);
-      if (navigationId)
-        this._frameNavigations.onDocumentRequestFailed(frameId, navigationId, failure.errorCode);
+      if (navigationId && this._frameNavigations.onDocumentRequestFailed(frameId, navigationId, failure.errorCode, !!documentResponded))
+        this._confirmCut(frameId, navigationId);
+      this._onDocumentRequestEnded(frameId, documentEnded);
+      return;
+    }
+    if (protocolEventName === 'Network.requestFinished') {
+      const {documentEnded, ...finished} = eventDetails;
+      this._emitFrameKeyed(protocolEventName, finished, frameId);
+      this._onDocumentRequestEnded(frameId, documentEnded);
       return;
     }
     this._emitFrameKeyed(protocolEventName, eventDetails, frameId);
+  }
+
+  // The last request of a document's navigation ended otherwise than cut (`documentEnded`, NetworkObserver): a cut the
+  // content process told meanwhile is held behind the barrier, as the parent's own (FrameNavigations.onDocumentRequestEnded).
+  _onDocumentRequestEnded(frameId, navigationId) {
+    if (!navigationId)
+      return;
+    tracePageHandler('page-handler', 'document request ended', {frameId, navigationId});
+    if (this._frameNavigations.onDocumentRequestEnded(frameId, navigationId))
+      this._confirmCut(frameId, navigationId);
+  }
+
+  // A held cut (FrameNavigations.onDocumentRequestFailed): a request and its answer through the channel of the process
+  // that holds the frame now, the same channel its documents come by, so what that process said before is in when the
+  // answer is. The mux sends it to the root of the frame and again to the next one when that root goes; a channel that
+  // is not ready keeps it and sends it at its READY, after what the process queued. Refused (no root, the page closing),
+  // nothing is on its way either: the cut is confirmed all the same.
+  _confirmCut(frameId, navigationId) {
+    const confirm = how => () => {
+      tracePageHandler('page-handler', '_confirmCut ' + how, {frameId, navigationId, disposed: !!this._disposed});
+      if (!this._disposed)
+        this._frameNavigations.onCutConfirmed(frameId, navigationId);
+    };
+    tracePageHandler('page-handler', '_confirmCut sent', {frameId, navigationId});
+    this._contentPage.send('barrier', {frameId}).then(confirm('confirmed'), confirm('refused'));
   }
 
   // An event of a frame leaves once the client knows the frame; until then it waits, in the order it came.
@@ -582,8 +628,13 @@ export class PageHandler {
     return frameId !== undefined && this._droppedFrameIds.has(frameId) && !this._reportedFrameIds.has(frameId);
   }
 
-  _unlessDropped(frameId, callback) {
-    if (!this._isDropped(frameId))
+  // `what` and `payload`, when given, are for the trace only: what the content process said, as it arrived and before
+  // the filter, and whether the filter dropped it.
+  _unlessDropped(frameId, callback, what, payload) {
+    const dropped = this._isDropped(frameId);
+    if (what)
+      tracePageHandler('page-handler', what, {payload, dropped});
+    if (!dropped)
       return callback();
   }
 
@@ -628,6 +679,7 @@ export class PageHandler {
 
   // What the registry of navigations says, as the protocol's events, gated like the other events of a frame.
   _onFrameNavigationEvent(name, payload, frameId) {
+    tracePageHandler('page-handler', '_onFrameNavigationEvent ' + name, {payload, frameId});
     switch (name) {
       case 'navigationstarted':
         this._emitFrameKeyed('Page.navigationStarted', payload, frameId);

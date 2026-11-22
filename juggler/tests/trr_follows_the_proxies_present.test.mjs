@@ -525,7 +525,7 @@ test('the registry calls the one function at each event, before the hold lifts',
 });
 
 test('TrrPrefs.js is installed with the other modules', () => {
-  assert.match(read('moz.build'), /"StealthCursor\.js",\n\s+"StrokeBirth\.js",\n\s+"TargetRegistry\.js",\n\s+"TrrPrefs\.js",\n\]/);
+  assert.match(read('moz.build'), /"StealthCursor\.js",\n\s+"StrokeBirth\.js",\n\s+"TargetRegistry\.js",\n\s+"Trace\.js",\n\s+"TrrPrefs\.js",\n\]/);
 });
 
 // localhost and local resolve natively on purpose, as a retail Firefox does, in

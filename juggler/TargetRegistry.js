@@ -3,6 +3,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let traceRegistry = () => {};
+try {
+  const traceRegistryModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (traceRegistryModule && typeof traceRegistryModule.trace === 'function')
+    traceRegistry = (...args) => { try { traceRegistryModule.trace(...args); } catch (e) {} };
+} catch (e) {}
 const {setTimeout} = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
 const {StealthCursor} = ChromeUtils.importESModule('resource://gre/modules/juggler/StealthCursor.js');
 const {ContentMux} = ChromeUtils.importESModule('resource://gre/modules/juggler/ContentMux.js');
@@ -645,11 +653,13 @@ export class TargetRegistry {
   // only: when it is created, and when a document restored from the bfcache
   // becomes current again.
   onActorCreated(actor, browserId, rootId) {
+    traceRegistry('registry', 'onActorCreated', {browserId, rootId, hasTarget: this._browserIdToTarget.has(browserId)});
     this._rootActors.set(rootKey(browserId, rootId), actor);
     this._browserIdToTarget.get(browserId)?.setActor(actor, rootId);
   }
 
   onActorDestroyed(actor, browserId, rootId) {
+    traceRegistry('registry', 'onActorDestroyed', {browserId, rootId, hasTarget: this._browserIdToTarget.has(browserId), isRootActor: this._rootActors.get(rootKey(browserId, rootId)) === actor});
     this._browserIdToTarget.get(browserId)?.removeActor(actor, rootId);
     const key = rootKey(browserId, rootId);
     if (this._rootActors.get(key) === actor)
@@ -814,6 +824,7 @@ export class PageTarget {
     this.updateJavaScriptDisabled();
     actor.actorName = `browser::page[${this._targetId}]/${actor.browsingContext.browserId}/${actor.browsingContext.id}/${this.nextActorSequenceNumber()}`;
     const isMain = !actor.browsingContext.parent;
+    traceRegistry('registry', 'setActor', {targetId: this._targetId, browserId: actor.browsingContext.browserId, rootId, isMain, actor: actor.actorName});
     this._contentMux.onRootAdded(rootId, actor.browsingContext);
     this._contentMux.bindRoot(rootId, actor, {isMain});
   }

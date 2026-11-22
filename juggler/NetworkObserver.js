@@ -159,7 +159,7 @@ class NetworkRequest {
       this.navigationId = redirectedFrom.navigationId;
       // Finish previous request now. Since we inherit the listener, we could in theory
       // use onStopRequest, but that will only happen after the last redirect has finished.
-      redirectedFrom._sendOnRequestFinished();
+      redirectedFrom._sendOnRequestFinished(true);
     }
     // In case of proxy auth, we get two requests with the same channel:
     // - one is pre-auth
@@ -646,14 +646,26 @@ class NetworkRequest {
       // navigation of a document request that was CUT (NS_BINDING_ABORTED), and of no other failure. Any other error
       // (a connection that drops half way through the body, a partial transfer) can come after the document appeared in
       // its process, whose message is still on its way: the parent would end a navigation that committed. The content
-      // process sees those ends in order with the documents it inserts and tells them. A cut after the document leaves
-      // the process that holds it on the channel of that message, so it comes after it. A redirect hop does not come
-      // here, it finishes (_sendOnRequestFinished): what fails is the last request of the navigation.
-      pageNetwork.emit(PageNetwork.Events.RequestFailed, {
+      // process sees those ends in order with the documents it inserts and tells them. A cut can come before the
+      // document too: the process that took it holds what it says until its channel to the parent is ready again, and
+      // this observer says what it sees at once. So the cut carries whether the response had begun
+      // (`documentResponded`, taken off with the id): then the registry holds it behind a barrier through the channel of
+      // that process (FrameNavigations.onDocumentRequestFailed). A redirect hop does not come here, it finishes
+      // (_sendOnRequestFinished): what fails is the last request of the navigation.
+      //
+      // Any other end of the last document request carries its navigation as `documentEnded`, also the registry's and
+      // taken off: a cut the content process told while the parent carried the request waits for it
+      // (FrameNavigations.onDocumentRequestEnded).
+      const cut = error === Cr.NS_BINDING_ABORTED;
+      const failure = {
         requestId: this.requestId,
         errorCode: helper.getNetworkErrorStatusText(error),
-        navigationId: error === Cr.NS_BINDING_ABORTED ? this.navigationId : undefined,
-      }, this._frameId);
+        navigationId: cut ? this.navigationId : undefined,
+        documentResponded: cut && this.navigationId ? !!this._sentOnResponse : undefined,
+      };
+      if (!cut && this.navigationId)
+        failure.documentEnded = this.navigationId;
+      pageNetwork.emit(PageNetwork.Events.RequestFailed, failure, this._frameId);
     }
     this._ended();
   }
@@ -673,7 +685,9 @@ class NetworkRequest {
     this._networkObserver._forgetExpectedRedirects(this);
   }
 
-  _sendOnRequestFinished() {
+  // `hop`: a redirect hop of the request finishes; the request goes on. Only the last request of a document says its
+  // navigation (`documentEnded`, _sendOnRequestFailed).
+  _sendOnRequestFinished(hop = false) {
     const pageNetwork = this._pageNetwork;
     // Undefined |responseEndTime| means there has been no response yet.
     // This happens when request interception API is used to redirect
@@ -686,13 +700,16 @@ class NetworkRequest {
       } catch (e) {
         // protocolVersion is unavailable in certain cases.
       };
-      pageNetwork.emit(PageNetwork.Events.RequestFinished, {
+      const finished = {
         requestId: this.requestId,
         responseEndTime: this.httpChannel.responseEndTime,
         transferSize: this.httpChannel.transferSize,
         encodedBodySize: this.httpChannel.encodedBodySize,
         protocolVersion,
-      }, this._frameId);
+      };
+      if (!hop && this.navigationId)
+        finished.documentEnded = this.navigationId;
+      pageNetwork.emit(PageNetwork.Events.RequestFinished, finished, this._frameId);
     }
     this._ended();
   }

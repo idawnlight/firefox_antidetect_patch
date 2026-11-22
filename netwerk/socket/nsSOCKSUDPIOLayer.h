@@ -65,6 +65,19 @@ class PcUdpProxy;
 nsresult nsSOCKSUDPIOLayerAddToSocket(PRFileDesc* aFd, PcUdpProxy* aProxy);
 
 /*
+ * The same in two steps, for a socket the caller binds itself (the sockets of a PeerConnection, NrSocket::create; the HTTP/3
+ * sockets, nsUDPSocket::InitWithAddress): the layer is pushed before the bind (an AF_INET6 socket is made dual-stack, which a
+ * bound one can no longer be), and the socket takes its road (the association of the pool, the plain socket, or the socket that
+ * drops) only once it is born, nsSOCKSUDPIOLayerSocketBorn, after a bind that worked. A socket whose port the system refuses (in use,
+ * or a range Windows keeps for itself) is closed without ever taking an association: before, the association was taken at the push,
+ * so a run of refused ports used up the ready ones and the socket that was born got one still being made (the candidates' logs: up
+ * to 173 takes in 20 ms for one socket). nsSOCKSUDPIOLayerAddToSocket is the push and the birth at once, for a socket that sends
+ * without a bind of its own. SocketBorn on a socket with no layer, or born already, does nothing.
+ */
+nsresult nsSOCKSUDPIOLayerPushOnUnbornSocket(PRFileDesc* aFd, PcUdpProxy* aProxy);
+void nsSOCKSUDPIOLayerSocketBorn(PRFileDesc* aFd);
+
+/*
  * The associations of a proxy, made before a socket asks for one: called where Firefox learns a SOCKS5 proxy (when
  * Necko opens a SOCKS5 connection, nsSOCKSIOLayer.cpp), with what that proxy is. The pool of that proxy is brought to
  * two associations (being made on the socket thread, or made); a socket the layer is put on takes one, and the pool
@@ -108,7 +121,8 @@ bool nsSOCKSUDPIOLayerSocketProcessMakesTheIceSockets();
 /*
  * The layer for the SOCKS5 proxy of a connection (an HTTP/3 connection through a proxy): aProxyInfo is the nsIProxyInfo the
  * connection was made with, so the proxy of its context, credentials included. NS_OK and no layer for a proxy that is not
- * SOCKS5; the same layer, and the same associations, as for the ICE sockets.
+ * SOCKS5; the same layer, and the same associations, as for the ICE sockets. The layer is pushed on the unborn socket: the caller
+ * calls nsSOCKSUDPIOLayerSocketBorn after its bind worked.
  */
 nsresult StealthPutSocksUdpLayer(PRFileDesc* aFd, nsIProxyInfo* aProxyInfo);
 
@@ -124,6 +138,14 @@ bool nsSOCKSUDPIOLayerIsOn(PRFileDesc* aFd);
 
 // True when the association of the layer on aFd failed: its sends are dropped without a word (a network that blocks UDP).
 bool nsSOCKSUDPIOLayerHasFailed(PRFileDesc* aFd);
+
+// True when the socket under aFd has an association that is made: what it sends goes to the relay at once.
+bool nsSOCKSUDPIOLayerIsReady(PRFileDesc* aFd);
+
+// Test only: how many associations of this process began their handshake with the proxy (not counting one cancelled before it began),
+// and how many were made (the proxy answered their ASSOCIATE).
+uint32_t nsSOCKSUDPIOLayerAssociationsBegunForTests();
+uint32_t nsSOCKSUDPIOLayerAssociationsMadeForTests();
 
 }  // namespace net
 }  // namespace mozilla

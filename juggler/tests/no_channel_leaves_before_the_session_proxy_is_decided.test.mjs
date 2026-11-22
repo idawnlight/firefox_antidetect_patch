@@ -219,6 +219,12 @@ test('no secret is read from the process environment, no variable carries the pr
       continue;
     const text = read(file);
     assert.ok(!text.includes(variable), file);
+    // The one reader is the diagnostic trace (Trace.js), which asks for the folder it writes in: a path, no secret.
+    if (file === 'Trace.js') {
+      assert.deepEqual([...text.matchAll(/Services\.env\.(\w+)\(([^)]*)\)/g)].map(m => m[1] + ':' + m[2]), ['get:TRACE_ENV']);
+      assert.match(text, /const TRACE_ENV = 'INVISIBLE_JUGGLER_TRACE_DIR';/);
+      continue;
+    }
     assert.doesNotMatch(text, /Services\.env\./, file);
   }
 });

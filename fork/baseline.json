@@ -1,8 +1,8 @@
 {
-  "mozilla_tag": "FIREFOX_160_0_RELEASE",
-  "mozilla_commit": "2887d9de1f69c0e9776413da80e7ba0d1225dd9b",
-  "reference_tag": "firefox-53",
-  "reference_commit": "57a89f0152b8ada6613bf5d008db923873c955a5",
+  "mozilla_tag": "FIREFOX_160_0_1_RELEASE",
+  "mozilla_commit": "58fed86b1b6864ad71b83c910a879d6f1a6b678b",
+  "reference_tag": "firefox-68",
+  "reference_commit": "d29db602e247",
   "reference_mozilla_version": "151.0",
   "core_version": "160.49.0",
   "wrapper_version": "0.44.0",

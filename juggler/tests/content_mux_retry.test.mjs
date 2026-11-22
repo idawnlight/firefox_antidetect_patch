@@ -110,7 +110,8 @@ const never = () => new Promise(() => {});
 
 test('only the reads of a frame are marked to be asked again', () => {
   const retried = Object.keys(ROUTES).filter(method => ROUTES[method].retryOnRootGone).sort();
-  assert.deepEqual(Array.from(retried), ['frameBoxTransform', 'frameViewport', 'getFrameQuads']);
+  // and the barrier of a held cut, which has no effect: its answer only says the root's queue went out before it
+  assert.deepEqual(Array.from(retried), ['barrier', 'frameBoxTransform', 'frameViewport', 'getFrameQuads']);
 });
 
 test('a read for a frame whose root went and whose frame is now local goes to the root that holds it now', {timeout: 10000}, async () => {

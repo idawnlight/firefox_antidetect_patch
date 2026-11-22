@@ -111,6 +111,7 @@ test('R5 a frame the parent held back while its parent navigates is told when th
   h._onFrameSeenByTheParent({ frameId: 'subframe-8', parentFrameId: 'm' });             // an iframe of the current document attaches
   events.length = 0;
   h._frameNavigations.onNavigationAborted('m', 'nav-1', 'NS_BINDING_ABORTED');          // the navigation is cut: the document stays
+  h._frameNavigations.onDocumentRequestFailed('m', 'nav-1', 'NS_BINDING_ABORTED', false);   // and cut in the parent, which carried it
   assert.ok(events.some(([name, p]) => name === 'Page.frameAttached' && p.frameId === 'subframe-8'),
       'the frame of the document that stayed is never announced: only a commit releases it');
 });

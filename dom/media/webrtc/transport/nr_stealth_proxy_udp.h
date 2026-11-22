@@ -30,15 +30,30 @@ namespace mozilla {
 
 /* NrSocket::create: the layer for the proxy of the PeerConnection on a new UDP socket. True = REFUSED (the layer could
  * not be pushed: the socket must not exist, a plain one would send direct). A socket with no proxy config (not of a
- * PeerConnection) or of a PeerConnection that has no proxy is left plain. */
+ * PeerConnection) or of a PeerConnection that has no proxy is left plain. The layer is pushed before the bind; the
+ * socket takes its road only when it is born (StealthBindAndBear below). */
 inline bool StealthUdpProxyAttachRefused(PRFileDesc* aFd, const RefPtr<net::PcUdpProxy>& aProxy) {
-  return aProxy && NS_FAILED(net::nsSOCKSUDPIOLayerAddToSocket(aFd, aProxy));
+  return aProxy && NS_FAILED(net::nsSOCKSUDPIOLayerPushOnUnbornSocket(aFd, aProxy));
 }
 
 inline bool StealthUdpProxyAttachRefused(PRFileDesc* aFd,
                                          const std::shared_ptr<NrSocketProxyConfig>& aConfig) {
   RefPtr<net::PcUdpProxy> proxy = aConfig ? aConfig->UdpProxy() : nullptr;
   return StealthUdpProxyAttachRefused(aFd, proxy);
+}
+
+bool StealthBind(struct PRFileDesc* aFd, const union PRNetAddr* aAddr);  // nr_stealth_network.h
+
+/* NrSocket::create: the bind of a new socket (StealthBind), and its birth. Only a socket whose bind worked takes the road of its
+ * proxy (an association of the pool, the plain socket, or the socket that drops; nothing for a socket with no layer). A port
+ * the system refuses (in use, or a range Windows keeps for itself) is a socket that is never born: it is closed, the caller
+ * (nr_socket_local_create) takes the next port, and the pool keeps its ready associations for the socket that is born. */
+inline bool StealthBindAndBear(PRFileDesc* aFd, const PRNetAddr* aAddr) {
+  if (!StealthBind(aFd, aAddr)) {
+    return false;
+  }
+  net::nsSOCKSUDPIOLayerSocketBorn(aFd);
+  return true;
 }
 
 }  // namespace mozilla

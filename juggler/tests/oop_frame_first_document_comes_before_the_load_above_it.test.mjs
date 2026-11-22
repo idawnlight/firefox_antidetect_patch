@@ -103,8 +103,10 @@ test('an iframe that goes, or whose first load is refused, lets the load of the 
     assert.ok(!told(events).includes('load mainframe-1'), end);
     if (end === 'detach')
       h._onFrameDetached('subframe-2');
-    else
+    else {
       h._frameNavigations.onNavigationAborted('subframe-2', 'nav-2', 'NS_BINDING_ABORTED');
+      h._frameNavigations.onDocumentRequestFailed('subframe-2', 'nav-2', 'NS_BINDING_ABORTED', false);   // and cut in the parent, which carried it
+    }
     assert.ok(told(events).includes('load mainframe-1'), end + ': ' + told(events).join(', '));
   }
 });

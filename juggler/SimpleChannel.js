@@ -13,6 +13,17 @@ var SIMPLE_CHANNEL_BECAME_CURRENT_MESSAGE_NAME = 'juggler:became-current';
 // identity (see `_uid`).
 var SIMPLE_CHANNEL_INSTANCES = 0;
 
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Loaded lazily and tolerantly: this
+// file also runs where there is no ChromeUtils (a worker, a node test), and then it traces nothing.
+var simpleChannelTrace = () => {};
+try {
+  if (typeof ChromeUtils !== 'undefined') {
+    var simpleChannelTraceModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+    if (simpleChannelTraceModule && typeof simpleChannelTraceModule.trace === 'function')
+      simpleChannelTrace = (...args) => { try { simpleChannelTraceModule.trace(...args); } catch (e) {} };
+  }
+} catch (e) {}
+
 var SimpleChannel = class SimpleChannel {
   constructor(name, uid) {
     this._name = name;
@@ -51,6 +62,7 @@ var SimpleChannel = class SimpleChannel {
   bindToActor(actor) {
     this.resetTransport();
     this._name = actor.actorName;
+    simpleChannelTrace('channel', 'bindToActor', {name: this._name, uid: this._uid});
     const oldReceiveMessage = actor.receiveMessage;
     actor.receiveMessage = message => {
       // A restored document asking to be bound again (JugglerFrameChild, on its pageshow) is the actor's to answer
@@ -69,6 +81,7 @@ var SimpleChannel = class SimpleChannel {
   }
 
   resetTransport() {
+    simpleChannelTrace('channel', 'resetTransport', {name: this._name, uid: this._uid, wasReady: this._ready});
     this.transport.dispose();
     this.transport = {
       sendMessage: null,
@@ -88,6 +101,7 @@ var SimpleChannel = class SimpleChannel {
     //    { ack: `READY_ACK` }. We assume at least one of the ends will receive { ack: "READY" } event from the other, since
     //    channel ends have a "parent-child" relation, i.e. one end is always created before the other one.
     // 5. Once channel end receives either { ack: `READY` } or { ack: `READY_ACK` }, it transitions to `ready` state.
+    simpleChannelTrace('channel', 'send READY', {name: this._name, uid: this._uid});
     this.transport.sendMessage({ ack: 'READY', uid: this._uid });
   }
 
@@ -119,6 +133,7 @@ var SimpleChannel = class SimpleChannel {
    * after the reattachment hook.
    */
   detachFromPeer() {
+    simpleChannelTrace('channel', 'detachFromPeer', {name: this._name, uid: this._uid, wasReady: this._ready});
     if (!this._ready)
       return;
     this._ready = false;
@@ -186,6 +201,7 @@ var SimpleChannel = class SimpleChannel {
     // Snapshot first: what the reattachment hook sends goes out as it is sent, and must not
     // be sent a second time by the replay below.
     const queued = [...this._pendingMessages.values()];
+    simpleChannelTrace('channel', 'markAsReady', {name: this._name, uid: this._uid, connectedTo: this._connectedToUID, resent: queued.length, detached: this._detached});
     if (this._detached) {
       this._detached = false;
       if (this._onReattached)
@@ -260,6 +276,7 @@ var SimpleChannel = class SimpleChannel {
     const message = {requestId: id, uid: this._uid, methodName, params, namespace};
     // `sent`: it has gone out to the peer this end is attached to (see detachFromPeer).
     const sent = this._ready;
+    simpleChannelTrace('channel', 'send', {name: this._name, uid: this._uid, namespace, methodName, requestId: id, sent});
     const promise = new Promise((resolve, reject) => {
       this._pendingMessages.set(id, {connectorId, resolve, reject, methodName, namespace, message, sent});
     });
@@ -281,12 +298,14 @@ var SimpleChannel = class SimpleChannel {
       // back-forward cache) still finds its own. Clearing them on a change of
       // peer was what left an old end to be dispatched twice.
       this._connectedToUID = data.uid;
+      simpleChannelTrace('channel', 'recv READY', {name: this._name, uid: this._uid, connectedTo: data.uid});
       this.transport.sendMessage({ ack: 'READY_ACK', uid: this._uid });
       this._markAsReady();
       return;
     }
     if (data?.ack === 'READY_ACK') {
       this._connectedToUID = data.uid;
+      simpleChannelTrace('channel', 'recv READY_ACK', {name: this._name, uid: this._uid, connectedTo: data.uid});
       this._markAsReady();
       return;
     }
@@ -294,9 +313,10 @@ var SimpleChannel = class SimpleChannel {
       this._bufferedResponses.delete(this._answerKey(data.uid, data.responseId));
       return;
     }
-    if (this._paused)
+    if (this._paused) {
+      simpleChannelTrace('channel', 'buffered while paused', {name: this._name, uid: this._uid, requestId: data?.requestId, responseId: data?.responseId});
       this._bufferedIncomingMessages.push(data);
-    else
+    } else
       this._onMessageInternal(data);
   }
 
@@ -310,6 +330,7 @@ var SimpleChannel = class SimpleChannel {
     if (data.responseId) {
       this.transport.sendMessage({ ack: 'RESPONSE_ACK', responseId: data.responseId, uid: this._uid });
       const message = this._pendingMessages.get(data.responseId);
+      simpleChannelTrace('channel', 'recv response', {name: this._name, uid: this._uid, responseId: data.responseId, found: !!message, error: !!data.error});
       if (!message) {
         // During cross-process navigation, we might receive a response for
         // the message sent by another process.
@@ -329,12 +350,14 @@ var SimpleChannel = class SimpleChannel {
       // and fast-return.
       const answerKey = this._answerKey(data.uid, data.requestId);
       if (this._bufferedResponses.has(answerKey)) {
+        simpleChannelTrace('channel', 'resend buffered response', {name: this._name, uid: this._uid, requestId: data.requestId, from: data.uid});
         this.transport.sendMessage(this._bufferedResponses.get(answerKey));
         return;
       }
 
       const namespace = data.namespace;
       const handler = this._handlers.get(namespace);
+      simpleChannelTrace('channel', 'recv request', {name: this._name, uid: this._uid, namespace, methodName: data.methodName, requestId: data.requestId, from: data.uid, handler: !!handler, paused: this._paused});
       if (!handler) {
         this._bufferedIncomingMessages.push(data);
         return;
@@ -355,6 +378,7 @@ var SimpleChannel = class SimpleChannel {
       // The connection might have changed during the ASYNCHRONOUS handler execution.
       // We only need to buffer & send response if we are connected to the same
       // end.
+      simpleChannelTrace('channel', connectedToUID === this._connectedToUID ? 'send response' : 'response suppressed', {name: this._name, uid: this._uid, requestId: data.requestId, error: !!response.error, answeredTo: connectedToUID, connectedTo: this._connectedToUID});
       if (connectedToUID === this._connectedToUID) {
         this._bufferedResponses.set(answerKey, response);
         this.transport.sendMessage(response);

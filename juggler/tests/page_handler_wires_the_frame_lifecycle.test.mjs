@@ -205,3 +205,26 @@ test('a document request that failed with another error than a cut ends no navig
   assert.deepEqual(events.map(([name]) => name), ['Network.requestFailed']);
   assert.equal(handler._frameNavigations.pendingNavigationId(frameId), 'nav-27');
 });
+
+// A cut the content process told of a navigation whose request the parent carries (FrameNavigations.onNavigationAborted) waits
+// for the end of that request: a request that finishes with no document holds it behind the barrier, then ends it. The client is
+// told the request without `documentEnded`, a field of the registry's.
+test('a document request that finishes after a cut the content told sends the barrier, then ends the navigation', async () => {
+  const top = context();
+  const { handler, events, registered } = construct(top);
+  const frameId = 'mainframe-9';
+  const barriers = [];
+  handler._contentPage.send = (method, params) => { barriers.push([method, params.frameId]); return Promise.resolve(); };
+  handler._handleNetworkEvent('Network.requestWillBeSent', { requestId: '24', navigationId: 'nav-28', url: 'http://c.test/stopped' }, frameId);
+  registered.frames.frameNavigationAborted({ frameId, navigationId: 'nav-28', errorText: 'NS_BINDING_ABORTED' });
+  events.length = 0;
+  handler._handleNetworkEvent('Network.requestFinished', { requestId: '24', documentEnded: 'nav-28' }, frameId);
+  assert.deepEqual(events.map(([name, payload]) => [name, payload.documentEnded]), [['Network.requestFinished', undefined]]);
+  assert.deepEqual(barriers, [['barrier', frameId]]);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(events.map(([name, payload]) => [name, payload.navigationId, payload.errorText]), [
+    ['Network.requestFinished', undefined, undefined],
+    ['Page.navigationAborted', 'nav-28', 'NS_BINDING_ABORTED'],
+  ]);
+});

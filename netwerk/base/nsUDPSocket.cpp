@@ -621,9 +621,7 @@ nsUDPSocket::InitWithAddress(const NetAddr* aAddr, nsIPrincipal* aPrincipal,
     return NS_ERROR_FAILURE;
   }
 
-  if (mSocksProxy && NS_FAILED(StealthPutSocksUdpLayer(mFD, mSocksProxy))) {  // STEALTH-HOOK(network/proxy-udp)
-    goto fail;
-  }
+  if (mSocksProxy && NS_FAILED(StealthPutSocksUdpLayer(mFD, mSocksProxy))) goto fail;  // STEALTH-HOOK(network/proxy-udp)
 
 #ifdef FUZZING
   if (StaticPrefs::fuzzing_necko_enabled()) {
@@ -666,6 +664,7 @@ nsUDPSocket::InitWithAddress(const NetAddr* aAddr, nsIPrincipal* aPrincipal,
     NS_WARNING("failed to bind socket");
     goto fail;
   }
+  nsSOCKSUDPIOLayerSocketBorn(mFD);  // STEALTH-HOOK(network/proxy-udp): only a bound socket takes an association
 
   // get the resulting socket address, which may be different than what
   // we passed to bind.

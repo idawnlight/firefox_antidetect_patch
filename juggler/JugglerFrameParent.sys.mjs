@@ -5,6 +5,24 @@ const { Helper } = ChromeUtils.importESModule('resource://gre/modules/juggler/He
 
 const helper = new Helper();
 
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let traceFrameParent = () => {};
+try {
+  const traceFrameParentModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (traceFrameParentModule && typeof traceFrameParentModule.trace === 'function')
+    traceFrameParent = (...args) => { try { traceFrameParentModule.trace(...args); } catch (e) {} };
+} catch (e) {}
+
+// What an actor is, for the trace.
+const describeParent = actor => ({
+  browserId: actor.browsingContext?.browserId,
+  browsingContextId: actor.browsingContext?.id,
+  isCurrentGlobal: actor.manager?.isCurrentGlobal,
+  isProcessRoot: actor.manager?.isProcessRoot,
+  innerWindowId: actor.manager?.innerWindowId,
+});
+
 export class JugglerFrameParent extends JSWindowActorParent {
   constructor() {
     super();
@@ -21,11 +39,16 @@ export class JugglerFrameParent extends JSWindowActorParent {
     // itself and then speak (SimpleChannel.detachFromPeer).
     if (message?.name !== 'juggler:became-current')
       return;
-    if (this._browserId === undefined || !this.manager?.isCurrentGlobal)
+    traceFrameParent('frame-parent', 'receiveMessage', {message: message.name, ...describeParent(this)});
+    if (this._browserId === undefined || !this.manager?.isCurrentGlobal) {
+      traceFrameParent('frame-parent', 'became-current ignored: not current', {browserId: this._browserId});
       return;
+    }
     const registry = TargetRegistry.instance();
-    if (!registry?.targetForBrowserId(this._browserId))
+    if (!registry?.targetForBrowserId(this._browserId)) {
+      traceFrameParent('frame-parent', 'became-current ignored: no target', {browserId: this._browserId});
       return;
+    }
     registry.onActorCreated(this, this._browserId, this._rootId);
   }
 
@@ -34,14 +57,18 @@ export class JugglerFrameParent extends JSWindowActorParent {
     // interested in those WindowGlobalParent actors that are matching current browsingContext
     // window global.
     // See https://github.com/mozilla/gecko-dev/blob/cd2121e7d83af1b421c95e8c923db70e692dab5f/testing/mochitest/BrowserTestUtils/BrowserTestUtilsParent.sys.mjs#L15
-    if (!this.manager?.isCurrentGlobal)
+    if (!this.manager?.isCurrentGlobal) {
+      traceFrameParent('frame-parent', 'actorCreated', {...describeParent(this), returned: 'not-current'});
       return;
+    }
 
     // Only the roots of fragments count: the top, and every frame whose parent is in another process
     // (WindowGlobalParent.isProcessRoot). A frame in the process of its parent is served by the
     // agents of its root.
-    if (!this.manager.isProcessRoot)
+    if (!this.manager.isProcessRoot) {
+      traceFrameParent('frame-parent', 'actorCreated', {...describeParent(this), returned: 'not-root'});
       return;
+    }
     this._rootId = this.browsingContext.id;
 
     // ⛔ A target is found by browserId and by nothing else (see
@@ -51,10 +78,12 @@ export class JugglerFrameParent extends JSWindowActorParent {
     // counters met, and the guard added against that dropped a new tab's own
     // actor whenever they met with a stale entry. One identity removes both.
     this._browserId = this.browsingContext.browserId;
+    traceFrameParent('frame-parent', 'actorCreated', {...describeParent(this), returned: TargetRegistry.instance()?.targetForBrowserId(this._browserId) ? 'registered' : 'registered-no-target'});
     TargetRegistry.instance()?.onActorCreated(this, this._browserId, this._rootId);
   }
 
   didDestroy() {
+    traceFrameParent('frame-parent', 'didDestroy', {browserId: this._browserId, rootId: this._rootId});
     if (this._browserId === undefined)
       return;
     TargetRegistry.instance()?.onActorDestroyed(this, this._browserId, this._rootId);

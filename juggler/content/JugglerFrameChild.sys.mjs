@@ -6,6 +6,15 @@ const { initialize } = ChromeUtils.importESModule('resource://gre/modules/juggle
 const Ci = Components.interfaces;
 const helper = new Helper();
 
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let traceFrameChild = () => {};
+try {
+  const traceFrameChildModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (traceFrameChildModule && typeof traceFrameChildModule.trace === 'function')
+    traceFrameChild = (...args) => { try { traceFrameChildModule.trace(...args); } catch (e) {} };
+} catch (e) {}
+
 let sameProcessInstanceNumber = 0;
 
 const topBrowingContextToAgents = new Map();
@@ -19,6 +28,8 @@ export class JugglerFrameChild extends JSWindowActorChild {
 
   handleEvent(aEvent) {
     const agents = this._agents();
+    if (['DOMWindowCreated', 'DOMDocElementInserted', 'pagehide', 'pageshow'].includes(aEvent.type))
+      traceFrameChild('frame-child', 'handleEvent', {type: aEvent.type, persisted: aEvent.persisted, browsingContextId: this.browsingContext?.id, isDocument: aEvent.target === this.document, agents: !!agents});
     if (!agents)
       return;
     if (aEvent.type === 'DOMWillOpenModalDialog') {
@@ -77,10 +88,13 @@ export class JugglerFrameChild extends JSWindowActorChild {
       return;
 
     // A frame nested in the same process goes through the agents of its fragment root.
-    if (!helper.isFragmentRoot(this.browsingContext))
+    if (!helper.isFragmentRoot(this.browsingContext)) {
+      traceFrameChild('frame-child', 'actorCreated', {actor: this.actorName, browsingContextId: this.browsingContext.id, documentURI: this.document.documentURI, fragmentRoot: false});
       return;
+    }
 
     let agents = topBrowingContextToAgents.get(this.browsingContext);
+    traceFrameChild('frame-child', 'actorCreated', {actor: this.actorName, browsingContextId: this.browsingContext.id, documentURI: this.document.documentURI, fragmentRoot: true, agents: agents ? 'existing' : 'new'});
     if (!agents) {
       agents = initialize(this.browsingContext, this.docShell);
       topBrowingContextToAgents.set(this.browsingContext, agents);
@@ -96,7 +110,9 @@ export class JugglerFrameChild extends JSWindowActorChild {
       if (e) dump(`[JugglerFrameChild] removeListeners failed: ${e.message}\n`);
     }
 
-    if (!helper.isFragmentRoot(this.browsingContext))
+    const isRoot = helper.isFragmentRoot(this.browsingContext);
+    traceFrameChild('frame-child', 'didDestroy', {actor: this.actorName, browsingContextId: this.browsingContext?.id, fragmentRoot: isRoot, boundActor: isRoot ? topBrowingContextToAgents.get(this.browsingContext)?.actor === this : undefined});
+    if (!isRoot)
       return;
 
     const agents = topBrowingContextToAgents.get(this.browsingContext);

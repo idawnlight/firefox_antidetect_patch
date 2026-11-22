@@ -12,6 +12,7 @@
 #define StealthTestProxyKit_h__
 
 #include <memory>
+#include <stdint.h>
 
 namespace mozilla {
 
@@ -24,13 +25,17 @@ enum class ProxyOfTheSession {
   None,
   // A filter that answers an HTTP proxy: a proxy that carries no UDP, so the lookup answers "a router that drops it".
   HttpWithoutUdp,
+  // A filter that answers a SOCKS5 proxy on 127.0.0.1 and the port given, flagged as the session flags a proxy whose UDP the core
+  // measured coherent (nsIProxyInfo::CARRIES_COHERENT_UDP): the lookup answers that proxy, and the sockets take its associations.
+  Socks5CarryingUdp,
 };
 
 // The proxy of the session for the length of the scope (a filter registered, the prefs it needs set); everything is put back
 // when the scope ends. Main thread.
 class SessionProxyScope {
  public:
-  explicit SessionProxyScope(ProxyOfTheSession aProxy);
+  // aSocksPort: the port of the SOCKS5 proxy (Socks5CarryingUdp only).
+  explicit SessionProxyScope(ProxyOfTheSession aProxy, uint16_t aSocksPort = 0);
   ~SessionProxyScope();
   SessionProxyScope(const SessionProxyScope&) = delete;
   SessionProxyScope& operator=(const SessionProxyScope&) = delete;

@@ -8,6 +8,14 @@ const Cr = Components.results;
 const Cu = Components.utils;
 
 const {Helper} = ChromeUtils.importESModule('resource://gre/modules/juggler/Helper.js');
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let traceFrameTree = () => {};
+try {
+  const traceFrameTreeModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (traceFrameTreeModule && typeof traceFrameTreeModule.trace === 'function')
+    traceFrameTree = (...args) => { try { traceFrameTreeModule.trace(...args); } catch (e) {} };
+} catch (e) {}
 
 const helper = new Helper();
 
@@ -88,6 +96,7 @@ export class FrameTree {
         if (!frame)
           return;
         frame._pendingNavigationId = helper.toProtocolNavigationId(loadIdentifier);
+        traceFrameTree('frame-tree', 'NavigationStarted', {frameId: frame._frameId, pendingNavigationId: frame._pendingNavigationId});
         this.emit(FrameTree.Events.NavigationStarted, frame);
       }, 'juggler-navigation-started-renderer'),
       helper.addObserver((docShell, topic, payload) => {
@@ -464,8 +473,10 @@ export class FrameTree {
     // document, so the client hears that its navigation is over and then which document the frame has.
     const heldAbort = frame._suppressedAbort;
     frame._suppressedAbort = null;
-    if (heldAbort && navigationId && heldAbort.navigationId !== navigationId)
+    if (heldAbort && navigationId && heldAbort.navigationId !== navigationId) {
+      traceFrameTree('frame-tree', 'held abort told: another navigation\'s document came', {frameId: frame._frameId, heldNavigationId: heldAbort.navigationId, navigationId});
       this.emit(FrameTree.Events.NavigationAborted, frame, heldAbort.navigationId, heldAbort.errorText);
+    }
     if (navigationId) {
       docShell.QueryInterface(Ci.nsIWebNavigation);
       this._frameNavigationCommitted(frame, docShell.currentURI.spec);
@@ -495,6 +506,7 @@ export class FrameTree {
   // document restored from the back-forward cache keeps its children.
   _commit(frame, url) {
     const navigationId = frame._pendingNavigationId;
+    traceFrameTree('frame-tree', '_commit', {frameId: frame._frameId, navigationId, url});
     frame._pendingNavigationId = null;
     frame._lastCommittedNavigationId = navigationId;
     frame._url = url;
@@ -525,6 +537,7 @@ export class FrameTree {
       frame._pendingNavigationId = null;
       // Always report download navigation as failure to match other browsers.
       const errorText = helper.getNetworkErrorStatusText(status);
+      traceFrameTree('frame-tree', 'onStateChange abort', {frameId: frame._frameId, navigationId, status, errorText, bindingAborted: status === Cr.NS_BINDING_ABORTED});
       // Stealthfox [B302]: the main frame's NS_BINDING_ABORTED is SPURIOUS
       // when a Fission process swap takes the navigation to another process:
       // the old channel is disconnected there, by
@@ -544,8 +557,10 @@ export class FrameTree {
       // process it leaves in the same way (its docShell is being destroyed), and the document that commits in the new
       // process must find its navigation still in flight.
       if (status === Cr.NS_BINDING_ABORTED) {
-        if (docShell.isBeingDestroyed())
+        if (docShell.isBeingDestroyed()) {
+          traceFrameTree('frame-tree', 'abort not told: the docShell is being destroyed', {frameId: frame._frameId, navigationId});
           return;
+        }
         Services.tm.dispatchToMainThread(() => {
           let swapped;
           try {
@@ -553,6 +568,7 @@ export class FrameTree {
           } catch (e) {
             swapped = true;   // the docShell is gone: the swap's way
           }
+          traceFrameTree('frame-tree', 'abort decided', {frameId: frame._frameId, navigationId, swapped, suppressed: swapped});
           if (!swapped) {
             this.emit(FrameTree.Events.NavigationAborted, frame, navigationId, errorText);
             return;
@@ -582,6 +598,7 @@ export class FrameTree {
       return;
     const [loadIdentifier, status] = payload.split(' ');
     const navigationId = helper.toProtocolNavigationId(loadIdentifier);
+    traceFrameTree('frame-tree', '_onNavigationFailed', {frameId: frame._frameId, navigationId, status: +status, pendingNavigationId: frame._pendingNavigationId});
     if (frame._pendingNavigationId !== navigationId)
       return;
     frame._pendingNavigationId = null;

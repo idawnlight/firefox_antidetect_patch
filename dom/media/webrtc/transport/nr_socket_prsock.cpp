@@ -647,7 +647,7 @@ int NrSocket::create(nr_transport_addr* addr) {
         ABORT(R_INTERNAL);
       }
     }
-    status = StealthBind(fd_, &bindaddr) ? PR_SUCCESS : PR_FAILURE;
+    status = StealthBindAndBear(fd_, &bindaddr) ? PR_SUCCESS : PR_FAILURE;  // STEALTH-HOOK(network/proxy-udp)
   }
   if (status != PR_SUCCESS) {
     // A port that is not available: another socket holds it, or the system keeps it (Windows reserves ranges of the dynamic

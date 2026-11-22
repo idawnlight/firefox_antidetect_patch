@@ -248,6 +248,9 @@ export var RemoteSecuritySettings = {
    * @returns {object} instantiated clients for security remote settings.
    */
   init() {
+    // STEALTH-HOOK(stillborn/security-state)
+    const { StealthSecurityState } = ChromeUtils.importESModule("resource://gre/modules/psm/StealthSecurityState.sys.mjs");
+    if (StealthSecurityState.ownsSync()) { return this; }
     // Avoid repeated initialization (work-around for bug 1730026).
     if (this._initialized) {
       return this;
@@ -292,9 +295,6 @@ export var RemoteSecuritySettings = {
 
 class IntermediatePreloads {
   constructor() {
-    // STEALTH-HOOK(stillborn/intermediates)
-    const { StealthIntermediates } = ChromeUtils.importESModule("resource://gre/modules/psm/StealthIntermediates.sys.mjs");
-    if (StealthIntermediates.ownsPreloads()) { return; }
     this.client = RemoteSettings("intermediates", {
       bucketName: SECURITY_STATE_BUCKET,
       signerName: SECURITY_STATE_SIGNER,

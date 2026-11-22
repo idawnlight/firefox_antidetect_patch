@@ -60,6 +60,10 @@ bool Arrives(const RefPtr<net::PcUdpProxy>& aProxy, bool* aRefused = nullptr) {
   }
   bool arrived = false;
   if (!refused) {
+    // Born as NrSocket::create bears it: the bind, then the road of its proxy.
+    PRNetAddr any;
+    PR_InitializeNetAddr(PR_IpAddrAny, 0, &any);
+    EXPECT_TRUE(StealthBindAndBear(fd, &any));
     EXPECT_EQ(4, PR_SendTo(fd, "ping", 4, 0, &to, PR_INTERVAL_NO_WAIT));
     char buf[16];
     PRNetAddr from;

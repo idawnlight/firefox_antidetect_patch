@@ -162,7 +162,16 @@ test('the failure of a document request carries the navigation it belongs to', (
   const events = [];
   documentRequest(events, 'nav-26')._sendOnRequestFailed(Cr.NS_BINDING_ABORTED);
   assert.deepEqual(events, [[PageNetwork.Events.RequestFailed,
-                             { requestId: '21', errorCode: 'NS_BINDING_ABORTED', navigationId: 'nav-26' }, MAIN]]);
+                             { requestId: '21', errorCode: 'NS_BINDING_ABORTED', navigationId: 'nav-26', documentResponded: false }, MAIN]]);
+});
+
+test('the cut of a document request says whether its response had begun: then a document may be on its way from its process', () => {
+  const events = [];
+  const request = documentRequest(events, 'nav-27');
+  request._sentOnResponse = true;
+  request._sendOnRequestFailed(Cr.NS_BINDING_ABORTED);
+  assert.equal(events[0][1].navigationId, 'nav-27');
+  assert.equal(events[0][1].documentResponded, true);
 });
 
 test('any other failure of a document request does not carry the navigation: the content tells it, in order with its documents', () => {
@@ -220,4 +229,79 @@ test('the same, for a navigation a newer one replaced', () => {
   registry.onNavigationAborted(MAIN, 'nav-25', 'NS_BINDING_ABORTED');
   registry.onDocumentRequestFailed(MAIN, 'nav-25', 'NS_BINDING_ABORTED');
   assert.equal(events.filter(e => e[0] === 'navigationaborted').length, 1);
+});
+
+// ── a cut the content process makes alone, while the parent carries the request on ───────────────────────────────────────
+//
+// The known-bad input, from the wrapper's e2e `test_a_read_right_after_goto_answers[/r50]` (gate 44862426341, Linux, round 1,
+// the parent's calls of the registry in the order of the Juggler trace): our goto's response had begun in the parent, which
+// switched the browsing context (bfcache in the parent) and carried the navigation on; the page being left stopped the
+// stand-in of the request in its own docShell from its 50 ms timer (location.replace), and that process told
+// NS_BINDING_ABORTED. goto raised it for a document that committed right after.
+
+test('a cut the content process tells of a navigation whose request the parent carries on is not its end: its document commits it', () => {
+  const { registry, events } = registrySetup();
+  registry.onDocumentRequest(MAIN, 'nav-54', 'http://127.0.0.1/r50?i=r50-1');          // our goto, in the parent
+  registry.onContentNavigationStarted(MAIN, 'nav-54');                                 // the docShell being left takes it
+  registry.onContentNavigationStarted(MAIN, 'nav-12884901899');                        // the page's own location.replace
+  registry.onNavigationAborted(MAIN, 'nav-54', 'NS_BINDING_ABORTED');                  // that docShell stopped its stand-in
+  registry.onContentNavigationStarted(MAIN, 'nav-54');                                 // the new browsing context takes ours
+  registry.onDocumentInserted(MAIN, 'http://127.0.0.1/r50?i=r50-1', '', 'nav-54');
+  const ours = events.filter(([, payload]) => payload.navigationId === 'nav-54');
+  assert.deepEqual(ours, [started(MAIN, 'nav-54'), committed(MAIN, 'nav-54', 'http://127.0.0.1/r50?i=r50-1', '')]);
+});
+
+test('a cut the content process tells of a navigation whose request the parent never saw ends it at once', () => {
+  const { registry, events } = registrySetup();
+  registry.onContentNavigationStarted(MAIN, 'nav-7');   // no request in the parent (about:blank, a stop before the request)
+  registry.onNavigationAborted(MAIN, 'nav-7', 'NS_BINDING_ABORTED');
+  assert.deepEqual(events, [started(MAIN, 'nav-7'), aborted(MAIN, 'nav-7', 'NS_BINDING_ABORTED')]);
+});
+
+test('a cut the content process told is kept, and the parent\'s cut of the same request ends the navigation once', () => {
+  const { registry, events } = registrySetup();
+  registry.onDocumentRequest(MAIN, 'nav-8', 'http://a.test/stopped');
+  registry.onNavigationAborted(MAIN, 'nav-8', 'NS_BINDING_ABORTED');
+  assert.deepEqual(events, [started(MAIN, 'nav-8')], 'nothing ended while the parent carries the request');
+  assert.equal(registry.onDocumentRequestFailed(MAIN, 'nav-8', 'NS_BINDING_ABORTED', false), false);
+  registry.onNavigationAborted(MAIN, 'nav-8', 'NS_BINDING_ABORTED');
+  assert.deepEqual(events, [started(MAIN, 'nav-8'), aborted(MAIN, 'nav-8', 'NS_BINDING_ABORTED')]);
+});
+
+test('a cut the content process told, then the request ends with no document: held behind the barrier, then the content\'s abort', () => {
+  const { registry, events } = registrySetup();
+  registry.onDocumentRequest(MAIN, 'nav-9', 'http://a.test/finished');
+  registry.onNavigationAborted(MAIN, 'nav-9', 'NS_BINDING_ABORTED');
+  assert.equal(registry.onDocumentRequestEnded(MAIN, 'nav-9'), true, 'the caller is asked for the barrier');
+  assert.deepEqual(events, [started(MAIN, 'nav-9')]);
+  registry.onCutConfirmed(MAIN, 'nav-9');
+  assert.deepEqual(events, [started(MAIN, 'nav-9'), aborted(MAIN, 'nav-9', 'NS_BINDING_ABORTED')]);
+  // The same end with the document still on its way: it comes before the barrier, and commits.
+  const other = registrySetup();
+  other.registry.onDocumentRequest(MAIN, 'nav-10', 'http://a.test/landed');
+  other.registry.onNavigationAborted(MAIN, 'nav-10', 'NS_BINDING_ABORTED');
+  assert.equal(other.registry.onDocumentRequestEnded(MAIN, 'nav-10'), true);
+  other.registry.onDocumentInserted(MAIN, 'http://a.test/landed', '', 'nav-10');
+  other.registry.onCutConfirmed(MAIN, 'nav-10');
+  assert.deepEqual(other.events, [started(MAIN, 'nav-10'), committed(MAIN, 'nav-10', 'http://a.test/landed', '')]);
+  // And with no cut told, the end of the request says nothing.
+  const quiet = registrySetup();
+  quiet.registry.onDocumentRequest(MAIN, 'nav-11', 'http://a.test/');
+  assert.equal(quiet.registry.onDocumentRequestEnded(MAIN, 'nav-11'), false);
+  assert.deepEqual(quiet.events, [started(MAIN, 'nav-11')]);
+});
+
+test('the last request of a document says its navigation when it ends otherwise than cut; a hop and a cut do not', () => {
+  const finished = [];
+  documentRequest(finished, 'nav-30')._sendOnRequestFinished();
+  assert.equal(finished[0][1].documentEnded, 'nav-30');
+  const hop = [];
+  documentRequest(hop, 'nav-30')._sendOnRequestFinished(true);
+  assert.equal(hop[0][1].documentEnded, undefined);
+  const failed = [];
+  documentRequest(failed, 'nav-30')._sendOnRequestFailed(Cr.NS_ERROR_NET_RESET);
+  assert.equal(failed[0][1].documentEnded, 'nav-30');
+  const cut = [];
+  documentRequest(cut, 'nav-30')._sendOnRequestFailed(Cr.NS_BINDING_ABORTED);
+  assert.equal(cut[0][1].documentEnded, undefined);
 });

@@ -5,6 +5,15 @@
 "use strict";
 // No Gecko dependency: the channel is injected (`createChannel`), so a node test loads this file.
 
+// A diagnostic trace, off unless the parent's environment asks for it (Trace.js). Tolerant: a file loaded
+// where there is no Gecko (a node test) traces nothing.
+let traceMux = () => {};
+try {
+  const traceMuxModule = ChromeUtils.importESModule('resource://gre/modules/juggler/Trace.js');
+  if (traceMuxModule && typeof traceMuxModule.trace === 'function')
+    traceMux = (...args) => { try { traceMuxModule.trace(...args); } catch (e) {} };
+} catch (e) {}
+
 // The parent's end of a page's conversation with its content processes.
 //
 // A page is held by one content process per fragment root: the document of the top, and every frame
@@ -56,6 +65,8 @@ export const ROUTES = {
   setUserInput: byFrame,
   selectOptions: byFrame,
   armLanding: byFrame,
+  // nothing but its answer, which leaves after what the root had queued: a held cut waits for it (PageHandler._confirmCut)
+  barrier: retryingOnRootGone(byFrame),
   // the frame's parent: the box of a child frame is measured where its element is
   frameBoxTransform: retryingOnRootGone(p => ({kind: 'parentOf', id: p.childFrameId})),
   // the name of a child frame is read where its <iframe> is
@@ -123,6 +134,7 @@ export class ContentMux {
     const endpoint = this._ensureEndpoint(rootId, isMain);
     endpoint.actor = actor;
     endpoint.isMain = isMain;
+    traceMux('mux', 'bindRoot', {name: this._name, rootId, isMain, actor: actor && actor.actorName});
     endpoint.channel.bindToActor(actor);
     return endpoint;
   }
@@ -131,8 +143,11 @@ export class ContentMux {
   // order of the two is not fixed), else the endpoint, `{rootId, isMain}`.
   unbindRoot(rootId, actor) {
     const endpoint = this._endpoints.get(rootId);
-    if (!endpoint || endpoint.actor !== actor)
+    if (!endpoint || endpoint.actor !== actor) {
+      traceMux('mux', 'unbindRoot: not the actor bound', {name: this._name, rootId, hasEndpoint: !!endpoint, boundActor: endpoint && endpoint.actor ? endpoint.actor.actorName : null});
       return null;
+    }
+    traceMux('mux', 'unbindRoot', {name: this._name, rootId, isMain: endpoint.isMain});
     endpoint.channel.resetTransport();
     endpoint.actor = null;
     return endpoint;
@@ -141,6 +156,7 @@ export class ContentMux {
   // The browsing context of a root was discarded. The main root stays: it changes id with the top.
   onRootRemoved(rootId) {
     const endpoint = this._endpoints.get(rootId);
+    traceMux('mux', 'onRootRemoved', {name: this._name, rootId, hasEndpoint: !!endpoint, isMain: endpoint && endpoint.isMain});
     if (endpoint && !endpoint.isMain)
       this.disposeRoot(rootId);
   }
@@ -150,6 +166,7 @@ export class ContentMux {
   // discarded, so nothing else would end it (and a read in flight on it would wait for good).
   onRootTurnedLocal(rootId) {
     const endpoint = this._endpoints.get(rootId);
+    traceMux('mux', 'onRootTurnedLocal', {name: this._name, rootId, hasEndpoint: !!endpoint, isMain: endpoint && endpoint.isMain});
     if (endpoint && !endpoint.isMain)
       this.disposeRoot(rootId);
   }
@@ -171,6 +188,7 @@ export class ContentMux {
   // Nothing is left of a root: what waits for it is refused, what it held is forgotten, its workers end.
   disposeRoot(rootId) {
     const endpoint = this._endpoints.get(rootId);
+    traceMux('mux', 'disposeRoot', {name: this._name, rootId, hasEndpoint: !!endpoint});
     if (!endpoint)
       return;
     this._endpoints.delete(rootId);
@@ -433,6 +451,7 @@ export class ContentMux {
 
   _sendToRoot(connector, rootId, method, args, used) {
     const endpoint = this._endpointToSend(rootId);
+    traceMux('mux', 'route', {name: this._name, namespace: connector.namespace, method, rootId, hasActor: !!endpoint.actor, ready: endpoint.channel.isReady ? endpoint.channel.isReady() : undefined});
     if (used)
       used.endpoint = endpoint;
     return this._connectorOn(endpoint, connector).send(method, ...args);

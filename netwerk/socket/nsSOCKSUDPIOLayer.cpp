@@ -80,6 +80,10 @@ PRDescIdentity gIdentity = PR_INVALID_IO_LAYER;
 Atomic<bool> sNoSocketThreadForTests{false};
 // Test only: the next nsSOCKSUDPIOLayerAddToSocket is refused (the layer could not be pushed), once.
 Atomic<bool> sFailNextPushForTests{false};
+// Test only: how many associations began their handshake (Begin, not cancelled before it), and how many were made (the proxy
+// answered the ASSOCIATE), in this process.
+Atomic<uint32_t> sBegunForTests{0};
+Atomic<uint32_t> sMadeForTests{0};
 PRIOMethods gMethods;
 
 // ── The association ─────────────────────────────────────────────────────────
@@ -397,6 +401,7 @@ class SocksUdpAssociation final : public nsASocketHandler,
       Failed();
       return;
     }
+    ++sBegunForTests;
     PRNetAddr addr;
     if (PR_StringToNetAddr(mHost.get(), &addr) == PR_SUCCESS) {
       // An address, not a name: nothing to resolve.
@@ -785,6 +790,7 @@ void SocksUdpAssociation::Ready(const PRNetAddr& aRelay) {
     mRelay = aRelay;
     shared = mShared;
   }
+  ++sMadeForTests;
   SocksUdpPool::Answered(mKey);
   if (shared) {
     shared->MakeReady(aRelay);
@@ -1103,6 +1109,8 @@ void BindSocket(SocksUdpShared* aShared, PcUdpProxy* aProxy) {
 // What the layer keeps on the socket.
 struct SocksUdpLayerData {
   RefPtr<SocksUdpShared> mShared;
+  // The proxy of a socket that is not born yet (the layer was pushed before its bind): it takes its road when it is born, once.
+  RefPtr<PcUdpProxy> mUnborn;
 };
 
 SocksUdpShared* SharedOf(PRFileDesc* fd) {
@@ -1465,7 +1473,7 @@ void MakeDualStack(PRFileDesc* aFd) {
 
 }  // namespace
 
-nsresult nsSOCKSUDPIOLayerAddToSocket(PRFileDesc* aFd, PcUdpProxy* aProxy) {
+nsresult nsSOCKSUDPIOLayerPushOnUnbornSocket(PRFileDesc* aFd, PcUdpProxy* aProxy) {
   if (!aProxy) {
     return NS_ERROR_INVALID_ARG;
   }
@@ -1481,6 +1489,7 @@ nsresult nsSOCKSUDPIOLayerAddToSocket(PRFileDesc* aFd, PcUdpProxy* aProxy) {
   }
   auto* data = new SocksUdpLayerData();
   data->mShared = new SocksUdpShared();
+  data->mUnborn = aProxy;
   layer->secret = reinterpret_cast<PRFilePrivate*>(data);
 
   if (PR_PushIOLayer(aFd, PR_GetLayersIdentity(aFd), layer) != PR_SUCCESS) {
@@ -1496,11 +1505,29 @@ nsresult nsSOCKSUDPIOLayerAddToSocket(PRFileDesc* aFd, PcUdpProxy* aProxy) {
     MutexAutoLock lock(data->mShared->mMutex);
     data->mShared->mLayer = layerFd ? layerFd : aFd;
   }
+  LOG(("SOCKS5 UDP layer pushed onto fd; its road is taken when the socket is born"));
+  return NS_OK;
+}
+
+void nsSOCKSUDPIOLayerSocketBorn(PRFileDesc* aFd) {
+  PRFileDesc* layer = (aFd && gIdentity != PR_INVALID_IO_LAYER) ? PR_GetIdentitiesLayer(aFd, gIdentity) : nullptr;
+  auto* data = layer ? reinterpret_cast<SocksUdpLayerData*>(layer->secret) : nullptr;
+  if (!data || !data->mUnborn) {
+    return;  // no layer, or a socket that was born already
+  }
+  RefPtr<PcUdpProxy> proxy = std::move(data->mUnborn);
   // The socket takes its association from the pool (made by then, or being made on the socket thread); this returns at
   // once, whatever the proxy takes to answer.
-  BindSocket(data->mShared, aProxy);
-  LOG(("SOCKS5 UDP layer pushed onto fd; the association is being bound"));
-  return NS_OK;
+  BindSocket(data->mShared, proxy);
+  LOG(("SOCKS5 UDP socket born; the association is being bound"));
+}
+
+nsresult nsSOCKSUDPIOLayerAddToSocket(PRFileDesc* aFd, PcUdpProxy* aProxy) {
+  nsresult rv = nsSOCKSUDPIOLayerPushOnUnbornSocket(aFd, aProxy);
+  if (NS_SUCCEEDED(rv)) {
+    nsSOCKSUDPIOLayerSocketBorn(aFd);
+  }
+  return rv;
 }
 
 uint32_t nsSOCKSUDPIOLayerPoolReady() { return static_cast<uint32_t>(kPoolReady); }
@@ -1734,12 +1761,25 @@ nsresult StealthPutSocksUdpLayer(PRFileDesc* aFd, nsIProxyInfo* aProxyInfo) {
   RefPtr<PcUdpProxy> proxy =
       PcUdpProxy::Known(carries ? PcUdpProxy::Kind::Socks5 : PcUdpProxy::Kind::Blocked, info);
   LOG(("an HTTP/3 socket gets the SOCKS5 UDP layer (%s)", carries ? "the proxy carries UDP" : "a router that drops it"));
-  return nsSOCKSUDPIOLayerAddToSocket(aFd, proxy);
+  return nsSOCKSUDPIOLayerPushOnUnbornSocket(aFd, proxy);  // the road is taken after its bind: nsUDPSocket::InitWithAddress
 }
 
 void nsSOCKSUDPIOLayerNoSocketThreadForTests(bool aMissing) { sNoSocketThreadForTests = aMissing; }
 
 void nsSOCKSUDPIOLayerFailNextPushForTests(bool aFail) { sFailNextPushForTests = aFail; }
+
+bool nsSOCKSUDPIOLayerIsReady(PRFileDesc* aFd) {
+  SocksUdpShared* shared = aFd ? SharedOf(PR_GetIdentitiesLayer(aFd, gIdentity)) : nullptr;
+  if (!shared) {
+    return false;
+  }
+  MutexAutoLock lock(shared->mMutex);
+  return shared->mState == State::Ready;
+}
+
+uint32_t nsSOCKSUDPIOLayerAssociationsBegunForTests() { return sBegunForTests; }
+
+uint32_t nsSOCKSUDPIOLayerAssociationsMadeForTests() { return sMadeForTests; }
 
 bool nsSOCKSUDPIOLayerHasFailed(PRFileDesc* aFd) {
   SocksUdpShared* shared = aFd ? SharedOf(PR_GetIdentitiesLayer(aFd, gIdentity)) : nullptr;

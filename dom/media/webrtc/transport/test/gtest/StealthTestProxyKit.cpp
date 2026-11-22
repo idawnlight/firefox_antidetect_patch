@@ -57,23 +57,51 @@ class HttpProxyFilter final : public nsIProtocolProxyChannelFilter {
 };
 NS_IMPL_ISUPPORTS(HttpProxyFilter, nsIProtocolProxyChannelFilter)
 
+// Every channel gets a SOCKS5 proxy on 127.0.0.1 whose UDP the session measured coherent: the flag the Juggler sets
+// (juggler/SessionRoute.js udpFlagFor), so the lookup of a PeerConnection answers that proxy as the one that carries its UDP.
+class Socks5UdpProxyFilter final : public nsIProtocolProxyChannelFilter {
+ public:
+  NS_DECL_ISUPPORTS
+  explicit Socks5UdpProxyFilter(uint16_t aPort) : mPort(aPort) {}
+  NS_IMETHOD ApplyFilter(nsIChannel* aChannel, nsIProxyInfo* aProxyInfo,
+                         nsIProxyProtocolFilterResult* aCallback) override {
+    nsCOMPtr<nsIProtocolProxyService> ps = do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
+    NS_ENSURE_TRUE(ps, NS_ERROR_FAILURE);
+    nsCOMPtr<nsIProxyInfo> info;
+    nsresult rv = ps->NewProxyInfoWithAuth("socks"_ns, "127.0.0.1"_ns, mPort, ""_ns, ""_ns, ""_ns, ""_ns,
+                                           nsIProxyInfo::CARRIES_COHERENT_UDP, UINT32_MAX, nullptr, getter_AddRefs(info));
+    NS_ENSURE_SUCCESS(rv, rv);
+    return aCallback->OnProxyFilterResult(info);
+  }
+
+ private:
+  ~Socks5UdpProxyFilter() = default;
+  const uint16_t mPort;
+};
+NS_IMPL_ISUPPORTS(Socks5UdpProxyFilter, nsIProtocolProxyChannelFilter)
+
 }  // namespace
 
 struct SessionProxyScope::Impl {
-  RefPtr<HttpProxyFilter> mFilter;
+  nsCOMPtr<nsIProtocolProxyChannelFilter> mFilter;
   bool mOk = false;
   int32_t mOldProxyType = 0;
   bool mHadProxyType = false;
 };
 
-SessionProxyScope::SessionProxyScope(ProxyOfTheSession aProxy) : mImpl(new Impl()) {
+SessionProxyScope::SessionProxyScope(ProxyOfTheSession aProxy, uint16_t aSocksPort) : mImpl(new Impl()) {
   // The system proxy settings of the machine running the test must not decide the answer.
   mImpl->mHadProxyType = Preferences::HasUserValue("network.proxy.type");
   mImpl->mOldProxyType = Preferences::GetInt("network.proxy.type", 0);
   mImpl->mOk = NS_SUCCEEDED(Preferences::SetInt("network.proxy.type", 0));
-  if (aProxy == ProxyOfTheSession::HttpWithoutUdp) {
+  if (aProxy == ProxyOfTheSession::HttpWithoutUdp || aProxy == ProxyOfTheSession::Socks5CarryingUdp) {
     nsCOMPtr<nsIProtocolProxyService> ps = do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
-    mImpl->mFilter = new HttpProxyFilter();
+    if (aProxy == ProxyOfTheSession::HttpWithoutUdp) {
+      mImpl->mFilter = new HttpProxyFilter();
+    } else {
+      mImpl->mFilter = new Socks5UdpProxyFilter(aSocksPort);
+      mImpl->mOk = mImpl->mOk && aSocksPort != 0;
+    }
     mImpl->mOk = mImpl->mOk && ps && NS_SUCCEEDED(ps->RegisterChannelFilter(mImpl->mFilter, 0));
     if (!mImpl->mOk) {
       mImpl->mFilter = nullptr;

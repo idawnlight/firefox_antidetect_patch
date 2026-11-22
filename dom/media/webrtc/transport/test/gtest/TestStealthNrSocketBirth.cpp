@@ -16,14 +16,20 @@
 //     (REVIEW-63 #12). The answer "access denied" (a privileged port for a user that is not root on Linux; the ranges Windows
 //     reserves) is the same: it is injected at the bind (StealthFailNextBindForTests), so it is asserted on every machine, and the scan of
 //     the system's own refused port stays as a second test where the machine gives one.
+//   * the birth: only a socket whose bind worked takes the road of its proxy (StealthBindAndBear). A refused port takes nothing from the
+//     pool of associations, so the socket born after a run of refused ports finds the ready ones.
 //
 // Pure behaviour: the NrSocket is the real one, on the socket thread, and the receiver is a plain NSPR socket.
 
 #include "gtest/gtest.h"
 
+#include <atomic>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 // nICEr is C++: its headers are not wrapped in extern "C".
 // clang-format off
@@ -44,6 +50,7 @@
 #include "nsISocketTransportService.h"
 #include "nsNetCID.h"
 #include "nsServiceManagerUtils.h"
+#include "nsString.h"
 #include "nsThreadUtils.h"
 #include "prerror.h"
 #include "prio.h"
@@ -158,6 +165,111 @@ bool DatagramOfANrSocketArrives(const std::shared_ptr<NrSocketProxyConfig>& aCon
   OnSocketThread([&] { nrSocket->close(); });
   PR_Close(receiver);
   return arrived;
+}
+
+// A NrSocket whose file descriptor the test can ask the layer about.
+class NrSocketWithItsFd final : public NrSocket {
+ public:
+  explicit NrSocketWithItsFd(const std::shared_ptr<NrSocketProxyConfig>& aConfig) : NrSocket(aConfig) {}
+  PRFileDesc* Fd() const { return fd_; }
+};
+
+bool RecvAll(PRFileDesc* aFd, uint8_t* aBuf, int32_t aLen) {
+  int32_t got = 0;
+  while (got < aLen) {
+    int32_t n = PR_Recv(aFd, aBuf + got, aLen - got, 0, PR_SecondsToInterval(5));
+    if (n <= 0) {
+      return false;
+    }
+    got += n;
+  }
+  return true;
+}
+
+// A SOCKS5 proxy that carries UDP, for one test: "no authentication", every UDP ASSOCIATE answered with a relay on the loopback, the
+// control connection kept until the client closes it (RFC 1928 section 6). It counts the associations it answered.
+class UdpCarryingSocks final {
+ public:
+  UdpCarryingSocks() {
+    mListener = PR_NewTCPSocket();
+    PRNetAddr addr;
+    PR_InitializeNetAddr(PR_IpAddrLoopback, 0, &addr);
+    EXPECT_EQ(PR_SUCCESS, PR_Bind(mListener, &addr));
+    EXPECT_EQ(PR_SUCCESS, PR_Listen(mListener, 16));
+    PRNetAddr bound;
+    EXPECT_EQ(PR_SUCCESS, PR_GetSockName(mListener, &bound));
+    mPort = PR_ntohs(bound.inet.port);
+    mRelay = PR_NewUDPSocket();
+    EXPECT_EQ(PR_SUCCESS, PR_Bind(mRelay, &addr));
+    EXPECT_EQ(PR_SUCCESS, PR_GetSockName(mRelay, &bound));
+    mRelayPort = bound.inet.port;  // network order, as the reply carries it
+    mAcceptor = std::thread([this] { Accept(); });
+  }
+  ~UdpCarryingSocks() {
+    mStop = true;
+    mAcceptor.join();
+    for (std::thread& client : mClients) {
+      client.join();
+    }
+    PR_Close(mListener);
+    PR_Close(mRelay);
+  }
+  uint16_t Port() const { return mPort; }
+  uint32_t Answered() const { return mAnswered; }
+
+ private:
+  void Accept() {
+    while (!mStop) {
+      PRNetAddr from;
+      PRFileDesc* client = PR_Accept(mListener, &from, PR_MillisecondsToInterval(50));
+      if (client) {
+        mClients.emplace_back([this, client] { Serve(client); });
+      }
+    }
+  }
+  void Serve(PRFileDesc* aClient) {
+    uint8_t greeting[2];
+    uint8_t methods[255];
+    uint8_t associate[10];
+    const uint8_t chosen[2] = {0x05, 0x00};
+    if (RecvAll(aClient, greeting, 2) && RecvAll(aClient, methods, greeting[1]) &&
+        PR_Send(aClient, chosen, 2, 0, PR_SecondsToInterval(5)) == 2 && RecvAll(aClient, associate, sizeof(associate))) {
+      uint8_t reply[10] = {0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0};
+      std::memcpy(reply + 8, &mRelayPort, 2);
+      if (PR_Send(aClient, reply, sizeof(reply), 0, PR_SecondsToInterval(5)) == static_cast<int32_t>(sizeof(reply))) {
+        ++mAnswered;
+        uint8_t b;
+        while (!mStop) {
+          int32_t n = PR_Recv(aClient, &b, 1, 0, PR_MillisecondsToInterval(20));
+          if (n == 0 || (n < 0 && PR_GetError() != PR_IO_TIMEOUT_ERROR)) {
+            break;
+          }
+        }
+      }
+    }
+    PR_Close(aClient);
+  }
+
+  PRFileDesc* mListener = nullptr;
+  PRFileDesc* mRelay = nullptr;
+  uint16_t mPort = 0;
+  uint16_t mRelayPort = 0;
+  std::thread mAcceptor;
+  std::vector<std::thread> mClients;  // only the acceptor adds; the destructor joins them after the acceptor is gone
+  std::atomic<bool> mStop{false};
+  std::atomic<uint32_t> mAnswered{0};
+};
+
+// Setup only (never a verdict): until aDone, at most aMs.
+template <typename F>
+bool WaitFor(F&& aDone, uint32_t aMs) {
+  for (uint32_t waited = 0; !aDone(); waited += 10) {
+    if (waited >= aMs) {
+      return false;
+    }
+    PR_Sleep(PR_MillisecondsToInterval(10));
+  }
+  return true;
 }
 
 }  // namespace
@@ -395,6 +507,58 @@ TEST(StealthNrSocketBirth, ACreateThatFailsAtTheLastStepLeavesNoPortOfOursBehind
     sender->close();
     heard->close();
   });
+}
+
+// The pool of associations is for the sockets that are born. nr_socket_local_create tries port after port in one task of the socket
+// thread, a new NrSocket for each, until a bind works; over a range Windows keeps for itself every bind is refused ('access denied'). A
+// socket that is refused is never born and must take nothing: before, the layer took its association at the push, before the bind, so
+// two refused ports used up the two ready ones and the socket that was born got one still being made (the candidates' logs on Windows:
+// up to 173 takes in 20 ms for one socket; the e2e of the TURN chain by name red about once in 55 runs). Counted, not timed: the state of
+// the association the socket was born with, and how many handshakes the pool began.
+TEST(StealthNrSocketBirth, TwoRefusedPortsLeaveTheReadyAssociationsToTheSocketThatIsBorn)
+{
+  UdpCarryingSocks proxy;
+  stealthtest::SessionProxyScope scope(stealthtest::ProxyOfTheSession::Socks5CarryingUdp, proxy.Port());
+  ASSERT_TRUE(scope.Ok());
+  std::shared_ptr<NrSocketProxyConfig> config = stealthtest::MakeConfigAfterTheLookup();
+  ASSERT_TRUE(config);
+
+  // The pool of the proxy, warmed as a SOCKS5 connection of the context warms it, and made: its associations are ready.
+  const uint32_t ready = net::nsSOCKSUDPIOLayerPoolReady();
+  const uint32_t begunBefore = net::nsSOCKSUDPIOLayerAssociationsBegunForTests();
+  const uint32_t madeBefore = net::nsSOCKSUDPIOLayerAssociationsMadeForTests();
+  net::nsSOCKSUDPIOLayerWarm("127.0.0.1"_ns, proxy.Port(), ""_ns, ""_ns);
+  ASSERT_TRUE(WaitFor([&] { return net::nsSOCKSUDPIOLayerAssociationsMadeForTests() - madeBefore >= ready; }, 5000))
+      << "the pool did not make its associations (the proxy answered " << proxy.Answered() << ")";
+  ASSERT_EQ(ready, net::nsSOCKSUDPIOLayerAssociationsBegunForTests() - begunBefore);
+
+  nr_transport_addr any = UdpAddr("0.0.0.0", 0);
+  RefPtr<NrSocketWithItsFd> born = new NrSocketWithItsFd(config);
+  int refused[2] = {-1, -1};
+  int bornResult = -1;
+  bool readyAtBirth = false;
+  OnSocketThread([&] {
+    // What nr_socket_local_create does over a reserved range: a socket per port, each released at once when its bind is refused.
+    for (int& result : refused) {
+      RefPtr<NrSocket> attempt = new NrSocket(config);
+      StealthFailNextBindForTests(PR_NO_ACCESS_RIGHTS_ERROR);
+      result = attempt->create(&any);
+    }
+    bornResult = born->create(&any);
+    readyAtBirth = bornResult == 0 && net::nsSOCKSUDPIOLayerIsReady(born->Fd());
+  });
+  StealthFailNextBindForTests(0);
+  // The handshakes the takes asked for are begun on this thread after the task above: one more task, and every one has begun.
+  OnSocketThread([] {});
+  const uint32_t begun = net::nsSOCKSUDPIOLayerAssociationsBegunForTests() - begunBefore;
+
+  EXPECT_EQ(R_ALREADY, refused[0]);
+  EXPECT_EQ(R_ALREADY, refused[1]);
+  ASSERT_EQ(0, bornResult) << "the socket after two refused ports was not born";
+  EXPECT_TRUE(readyAtBirth) << "the socket that was born got an association still being made: the refused ports used up the ready ones";
+  EXPECT_EQ(ready + 1, begun) << "the pool began " << begun << " handshakes: its " << ready
+                              << " and one to replace the one the born socket took; the refused sockets must take none";
+  OnSocketThread([&] { born->close(); });
 }
 
 }  // namespace mozilla

@@ -7,5 +7,5 @@ XPCOM_MANIFESTS += [
 ]
 
 EXTRA_JS_MODULES.psm += [
-    "StealthIntermediates.sys.mjs",
+    "StealthSecurityState.sys.mjs",
 ]
