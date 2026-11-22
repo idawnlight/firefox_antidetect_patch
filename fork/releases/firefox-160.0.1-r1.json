@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "tag": "firefox-160.0.1-r1",
+  "upstream_version": "160.0.1",
+  "fork_revision": 1,
+  "repository": "idawnlight/firefox_antidetect_patch",
+  "source_commit": "31ee71fb67879fa20d5aeab00c82e2eef7758297",
+  "build_id": "20261123020000",
+  "mozilla": {
+    "tag": "FIREFOX_160_0_1_RELEASE",
+    "commit": "58fed86b1b6864ad71b83c910a879d6f1a6b678b"
+  },
+  "platform": "linux",
+  "arch": "x86_64",
+  "input": {
+    "filename": "firefox-160.0.1.en-US.linux-x86_64.tar.xz",
+    "sha256": "27f91bf665296748e4adc89caf32495a8f9818ec2b1738f2ef153c41a717c8d0",
+    "url": null
+  }
+}
